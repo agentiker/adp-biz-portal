@@ -1,0 +1,119 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: var(--td-brand-color, #4a70ff);
+  text-decoration: inherit;
+}
+a:hover {
+  color: var(--td-brand-color-hover, #6c8bff);
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: var(--td-radius-medium);
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+button:hover {
+  border-color: var(--td-brand-color, #4a70ff);
+}
+
+
+.card {
+  padding: 2em;
+}
+
+#app {
+  margin: 0 auto;
+}
+
+#container {
+  display: flex;
+  flex-direction: row;
+  width: 100vw;
+  height: 100vh;
+}
+#main {
+  flex-grow: 1;
+  background: var(--td-bg-color-page, #f7f7f8);
+}
+#chat-panel {
+  width: fit-content;
+  height: 100vh;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: var(--td-brand-color-hover, #6c8bff);
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+
+/* TDesign component overrides */
+/* stylelint-disable */
+.t-drawer__header {
+  border-bottom: none !important;
+}
+
+.t-drawer__footer {
+  border-top: none !important;
+}
+
+.t-drawer__content-wrapper {
+  background: var(--td-bg-color-page) !important;
+}
+
+.t-divider--horizontal {
+  margin: var(--td-size-5) 0 !important;
+  border-top: 1px solid var(--td-component-stroke) !important;
+}
+
+.t-drawer__body {
+  padding-top: 0 !important;
+}
+/* stylelint-enable */
+
+:root[theme-mode='dark']{
+  --td-sender-bg: rgba(255, 255, 255, 0.08);
+}
+:root[theme-mode='light']{
+  --td-sender-bg: rgba(255, 255, 255, 1);
+}

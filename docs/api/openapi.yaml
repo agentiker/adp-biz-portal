@@ -1,0 +1,1424 @@
+openapi: 3.1.0
+info:
+  title: Unified Business Platform API
+  version: 1.0.0
+  description: >-
+    Public, browser-facing API for the unified business access platform.
+    Internal ADP service routes are intentionally excluded.
+servers:
+  - url: /
+    description: Same-origin deployment
+tags:
+  - name: Authentication
+  - name: Portal
+  - name: Tools
+  - name: Operations
+  - name: Administration
+security:
+  - PlatformBearer: []
+paths:
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: loginPlatform
+      summary: Create a platform session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformLoginRequest'
+      responses:
+        '200':
+          description: Authenticated platform identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformLoginResult'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logoutPlatform
+      summary: Revoke the current platform session
+      responses:
+        '200':
+          description: Session revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/session:
+    get:
+      tags: [Authentication]
+      operationId: getPlatformSession
+      summary: Restore the current platform identity
+      responses:
+        '200':
+          description: Current identity and enterprise scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformLoginResult'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/portal/overview:
+    get:
+      tags: [Portal]
+      operationId: getPortalOverview
+      summary: Read the portal overview
+      responses:
+        '200':
+          description: Portal overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalOverview'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/portal/sessions:
+    get:
+      tags: [Portal]
+      operationId: getPortalSessions
+      summary: List sessions owned by the current account
+      responses:
+        '200':
+          description: Owned portal sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PortalSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/portal/sessions/{conversation_id}:
+    get:
+      tags: [Portal]
+      operationId: getPortalSession
+      summary: Read one owned session with runs and evidence
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSessionDetail'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/tools/shipment/lookup:
+    post:
+      tags: [Tools]
+      operationId: lookupShipment
+      summary: Look up a shipment inside the current enterprise scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShipmentLookupRequest'
+      responses:
+        '200':
+          description: Controlled shipment result with evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShipmentResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channels/web/inbound:
+    post:
+      tags: [Portal]
+      operationId: recordWebInboundMessage
+      summary: Record one authenticated website message for asynchronous processing
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebInboundRequest'
+      responses:
+        '200':
+          description: Duplicate message was already recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundReceipt' }
+        '201':
+          description: New message recorded and queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channels/web/inbound/{inbound_id}:
+    get:
+      tags: [Portal]
+      operationId: getWebInboundStatus
+      summary: Read redacted progress for one asynchronous website message
+      parameters:
+        - name: inbound_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Inbound and reply task progress
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebInboundStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channels/wechat-official-account/{channel_instance_id}/callback:
+    get:
+      tags: [Portal]
+      operationId: verifyWechatOfficialAccountCallback
+      summary: Verify a WeChat Official Account callback endpoint
+      security: []
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: signature
+          in: query
+          required: true
+          schema: { type: string, minLength: 40, maxLength: 40 }
+        - name: timestamp
+          in: query
+          required: true
+          schema: { type: string }
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: echostr
+          in: query
+          required: true
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: Echo challenge
+          content:
+            text/plain:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Portal]
+      operationId: receiveWechatOfficialAccountCallback
+      summary: Receive a signed WeChat Official Account XML callback
+      security: []
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: signature
+          in: query
+          required: true
+          schema: { type: string, minLength: 40, maxLength: 40 }
+        - name: timestamp
+          in: query
+          required: true
+          schema: { type: string }
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema: { type: string }
+      responses:
+        '200':
+          description: Callback accepted or duplicate
+          content:
+            text/plain:
+              schema: { type: string, enum: [success] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channel-identities:
+    get:
+      tags: [Portal]
+      operationId: listMyChannelIdentities
+      summary: List channel identities owned by the current user
+      responses:
+        '200':
+          description: Current user's pending and historical channel identities
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChannelIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Portal]
+      operationId: startChannelIdentityBinding
+      summary: Start a one-time channel identity binding
+      description: Returns a short-lived state for confirmation by the trusted channel adapter. The state is never returned again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartChannelIdentityBindingRequest' }
+      responses:
+        '200':
+          description: Pending channel identity and one-time state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identity, state]
+                properties:
+                  identity: { $ref: '#/components/schemas/ChannelIdentity' }
+                  state: { type: string, writeOnly: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channel-identities/{identity_id}/revoke:
+    post:
+      tags: [Portal]
+      operationId: revokeMyChannelIdentity
+      summary: Revoke one of the current user's channel identities
+      parameters:
+        - $ref: '#/components/parameters/ChannelIdentityId'
+      responses:
+        '200':
+          description: Revoked channel identity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identity]
+                properties:
+                  identity: { $ref: '#/components/schemas/ChannelIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/ops/status:
+    get:
+      tags: [Operations]
+      operationId: getOpsStatus
+      summary: Read aggregate operational status and controlled suggestions
+      description: Requires platform.diagnose. Returns redacted counts and fixed error categories only.
+      responses:
+        '200':
+          description: Aggregate operational status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpsStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503':
+          description: Aggregate query unavailable; response remains redacted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpsStatus' }
+  /api/v1/admin/overview:
+    get:
+      tags: [Administration]
+      operationId: getAdminOverview
+      summary: Read administrator dashboard data
+      responses:
+        '200':
+          description: Administration overview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminOverview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/config:
+    get:
+      tags: [Administration]
+      operationId: getAdminConfig
+      summary: Read draft, published and historical configuration
+      responses:
+        '200':
+          description: Configuration state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConfigState' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/adp-chat/context:
+    post:
+      tags: [Administration]
+      operationId: createAdminAdpChatContext
+      summary: Issue a short-lived ADP debugging context for an administrator
+      responses:
+        '201':
+          description: Short-lived debugging context
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAdpChatContext' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/config/draft:
+    post:
+      tags: [Administration]
+      operationId: saveAdminConfigDraft
+      summary: Validate and save a configuration draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payload]
+              properties:
+                payload: { $ref: '#/components/schemas/PlatformConfigPayload' }
+      responses:
+        '200':
+          description: Updated configuration state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConfigState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/config/publish:
+    post:
+      tags: [Administration]
+      operationId: publishAdminConfig
+      summary: Publish the current configuration draft
+      responses:
+        '200':
+          description: Updated configuration state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConfigState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/config/rollback:
+    post:
+      tags: [Administration]
+      operationId: rollbackAdminConfig
+      summary: Publish a historical configuration version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated configuration state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConfigState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/enterprises:
+    get:
+      tags: [Administration]
+      operationId: listEnterprises
+      summary: List platform enterprises
+      responses:
+        '200':
+          description: Enterprise directory
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminEnterprise' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Administration]
+      operationId: createEnterprise
+      summary: Create a platform enterprise
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEnterpriseRequest'
+      responses:
+        '201':
+          description: Created enterprise
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminEnterprise' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/users:
+    get:
+      tags: [Administration]
+      operationId: listPlatformUsers
+      summary: List platform users and enterprise scope
+      responses:
+        '200':
+          description: Platform users
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Administration]
+      operationId: createPlatformUser
+      summary: Create a platform user and return its one-time password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePlatformUserRequest' }
+      responses:
+        '201':
+          description: Created user and one-time password
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserCreateResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/users/{user_id}/reset-password:
+    post:
+      tags: [Administration]
+      operationId: resetPlatformUserPassword
+      summary: Reset a platform user's password
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: One-time password; show it only once
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminPasswordResetResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/users/{user_id}/access:
+    post:
+      tags: [Administration]
+      operationId: updatePlatformUserAccess
+      summary: Change role and enterprise scope
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdatePlatformUserAccessRequest' }
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: '#/components/schemas/AdminUser' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/users/{user_id}/disable:
+    post:
+      tags: [Administration]
+      operationId: disablePlatformUser
+      summary: Disable a platform user and revoke its sessions
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Disabled user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlatformUserStatusChange' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/audit:
+    get:
+      tags: [Administration]
+      operationId: listAuditEvents
+      summary: List recent platform audit events
+      responses:
+        '200':
+          description: Most recent audit events
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminAuditEvent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/channel-identities:
+    get:
+      tags: [Administration]
+      operationId: listChannelIdentities
+      summary: List channel identities for administrators
+      parameters:
+        - $ref: '#/components/parameters/EnterpriseIdQuery'
+        - name: userId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Channel identity bindings
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChannelIdentity' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/channel-identities/{identity_id}/revoke:
+    post:
+      tags: [Administration]
+      operationId: revokeChannelIdentity
+      summary: Revoke a channel identity as an administrator
+      parameters:
+        - $ref: '#/components/parameters/ChannelIdentityId'
+      responses:
+        '200':
+          description: Revoked channel identity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identity]
+                properties:
+                  identity: { $ref: '#/components/schemas/ChannelIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/bindings:
+    get:
+      tags: [Administration]
+      operationId: listBindings
+      summary: List enterprise to upstream application bindings
+      responses:
+        '200':
+          description: Active and disabled bindings
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/IntegrationBinding' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Administration]
+      operationId: upsertBinding
+      summary: Create or re-enable an enterprise binding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpsertBindingRequest' }
+      responses:
+        '201':
+          description: Binding created or re-enabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationBinding' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/bindings/{binding_id}/disable:
+    post:
+      tags: [Administration]
+      operationId: disableBinding
+      summary: Disable an enterprise binding immediately
+      parameters:
+        - $ref: '#/components/parameters/BindingId'
+      responses:
+        '200':
+          description: Disabled binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BindingStatusChange' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/channel-credentials:
+    get:
+      tags: [Administration]
+      operationId: listChannelCredentials
+      summary: List masked channel credentials
+      description: Returns credential metadata only; ciphertext and plaintext are never returned.
+      parameters:
+        - $ref: '#/components/parameters/EnterpriseIdQuery'
+      responses:
+        '200':
+          description: Masked channel credential metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChannelCredential' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Administration]
+      operationId: createChannelCredential
+      summary: Create an encrypted channel credential
+      description: Stores the supplied credential encrypted and returns metadata with a fixed mask.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateChannelCredentialRequest' }
+      responses:
+        '201':
+          description: Created masked channel credential metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelCredential' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/channel-credentials/{credential_id}/rotate:
+    post:
+      tags: [Administration]
+      operationId: rotateChannelCredential
+      summary: Rotate an encrypted channel credential
+      description: Replaces the encrypted secret and increments its version without returning plaintext.
+      parameters:
+        - $ref: '#/components/parameters/ChannelCredentialId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotateChannelCredentialRequest' }
+      responses:
+        '200':
+          description: Rotated masked channel credential metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelCredential' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/channel-credentials/{credential_id}/disable:
+    post:
+      tags: [Administration]
+      operationId: disableChannelCredential
+      summary: Disable a channel credential
+      description: Disables a credential so workers can no longer load it.
+      parameters:
+        - $ref: '#/components/parameters/ChannelCredentialId'
+      responses:
+        '200':
+          description: Disabled masked channel credential metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelCredential' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    PlatformBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque platform session token
+      description: Cookie `token` is also accepted by the same-origin browser client.
+  parameters:
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MessageId:
+      name: X-Message-Id
+      in: header
+      required: false
+      schema: { type: string, maxLength: 255 }
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BindingId:
+      name: binding_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ChannelCredentialId:
+      name: credential_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ChannelIdentityId:
+      name: identity_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EnterpriseIdQuery:
+      name: enterpriseId
+      in: query
+      required: false
+      schema: { type: string, format: uuid }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Missing or invalid platform session
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Authenticated identity lacks the required scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Resource does not exist or is not visible to the caller
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    RateLimited:
+      description: Too many authentication attempts
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    AdminAdpChatContext:
+      type: object
+      required: [contextToken, expiresAt]
+      properties:
+        contextToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+        traceId: { type: string }
+    SuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean }
+    PlatformRole:
+      type: string
+      enum: [customer, staff, admin, ops]
+    PlatformUserStatus:
+      type: string
+      enum: [active, disabled, suspended]
+    ChannelIdentityStatus:
+      type: string
+      enum: [pending, active, revoked, expired]
+    ChannelIdentity:
+      type: object
+      required: [id, userId, accountId, enterpriseId, channel, channelInstanceId, externalIdentityId, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        enterpriseId: { type: string, format: uuid }
+        channel: { type: string }
+        channelInstanceId: { type: string }
+        externalIdentityId: { type: string }
+        status: { $ref: '#/components/schemas/ChannelIdentityStatus' }
+        stateExpiresAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        confirmedAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        revokedAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    StartChannelIdentityBindingRequest:
+      type: object
+      required: [enterpriseId, channel, channelInstanceId, externalIdentityId]
+      properties:
+        enterpriseId: { type: string, format: uuid }
+        channel: { type: string, minLength: 1, maxLength: 48 }
+        channelInstanceId: { type: string, minLength: 1, maxLength: 128 }
+        externalIdentityId: { type: string, minLength: 1, maxLength: 255 }
+    PlatformUser:
+      type: object
+      required: [id, name, phone, role, roleLabel]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        phone: { type: string }
+        role: { $ref: '#/components/schemas/PlatformRole' }
+        roleLabel: { type: string }
+        status:
+          $ref: '#/components/schemas/PlatformUserStatus'
+    EnterpriseScope:
+      type: object
+      required: [id, name, customerCode, permissions]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        customerCode: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+    PlatformLoginRequest:
+      type: object
+      required: [phone, password]
+      properties:
+        phone: { type: string, minLength: 1, maxLength: 32 }
+        password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
+    PlatformLoginResult:
+      type: object
+      required: [token, user, enterprise, permissions, mustReset]
+      properties:
+        token: { type: string }
+        user: { $ref: '#/components/schemas/PlatformUser' }
+        enterprise:
+          oneOf:
+            - { $ref: '#/components/schemas/EnterpriseScope' }
+            - { type: 'null' }
+        permissions:
+          type: array
+          items: { type: string }
+        mustReset: { type: boolean }
+    ServiceHealth:
+      type: object
+      required: [name, detail, status, updatedAt]
+      properties:
+        name: { type: string }
+        detail: { type: string }
+        status: { type: string, enum: [healthy, degraded, offline] }
+        updatedAt: { type: string }
+    PortalSession:
+      type: object
+      required: [id, title, channel, preview, updatedAt, evidence]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        query: { type: string }
+        channel: { type: string }
+        preview: { type: string }
+        updatedAt: { type: string, format: date-time }
+        evidence: { type: boolean }
+    PortalOverview:
+      type: object
+      required: [user, enterprise, stats, services, sessions]
+      properties:
+        user: { $ref: '#/components/schemas/PlatformUser' }
+        enterprise:
+          oneOf:
+            - { $ref: '#/components/schemas/EnterpriseScope' }
+            - { type: 'null' }
+        stats:
+          type: object
+          required: [activeShipments, pendingMilestones, recentQueries]
+          properties:
+            activeShipments: { type: [integer, 'null'] }
+            pendingMilestones: { type: [integer, 'null'] }
+            recentQueries: { type: integer }
+        services:
+          type: array
+          items: { $ref: '#/components/schemas/ServiceHealth' }
+        sessions:
+          type: array
+          items: { $ref: '#/components/schemas/PortalSession' }
+    ShipmentEvidence:
+      type: object
+      required: [label, value, source, capturedAt, known]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        source: { type: string }
+        capturedAt: { type: string, format: date-time }
+        known: { type: boolean }
+    ShipmentResult:
+      type: object
+      required: [query, conversationId, status, title, summary, evidence, traceId]
+      properties:
+        query: { type: string }
+        conversationId: { type: string, format: uuid }
+        status: { type: string, enum: [found, not_found, needs_clarification, upstream_error] }
+        title: { type: string }
+        summary: { type: string }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/ShipmentEvidence' }
+        traceId: { type: string }
+    PortalMessage:
+      type: object
+      required: [id, direction, messageType, body, runId, traceId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, assistant] }
+        messageType: { type: string }
+        body: { type: string }
+        runId:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        traceId: { type: string }
+        createdAt: { type: string, format: date-time }
+    PortalExecutionRun:
+      type: object
+      required: [runId, status, query, title, summary, traceId, startedAt, completedAt, evidence]
+      properties:
+        runId: { type: string }
+        status: { type: string }
+        query: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        traceId: { type: string }
+        startedAt: { type: string, format: date-time }
+        completedAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/ShipmentEvidence' }
+    PortalSessionDetail:
+      type: object
+      required: [conversation, messages, runs, result]
+      properties:
+        conversation: { $ref: '#/components/schemas/PortalSession' }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/PortalMessage' }
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/PortalExecutionRun' }
+        result:
+          oneOf:
+            - { $ref: '#/components/schemas/ShipmentResult' }
+            - { type: 'null' }
+    ShipmentLookupRequest:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 128 }
+        conversationId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+    WebInboundRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 10000 }
+        conversationId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+        messageId: { type: string, maxLength: 255 }
+    WebInboundStatus:
+      type: object
+      required: [inboundMessageId, inboundStatus, taskStatus, replyStatus, conversationId]
+      properties:
+        inboundMessageId: { type: string, format: uuid }
+        inboundStatus: { type: string }
+        taskStatus:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        replyStatus:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        conversationId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+    InboundReceipt:
+      type: object
+      required: [inboundMessageId, taskId, created, status, channel, conversationId]
+      properties:
+        inboundMessageId: { type: string, format: uuid }
+        taskId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+        created: { type: boolean }
+        status: { type: string }
+        channel: { type: string }
+        conversationId: { type: string, format: uuid }
+    OpsStatus:
+      type: object
+      required: [status, service, database, schema, metadata, delivery, executions, recentFailures, suggestions]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        service:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [ok] }
+        database:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [ready, error] }
+            reason: { type: string }
+        schema:
+          type: object
+          required: [currentRevision, expectedRevision]
+          properties:
+            currentRevision:
+              oneOf:
+                - { type: integer }
+                - { type: 'null' }
+            expectedRevision: { type: integer }
+        metadata:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [healthy, degraded, unknown] }
+            configuredApplications: { type: integer }
+            healthyApplications: { type: integer }
+            degradedApplications: { type: integer }
+            lastFailureAt:
+              oneOf:
+                - { type: string, format: date-time }
+                - { type: 'null' }
+        delivery:
+          type: object
+          required: [byStatus]
+          properties:
+            byStatus:
+              type: object
+              additionalProperties: { type: integer }
+        executions:
+          type: object
+          required: [byStatus]
+          properties:
+            byStatus:
+              type: object
+              additionalProperties: { type: integer }
+        recentFailures:
+          type: array
+          items:
+            type: object
+            required: [action, outcome, count, lastSeenAt]
+            properties:
+              action: { type: string }
+              outcome: { type: string, enum: [authorization, timeout, network, upstream, database, other, unknown] }
+              count: { type: integer }
+              lastSeenAt:
+                oneOf:
+                  - { type: string, format: date-time }
+                  - { type: 'null' }
+        suggestions:
+          type: array
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code: { type: string }
+              message: { type: string }
+    PlatformConfigPayload:
+      type: object
+      required: [items, featureFlags, notes]
+      properties:
+        items:
+          type: array
+          items: { type: string }
+        featureFlags:
+          type: object
+          required: [portal, m3ReadOnly, audit, webChannel]
+          properties:
+            portal: { type: boolean }
+            m3ReadOnly: { type: boolean }
+            audit: { type: boolean }
+            webChannel: { type: boolean }
+        notes: { type: string }
+    PlatformConfigStatus:
+      type: string
+      enum: [draft, published, rolled_back]
+    AdminConfigVersion:
+      type: object
+      required: [id, version, status, payload, validationErrors, createdByAccountId, publishedByAccountId, rolledBackByAccountId, createdAt, updatedAt, publishedAt, rolledBackAt, rollbackSourceVersion]
+      properties:
+        id:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+        version: { type: integer }
+        status: { $ref: '#/components/schemas/PlatformConfigStatus' }
+        payload: { $ref: '#/components/schemas/PlatformConfigPayload' }
+        validationErrors:
+          type: array
+          items: { type: string }
+        createdByAccountId:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        publishedByAccountId:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        rolledBackByAccountId:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        publishedAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        rolledBackAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        rollbackSourceVersion:
+          oneOf:
+            - { type: integer }
+            - { type: 'null' }
+    AdminConfigState:
+      type: object
+      required: [published, draft, history]
+      properties:
+        published:
+          oneOf:
+            - { $ref: '#/components/schemas/AdminConfigVersion' }
+            - { type: 'null' }
+        draft:
+          oneOf:
+            - { $ref: '#/components/schemas/AdminConfigVersion' }
+            - { type: 'null' }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/AdminConfigVersion' }
+    AdminMetric:
+      type: object
+      required: [label, value, note, tone]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        note: { type: string }
+        tone: { type: string, enum: [neutral, warning, success] }
+    AdminActivity:
+      type: object
+      required: [action, actor, target, at, tone]
+      properties:
+        action: { type: string }
+        actor: { type: string }
+        target: { type: string }
+        at: { type: string, format: date-time }
+        tone: { type: string, enum: [neutral, warning, success] }
+    AdminOverview:
+      type: object
+      required: [metrics, activities, config]
+      properties:
+        metrics:
+          type: array
+          items: { $ref: '#/components/schemas/AdminMetric' }
+        activities:
+          type: array
+          items: { $ref: '#/components/schemas/AdminActivity' }
+        config:
+          type: object
+          required: [version, status, updatedAt, items]
+          properties:
+            version: { type: string }
+            status: { type: string, enum: [draft, published] }
+            updatedAt: { type: string, format: date-time }
+            items:
+              type: array
+              items: { type: string }
+            published:
+              oneOf:
+                - { $ref: '#/components/schemas/AdminConfigVersion' }
+                - { type: 'null' }
+            draft:
+              oneOf:
+                - { $ref: '#/components/schemas/AdminConfigVersion' }
+                - { type: 'null' }
+            history:
+              type: array
+              items: { $ref: '#/components/schemas/AdminConfigVersion' }
+    AdminEnterprise:
+      type: object
+      required: [id, name, customerCode, status]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        customerCode: { type: string }
+        status: { type: string, enum: [active, suspended] }
+    AdminUserEnterprise:
+      type: object
+      required: [id, name, customerCode, status]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        customerCode: { type: string }
+        status: { type: string, enum: [active, suspended] }
+    AdminUser:
+      allOf:
+        - $ref: '#/components/schemas/PlatformUser'
+        - type: object
+          required: [status, enterprises]
+          properties:
+            status: { $ref: '#/components/schemas/PlatformUserStatus' }
+            enterprises:
+              type: array
+              items: { $ref: '#/components/schemas/AdminUserEnterprise' }
+    AdminUserCreateResult:
+      type: object
+      required: [user, initialPassword]
+      properties:
+        user: { $ref: '#/components/schemas/AdminUser' }
+        initialPassword: { type: string }
+    AdminPasswordResetResult:
+      type: object
+      required: [userId, initialPassword]
+      properties:
+        userId: { type: string, format: uuid }
+        initialPassword: { type: string }
+    AdminAuditEvent:
+      type: object
+      required: [id, action, targetType, targetId, traceId, outcome, metadata, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string }
+        targetType: { type: string }
+        targetId:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        traceId: { type: string }
+        outcome: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+    PlatformUserStatusChange:
+      type: object
+      required: [userId, status]
+      properties:
+        userId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/PlatformUserStatus' }
+    IntegrationBinding:
+      type: object
+      required: [id, connectionId, enterpriseId, enterpriseName, customerCode, applicationId, upstreamAppId, vendor, workspaceId, externalAccountId, status, connectionStatus, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        connectionId: { type: string, format: uuid }
+        enterpriseId: { type: string, format: uuid }
+        enterpriseName: { type: string }
+        customerCode: { type: string }
+        applicationId: { type: string }
+        upstreamAppId: { type: string }
+        vendor: { type: string }
+        workspaceId: { type: string }
+        externalAccountId: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        connectionStatus: { type: string, enum: [active, disabled] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BindingStatusChange:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [active, disabled] }
+    ChannelCredential:
+      type: object
+      required: [id, enterpriseId, connectionId, channel, channelInstanceId, credentialMask, version, keyVersion, fingerprint, status, createdAt, updatedAt, rotatedAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        enterpriseId: { type: string, format: uuid }
+        enterpriseName: { type: string }
+        customerCode: { type: string }
+        connectionId: { type: string, format: uuid }
+        applicationId: { type: string }
+        vendor: { type: string }
+        channel: { type: string, maxLength: 48 }
+        channelInstanceId: { type: string, maxLength: 128 }
+        credentialMask: { type: string, const: '********' }
+        version: { type: integer, minimum: 1 }
+        keyVersion: { type: string, maxLength: 64 }
+        fingerprint: { type: string, minLength: 64, maxLength: 64 }
+        status: { type: string, enum: [active, disabled] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        rotatedAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        expiresAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+    ChannelCredentialValue:
+      oneOf:
+        - { type: string, minLength: 1, maxLength: 65536 }
+        - { type: object, additionalProperties: true }
+        - { type: array, items: {} }
+      description: Secret value accepted by the server; never present in responses.
+    CreateChannelCredentialRequest:
+      type: object
+      required: [enterpriseId, connectionId, channel, channelInstanceId, credential]
+      properties:
+        enterpriseId: { type: string, format: uuid }
+        connectionId: { type: string, format: uuid }
+        channel: { type: string, minLength: 1, maxLength: 48 }
+        channelInstanceId: { type: string, minLength: 1, maxLength: 128 }
+        credential: { $ref: '#/components/schemas/ChannelCredentialValue' }
+    RotateChannelCredentialRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential: { $ref: '#/components/schemas/ChannelCredentialValue' }
+    CreateEnterpriseRequest:
+      type: object
+      required: [name, customerCode]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        customerCode: { type: string, minLength: 1, maxLength: 128 }
+    CreatePlatformUserRequest:
+      type: object
+      required: [name, phone, role]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        phone: { type: string, minLength: 1, maxLength: 32 }
+        role: { $ref: '#/components/schemas/PlatformRole' }
+        enterpriseId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+    UpdatePlatformUserAccessRequest:
+      type: object
+      minProperties: 1
+      properties:
+        role: { $ref: '#/components/schemas/PlatformRole' }
+        enterpriseIds:
+          type: array
+          items: { type: string, format: uuid }
+    UpsertBindingRequest:
+      type: object
+      required: [applicationId, upstreamAppId, enterpriseId, workspaceId, externalAccountId]
+      properties:
+        applicationId: { type: string }
+        upstreamAppId: { type: string }
+        enterpriseId: { type: string, format: uuid }
+        workspaceId: { type: string }
+        externalAccountId: { type: string }
+        vendor: { type: string }
