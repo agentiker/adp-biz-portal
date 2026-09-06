@@ -2,7 +2,7 @@
 
 > 关联方案：[docs/plans/2026-09-04-unified-business-platform-design.md](docs/plans/2026-09-04-unified-business-platform-design.md)
 
-更新时间：2026-09-06
+更新时间：2026-09-07
 总目标：完成统一业务接入平台方案落地，并完成前端 UI/UX 收尾。
 
 ## 状态规则
@@ -24,6 +24,8 @@
 | M4 试运行与交付 | 本地部署基线、文档、发布基础、账号开通材料和安全专项回归完成，生产交付未开始 | OpenAPI/前端类型契约已生成并校验；Docker Compose、环境模板、健康探针、数据字典、排障手册、发布/迁移/回滚运行手册、账号开通 SOP/验收/培训材料已补齐；迁移 CLI、本地隔离 schema 演练和日志/密钥/口令脱敏与权限回归已完成 | 生产部署权限、真实备份恢复、RPO/RTO、压测、正式发布和真实第三方培训交付 |
 
 当前验证基线：本轮部署基线已通过 Compose 配置解析、健康探针定向测试、Python 编译、OpenAPI/前端类型契约检查、渠道框架单测、Web PostgreSQL E2E、一次本地 PostgreSQL 备份恢复演练和 `git diff --check`；验证均为与变更直接相关的定向命令，不重复全量后端或浏览器测试。真实 ADP/M3/渠道联调仍不在本地验证范围内。
+
+部署进展（2026-09-07）：已将当前提交部署到火山引擎 `xdimspace-01:/opt/tencent-adp-gateway`；Compose 的 PostgreSQL、API、Worker 和反向代理均已启动，`/healthz` 与 `/readyz` 返回 200（schema revision 9）。已停止该服务器上的全部 `aifrelo-*` 容器，并删除 `dk_wordpress-wordpress-1`、`dk_wordpress-db-1` 及其绑定目录；WordPress 数据不可恢复。Nginx 已新增 `adp.xdimspace.cn` 的 HTTP 反代，HTTPS 证书和 DNS 切换仍待公网 IP/DNS 确认后处理。
 
 当前任务计数：`42 / 55` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。本轮已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；此前已完成 `M1-ADMIN-02` 的 Admin ADP Chat 迁移和真实浏览器验收，以及 `M3-FRAMEWORK-01`、`M3-WEB-E2E-01`、`M3-WECHAT-OA-01` 的本地框架和 Web/微信服务号适配器验证；`M3-CRED-01`、`M3-IDENTITY-01` 的专项回归、`M4-API-01` 的渠道身份契约补齐、`M4-PERF-01` 的本地并发基线和 `M4-DR-01` 的本地备份恢复演练已完成本地阶段；没有持续运行全量测试，验证均为一次性定向命令。
 
