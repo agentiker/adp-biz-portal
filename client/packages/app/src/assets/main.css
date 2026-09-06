@@ -1,0 +1,37 @@
+@import '@/assets/base.css';
+
+:root {
+  --platform-ink: #142322;
+  --platform-muted: #74837f;
+  --platform-line: #dfe7e5;
+  --platform-paper: #fbfcfb;
+  --platform-accent: #147d72;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --control-height: 44px;
+  --radius-control: 6px;
+}
+
+.app {
+  margin: 0 auto;
+  font-weight: normal;
+}
+
+a,
+.green {
+  text-decoration: none;
+  color: var(--platform-accent);
+  transition: .4s;
+}
+
+@media (hover: hover) {
+a:hover {
+    background-color: rgba(20, 125, 114, .08);
+  }
+}

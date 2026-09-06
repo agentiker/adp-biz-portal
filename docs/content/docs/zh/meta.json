@@ -1,0 +1,13 @@
+{
+  "icon": "home-4-line",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "quick-start",
+    "develop",
+    "multi-vendors",
+    "deploy",
+    "---adp-chat-components---",
+    "components"
+  ]
+}

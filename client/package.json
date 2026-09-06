@@ -1,0 +1,17 @@
+{
+  "name": "adp-system-client",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.0 <21 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "cd packages/app && npm run dev",
+    "build": "mkdir ../server/static; export NODE_OPTIONS='--max-old-space-size=4096' && npm run build_component && npm run build_app",
+    "build_component": "cd packages/adp-chat-component && npm run build && cd ../../../server/static && rm -rf adp-chat-component && cp -r ../../client/packages/adp-chat-component/dist adp-chat-component",
+    "build_app": "cd packages/app && npm run build && cd ../../../server/static && rm -rf app && cp -r ../../client/packages/app/dist app"
+  },
+  "workspaces": [
+    "packages/*",
+    "packages/adp-chat-component-example/*"
+  ]
+}

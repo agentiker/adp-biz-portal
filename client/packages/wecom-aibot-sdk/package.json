@@ -1,0 +1,14 @@
+{
+  "name": "wecom-aibot-sdk",
+  "private": true,
+  "version": "0.1.1",
+  "description": "企微 AI 机器人扫码授权 SDK 本地封装（UMD 官方脚本 + workspace 包）",
+  "main": "src/wecom-aibot-sdk.js",
+  "types": "src/wecom-aibot-sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/wecom-aibot-sdk.d.ts",
+      "default": "./src/wecom-aibot-sdk.js"
+    }
+  }
+}

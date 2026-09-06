@@ -1,0 +1,1978 @@
+<!-- 消息发送组件，支持富文本编辑、图片上传、文件上传、语音输入 -->
+<script setup lang="ts">
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { MessagePlugin, Tooltip as TTooltip } from 'tdesign-vue-next'
+import type { FileProps } from '../../model/file';
+import {
+    ALLOWED_IMAGE_TYPES,
+    ALLOWED_DOC_TYPES,
+    FILE_SIZE_LIMITS,
+    FILE_COUNT_LIMIT,
+    getFileCategory,
+    formatFileSize,
+} from '../../model/file';
+import { MessageCode, getMessage } from '../../model/messages';
+import type { ChatRelatedProps, SenderI18n } from '../../model/type';
+import { chatRelatedPropsDefaults, defaultSenderI18n, defaultSenderI18nEn } from '../../model/type';
+import type { NormalizedSkill, SkillSelectEvent, SkillsI18n, AgentSkillInfo, ManageSkillItem } from '../../model/skills';
+import { defaultSkillsI18n, defaultSkillsI18nEn, AgentSkillType } from '../../model/skills';
+import { normalizeSkill, normalizeManageItem } from '../../composables/useSkills';
+
+import RecordIcon from '../Common/RecordIcon.vue';
+import FileList from '../Common/FileList.vue';
+import CustomizedIcon from '../CustomizedIcon.vue';
+import WebRecorder from '../../utils/webRecorder';
+import { getAsrUrl } from '../../service/api';
+import QaEditor from '../QaEditor/index.vue';
+import ModelSelector from '../Common/ModelSelector.vue';
+import type { ModelOption, SelectedModel } from '../Common/ModelSelector.vue';
+import { useAgentStore } from '../../composables/useAgentStore';
+import { SlateTransforms, SlateEditor, SlateNode } from '@wangeditor/editor';
+import type { IDomEditor } from '@wangeditor/editor';
+import SkillsPopover from '../Skills/SkillsPopover.vue';
+import SkillsInstallDialog from '../Skills/SkillsInstallDialog.vue';
+import SkillManageDialog from '../Skills/SkillManageDialog.vue';
+import ConnectorDialog from '../Connector/ConnectorDialog.vue';
+import PluginInstallDialog from '../Plugin/PluginInstallDialog.vue';
+import PluginManageDialog from '../Plugin/PluginManageDialog.vue';
+import KnowledgeDialog from '../Knowledge/KnowledgeDialog.vue';
+import AtMentionPanel from './AtMentionPanel.vue';
+import { listReferShareKnowledge } from '../../service/knowledgeApi';
+
+export interface Props extends ChatRelatedProps {
+    /** 是否正在流式加载 */
+    isStreamLoad?: boolean;
+    /** 是否使用内部录音处理（API 模式） */
+    useInternalRecord?: boolean;
+    /** ASR URL API 路径 */
+    asrUrlApi?: string;
+    /** 是否启用语音输入 */
+    enableVoiceInput?: boolean;
+    /** 是否正在上传/解析文件（禁止发送和继续上传） */
+    isUploading?: boolean;
+    /** 渠道模式下无对话时禁用输入 */
+    channelInputDisabled?: boolean;
+    /** 当前应用 ID（用于初始化时创建用户 Agent） */
+    currentApplicationId?: string;
+
+    /** 模型选择器：当前选中模型 */
+    selectedModel?: SelectedModel;
+    /** 模型选择器：候选模型列表（不传则由组件内部拉取） */
+    modelOptions?: ModelOption[];
+    /** 模型列表接口路径覆盖 */
+    listModelApi?: string;
+    /** 国际化文本 */
+    i18n?: SenderI18n;
+    /** 是否启用 Skills 功能 */
+    enableSkills?: boolean;
+    /** 是否显示模型选择器 */
+    enableModelSelector?: boolean;
+    /** 是否显示连接器按钮 */
+    enableConnector?: boolean;
+    /** 是否显示工具按钮 */
+    enableTools?: boolean;
+    /** 是否显示知识库按钮（仅在 Agent 已启用 KnowledgeRetrievalAnswer 工具时才最终展示） */
+    enableKnowledge?: boolean;
+    /** 已安装 Skills 列表（标准化后） */
+    installedSkills?: NormalizedSkill[];
+    /** 已配置知识库列表（标准化后，用于 @ mention） */
+    installedKnowledge?: NormalizedSkill[];
+    /** Skills 数据加载中 */
+    skillsLoading?: boolean;
+    /** 已安装 Skill ID 集合 */
+    installedSkillIds?: string[];
+    /** 空间 ID（Skills API 需要） */
+    spaceId?: string;
+    /** 应用 ID（Skills /adp/ 转发需要） */
+    skillsApplicationId?: string;
+    /** Skills 国际化文本 */
+    skillsI18n?: Partial<SkillsI18n>;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+    ...chatRelatedPropsDefaults,
+    isStreamLoad: false,
+    useInternalRecord: false,
+    asrUrlApi: '',
+    enableVoiceInput: true,
+    isUploading: false,
+    channelInputDisabled: false,
+    currentApplicationId: '',
+
+    selectedModel: () => ({} as SelectedModel),
+    modelOptions: () => [],
+    listModelApi: '',
+    i18n: () => ({}),
+    enableSkills: false,
+    enableModelSelector: false,
+    enableConnector: false,
+    enableTools: false,
+    enableKnowledge: false,
+    installedSkills: () => [],
+    installedKnowledge: () => [],
+    skillsLoading: false,
+    installedSkillIds: () => [],
+    spaceId: '',
+    skillsApplicationId: '',
+    skillsI18n: () => ({}),
+});
+
+/** Agent 全局 store */
+const {
+    refreshAgentCache,
+    modifySkillList,
+    agentDetailMap,
+} = useAgentStore();
+
+const i18n = computed(() => {
+    const defaults = props.language?.startsWith('en') ? defaultSenderI18nEn : defaultSenderI18n;
+    return { ...defaults, ...props.i18n };
+});
+
+
+
+/**
+ * 是否禁止发送和上传（上传/解析中或流式加载中）
+ */
+const sendDisabled = computed(() => props.isUploading || props.isStreamLoad || props.channelInputDisabled);
+
+/**
+ * 是否有可发送内容
+ */
+const hasContent = computed(() => {
+    const textContent = editorHtml.value.replace(/<[^>]*>/g, '').replace(/[\u200b\s]/g, '').trim();
+    const hasImages = editorHtml.value.includes('<img');
+    return !!(textContent || hasImages || fileList.value.length > 0);
+});
+
+const emit = defineEmits<{
+    (e: 'stop'): void;
+    (e: 'send', value: string, fileList: FileProps[]): void;
+    (e: 'uploadFile', files: File[]): void;
+    (e: 'startRecord'): void;
+    (e: 'stopRecord'): void;
+    (e: 'message', code: MessageCode, message: string): void;
+    (e: 'update:selectedModel', model: ModelOption): void;
+    (e: 'modelChange', model: ModelOption): void;
+    /** Skills 选中事件 */
+    (e: 'skill-select', item: SkillSelectEvent): void;
+    /** Skills 浮层显隐变化 */
+    (e: 'skills-visible-change', visible: boolean): void;
+    /** 打开 Skills 管理 */
+    (e: 'skills-manage'): void;
+    /** Skill 安装 */
+    (e: 'skill-installed', skill: Record<string, unknown>): void;
+    /** Skill 卸载 */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (e: 'skill-uninstalled', skill: any): void;
+    /**
+     * mention 列表更新：包含已注册 skills/tools/connectors 的标准化数据，
+     * 父组件可将其透传给 ChatItem/MdContent，用于把消息中的 @skill:/@tool: 还原为蓝色 chip
+     */
+    (e: 'mention-list-update', payload: { skills: NormalizedSkill[]; knowledgeBase?: NormalizedSkill[]; tools: NormalizedSkill[]; connectors: NormalizedSkill[] }): void;
+}>();
+
+const editorHtml = ref('');
+const inputFocus = ref(false);
+const recording = ref(false);
+const fileList = ref<FileProps[]>([]);
+const recorder = ref<WebRecorder | null>(null);
+const asrWebSocket = ref<WebSocket | null>(null);
+const recordMaxTime = 60;
+const recordRef = ref<ReturnType<typeof setTimeout> | null>(null);
+const qaEditorRef = ref<InstanceType<typeof QaEditor> | null>(null);
+const inputValueBefore = ref('');
+
+// ─── Skills 状态 ──────────────────────────────────────────────────
+const skillsI18n = computed<Required<SkillsI18n>>(() => {
+    const defaults = props.language?.startsWith('en') ? defaultSkillsI18nEn : defaultSkillsI18n;
+    return { ...defaults, ...props.skillsI18n };
+});
+
+/** 已安装 Skills 原始数据（从 agentDetailMap 派生，store 统一缓存） */
+const skillList = computed(() =>
+    (agentDetailMap.value[props.skillsApplicationId]?.skills || []) as AgentSkillInfo[]
+);
+/** 供 SkillsInstallDialog prop 使用的 Record 泛型版本 */
+const skillListForInstall = computed<Record<string, unknown>[]>(() => skillList.value as unknown as Record<string, unknown>[]);
+/** 已安装 Plugin 原始数据 */
+const installedPlugins = computed<Record<string, unknown>[]>(() =>
+    agentDetailMap.value[props.skillsApplicationId]?.plugins || []
+);
+/** 已安装 Tool 原始数据 */
+const installedToolsRaw = computed<Record<string, unknown>[]>(() =>
+    agentDetailMap.value[props.skillsApplicationId]?.tools || []
+);
+/** 当前 Agent ID（优先缓存，回退 store agentIdMap） */
+
+/** 正在刷新 */
+const skillsRefreshing = ref(false);
+
+/** 浮层用的标准化列表 */
+const normalizedSkills = computed<NormalizedSkill[]>(() => {
+    return skillList.value
+        .filter((s) => !!s.DisplayName)
+        .sort((a, b) => {
+            const aType = a.SourceType ?? 0;
+            const bType = b.SourceType ?? 0;
+            return (aType === AgentSkillType.HUB_PRESET ? 1 : 0) - (bType === AgentSkillType.HUB_PRESET ? 1 : 0);
+        })
+        .map(normalizeSkill);
+});
+
+/** 管理弹窗用的列表 */
+const manageItems = computed<ManageSkillItem[]>(() => {
+    return skillList.value
+        .filter((s) => !!s.DisplayName)
+        .sort((a, b) => {
+            const aType = a.SourceType ?? 0;
+            const bType = b.SourceType ?? 0;
+            return (aType === AgentSkillType.HUB_PRESET ? 1 : 0) - (bType === AgentSkillType.HUB_PRESET ? 1 : 0);
+        })
+        .map(normalizeManageItem);
+});
+
+/** 从 ToolList（有 IconUrl）+ PluginList（有 PluginClass）交叉提取 mention 数据 */
+function getPluginClassMap(): Map<string, number> {
+    const m = new Map<string, number>();
+    installedPlugins.value.forEach((p) => {
+        const id = (p.PluginId || p.plugin_id || '') as string;
+        if (id) m.set(id, (p.PluginClass ?? p.plugin_class ?? 0) as number);
+    });
+    return m;
+}
+
+function getPluginId(t: Record<string, unknown>): string {
+    const cfg = (t.Config || t.config || {}) as Record<string, unknown>;
+    return (cfg.plugin_id || cfg.pluginid || cfg.PluginId || '') as string;
+}
+
+/**
+ * 解析工具原始名称
+ * 后端 tool_name 形如 "中文别名/英文工具名"，按最后一个 "/" 拆分：
+ * - displayName 取 "/" 前的中文别名
+ * - name 取 "/" 后的英文技术名
+ * 无 "/" 时两者相同
+ */
+function parseToolRaw(t: Record<string, unknown>): { displayName: string; name: string } {
+    const cfg = (t.Config || t.config || {}) as Record<string, unknown>;
+    const raw = String(
+        t.Name || t.name || t.tool_name || t.ToolName || cfg.description || cfg.Description || cfg.Description || '',
+    );
+    const idx = raw.lastIndexOf('/');
+    if (idx > -1) {
+        return { displayName: raw.slice(0, idx), name: raw.slice(idx + 1) };
+    }
+    return { displayName: raw, name: raw };
+}
+
+/** 所属插件名称（从 plugin_name 或 PluginList 交叉获取） */
+function toolPluginName(t: Record<string, unknown>): string {
+    const cfg = (t.Config || t.config || {}) as Record<string, unknown>;
+    const pid = (cfg.PluginId || cfg.plugin_id || '') as string;
+    if (pid) {
+        const plugin = installedPlugins.value.find(
+            (p: any) => {
+                const pc = (p.Config || p.config || {});
+                return (pc.PluginId || pc.plugin_id || p.PluginId || p.plugin_id || '') === pid;
+            }
+        );
+        if (plugin) return ((plugin as any).Name || (plugin as any).name || '') as string;
+    }
+    return String(t.plugin_name || t.PluginName || t.PluginDisplayName || t.plugin_display_name || '');
+}
+
+/** 工具技术名（英文），用于序列化为 @tool:name */
+function toolName(t: Record<string, unknown>): string {
+    const { name } = parseToolRaw(t);
+    return name || ((t.tool_id || t.ToolId || '') as string);
+}
+
+/**
+ * 工具展示名（中文优先）：
+ * - tool_name 含 "中文/英文" 时取中文别名
+ * - 无中文别名（displayName === name）时，回退「插件名/英文名」，再回退英文名
+ */
+function toolDisplayName(t: Record<string, unknown>): string {
+    const { displayName, name } = parseToolRaw(t);
+    if (displayName && name && displayName !== name) {
+        return displayName;
+    }
+    const pluginName = toolPluginName(t);
+    if (pluginName && pluginName !== name) {
+        return `${pluginName}/${name}`;
+    }
+    return displayName || name || ((t.tool_id || t.ToolId || '') as string);
+}
+
+/**
+ * 按 id 去重 NormalizedSkill 数组，保留首次出现的项。
+ * 防止 tools / connectors / knowledge 因并发刷新产生重复条目。
+ */
+function dedupeById(items: NormalizedSkill[]): NormalizedSkill[] {
+    const seen = new Set<string>();
+    return items.filter((item) => {
+        const key = item.id || item.name;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+/** 连接器列表：从 PluginList 中取 PluginClass === 1 (= CONNECTOR) 的项 */
+const mentionConnectors = computed<NormalizedSkill[]>(() => {
+    return dedupeById(installedPlugins.value
+        .filter((p) => (p.PluginClass ?? p.plugin_class ?? 0) === 1)
+        .map((p) => {
+            const cfg = (p.Config || p.config || {}) as Record<string, unknown>;
+            const pid = (cfg.PluginId || cfg.plugin_id || p.PluginId || p.plugin_id || '') as string;
+            const pluginName = (p.Name || p.name || p.Description || p.description || '') as string;
+            return {
+                id: pid,
+                name: (p.Name || p.name || '') as string,
+                displayName: pluginName,
+                iconUrl: (p.IconUrl || p.icon_url || p.Icon || p.icon || '') as string,
+            };
+        }));
+});
+
+/** 工具列表：从 ToolList 中取 pluginClass === 0 或无标记的项 */
+const mentionTools = computed<NormalizedSkill[]>(() => {
+    const m = getPluginClassMap();
+    return dedupeById(installedToolsRaw.value
+        .filter((t) => {
+            const pid = getPluginId(t);
+            const cls = m.get(pid);
+            // pluginClass === 0 或未匹配（兜底归入工具）
+            return cls === 0 || cls === undefined;
+        })
+        .map((t) => ({
+            id: getPluginId(t) || ((t.tool_id || t.ToolId || '') as string),
+            name: toolName(t),
+            displayName: toolDisplayName(t),
+            iconUrl: (t.IconUrl || t.icon_url || '') as string,
+        })));
+});
+
+/** 双兼容 pick：先 PascalCase，再下划线 */
+function pickField(obj: Record<string, unknown> | null | undefined, ...keys: string[]): unknown {
+    if (!obj) return undefined;
+    for (const k of keys) {
+        if (obj[k] !== undefined) return obj[k];
+    }
+    return undefined;
+}
+
+/**
+ * 从 tools 列表中解析 KnowledgeRetrievalAnswer → KnowledgeScope → KnowledgeList → KnowledgeBizId。
+ * 结构对齐 KnowledgeDialog.parseKnowledgeScope。
+ */
+function parseKnowledgeIdsFromTools(tools: Record<string, unknown>[]): { allKnowledge: boolean; ids: string[] } {
+    const kbTool = tools.find((t) => {
+        const cfg = (t.Config || {}) as Record<string, unknown>;
+        const rawName = (t.Name || t.ToolName || cfg.Description || cfg.description || '') as string;
+        const name = rawName.includes('/') ? rawName.split('/').pop() || '' : rawName;
+        return name === 'KnowledgeRetrievalAnswer';
+    });
+    if (!kbTool) return { allKnowledge: false, ids: [] };
+
+    const cfg = (pickField(kbTool, 'Config', 'config') || {}) as Record<string, unknown>;
+    const inputList = (pickField(cfg, 'InputList', 'input_list') || []) as Array<Record<string, unknown>>;
+    const scope = inputList.find((n) => pickField(n, 'Name', 'name') === 'KnowledgeScope');
+    if (!scope) return { allKnowledge: false, ids: [] };
+    const scopeSubs = (pickField(scope, 'SubParameterList', 'sub_parameter_list') || []) as Array<Record<string, unknown>>;
+
+    // 解析 AllKnowledge 标记
+    let allKnowledge = false;
+    let ids: string[] = [];
+    for (const sub of scopeSubs) {
+        const subName = pickField(sub, 'Name', 'name');
+        if (subName === 'AllKnowledge') {
+            const input = (pickField(sub, 'Input', 'input') || {}) as Record<string, unknown>;
+            const uiv = (pickField(input, 'UserInputValue', 'user_input_value') || {}) as Record<string, unknown>;
+            const values = (pickField(uiv, 'ValueList', 'value_list') || []) as string[];
+            allKnowledge = values[0] === 'true';
+        } else if (subName === 'KnowledgeList') {
+            const items = (pickField(sub, 'SubParameterList', 'sub_parameter_list') || []) as Array<Record<string, unknown>>;
+            ids = items
+                .map((it) => {
+                    const itemSubs = (pickField(it, 'SubParameterList', 'sub_parameter_list') || []) as Array<Record<string, unknown>>;
+                    const bizNode = itemSubs.find((n) => pickField(n, 'Name', 'name') === 'KnowledgeBizId');
+                    if (!bizNode) return '';
+                    const bInput = (pickField(bizNode, 'Input', 'input') || {}) as Record<string, unknown>;
+                    const buiv = (pickField(bInput, 'UserInputValue', 'user_input_value') || {}) as Record<string, unknown>;
+                    const bvalues = (pickField(buiv, 'ValueList', 'value_list') || []) as string[];
+                    return bvalues[0] || '';
+                })
+                .filter(Boolean);
+        }
+    }
+    return { allKnowledge, ids };
+}
+
+/** 知识库 BizId → 名称 映射缓存（从 listReferShareKnowledge 填充） */
+const knowledgeNameMap = ref<Record<string, string>>({});
+
+/** 拉取知识库名称列表（非阻塞，用于 @ mention 展示） */
+async function refreshKnowledgeNames(appId: string) {
+    try {
+        const { list } = await listReferShareKnowledge({
+            applicationId: appId,
+            includeDefault: true,
+            defaultName: skillsI18n.value.defaultKnowledgeName,
+        });
+        const map: Record<string, string> = {};
+        for (const item of list) {
+            if (item.knowledgeBizId) map[item.knowledgeBizId] = item.knowledgeName || item.knowledgeBizId;
+        }
+        knowledgeNameMap.value = map;
+    } catch (e) {
+        // 非阻塞，静默失败
+    }
+}
+
+/** 知识库列表（用于 @ mention）：优先用外部 prop，否则从 Agent 工具解析 + 名称映射 */
+const mentionKnowledge = computed<NormalizedSkill[]>(() => {
+    // 外部传入（含名称、图标等完整信息）优先
+    if (props.installedKnowledge.length) return dedupeById(props.installedKnowledge);
+
+    // 从 Agent 工具解析 KnowledgeRetrievalAnswer → KnowledgeScope
+    const { allKnowledge, ids } = parseKnowledgeIdsFromTools(installedToolsRaw.value);
+    const nameMap = knowledgeNameMap.value;
+
+    // "全部知识库"模式 → 展示所有已拉取到的知识库（与 KnowledgeDialog 一致）
+    if (allKnowledge) {
+        return dedupeById(Object.entries(nameMap).map(([id, name]) => ({ id, name, displayName: name, iconUrl: '' })));
+    }
+
+    // "按知识库"模式 → 仅展示 KnowledgeList 中的知识库
+    return dedupeById(ids.map((id) => ({
+        id,
+        name: nameMap[id] || id,
+        displayName: nameMap[id] || id,
+        iconUrl: '',
+    })));
+});
+
+/** 已安装 Skill ID 集合 */
+const skillsInstalledIds = computed(() => {
+    return [...new Set(skillList.value.map((s) => s.SkillId || '').filter(Boolean))];
+});
+
+/** 已安装工具 ID 集合（传递给 PluginInstallDialog 用于判断已添加状态） */
+const currentInstalledToolIds = computed<string[]>(() => {
+    return installedToolsRaw.value.map((t) => {
+        const cfg = (t.Config || t.config || {}) as Record<string, unknown>;
+        return (cfg.tool_id || cfg.ToolId || t.tool_id || t.ToolId || '') as string;
+    }).filter(Boolean);
+});
+
+/**
+ * 已安装工具的 (pluginId, toolId) 映射，用于在未懒加载工具明细的情况下
+ * 仍能正确显示插件「已全部添加」状态。
+ */
+const currentInstalledTools = computed<Array<{ pluginId: string; toolId: string }>>(() => {
+    return installedToolsRaw.value.map((t) => {
+        const cfg = (t.Config || t.config || {}) as Record<string, unknown>;
+        return {
+            pluginId: (cfg.plugin_id || cfg.PluginId || t.plugin_id || t.PluginId || '') as string,
+            toolId: (cfg.tool_id || cfg.ToolId || t.tool_id || t.ToolId || '') as string,
+        };
+    }).filter((x) => x.pluginId && x.toolId);
+});
+
+/** 刷新 Skills 列表（通过 useAgentStore 统一缓存） */
+async function refreshSkills() {
+    const appId = props.skillsApplicationId;
+    console.log('[Sender] refreshSkills, appId:', appId);
+    if (!appId) {
+        console.warn('[Sender] refreshSkills skipped: no applicationId');
+        return;
+    }
+    // 防止并发刷新导致数据竞态和重复条目
+    if (skillsRefreshing.value) {
+        console.log('[Sender] refreshSkills skipped: already refreshing');
+        return;
+    }
+    skillsRefreshing.value = true;
+    try {
+        // 并行拉取 agent 缓存和知识库名称
+        await Promise.all([
+            refreshAgentCache(appId),
+            refreshKnowledgeNames(appId),
+        ]);
+        console.log('[Sender] refreshSkills done, skills:', skillList.value.length, 'knowledge:', Object.keys(knowledgeNameMap.value).length);
+    } catch (e) {
+        console.error('[Sender] refreshSkills error:', e);
+    } finally {
+        skillsRefreshing.value = false;
+    }
+}
+
+/** 已注册 mention 数据变化时向父组件 emit，父组件再透传给 ChatItem/MdContent 渲染 chip */
+watch(
+    [skillList, installedToolsRaw, () => props.installedKnowledge],
+    () => {
+        // eslint-disable-next-line no-console
+        console.log('[Sender] emit mention-list-update (raw data changed)',
+            'skills:', normalizedSkills.value.length,
+            'knowledge:', mentionKnowledge.value.length,
+            'tools:', mentionTools.value.length,
+            'connectors:', mentionConnectors.value.length);
+        emit('mention-list-update', {
+            skills: normalizedSkills.value,
+            knowledgeBase: dedupeById(mentionKnowledge.value),
+            tools: dedupeById(mentionTools.value),
+            connectors: dedupeById(mentionConnectors.value),
+        });
+    },
+    { immediate: true },
+);
+
+/** 卸载 Skill：通过 useAgentStore.modifySkillList 统一更新，缓存自动刷新 */
+async function removeSkillById(skillId: string) {
+    const appId = props.skillsApplicationId;
+    if (!appId) return;
+    try {
+        const remainingSkills = skillList.value
+            .filter((s) => s.SkillId !== skillId)
+            .map((s) => ({
+                skillId: s.SkillId || '',
+            }));
+        await modifySkillList(appId, remainingSkills);
+        MessagePlugin.success(skillsI18n.value.removeSuccessToast);
+    } catch (e) {
+        console.error('[Sender] removeSkill error:', e);
+        MessagePlugin.error(skillsI18n.value.removeFailedToast);
+    }
+}
+
+// 监听 skillsApplicationId 变化，有值时自动刷新
+watch(
+    () => props.skillsApplicationId,
+    (appId) => {
+        console.log('[Sender] skillsApplicationId changed:', appId);
+        if (appId && skillList.value.length === 0) {
+            refreshSkills();
+        }
+    },
+    { immediate: true }
+);
+
+const skillsPopoverRef = ref<InstanceType<typeof SkillsPopover> | null>(null);
+const showSkillsInstall = ref(false);
+const showSkillsManage = ref(false);
+// Connector + Plugin
+const showConnector = ref(false);
+const showPlugin = ref(false);
+const showPluginManage = ref(false);
+// 知识库
+const showKnowledgeDialog = ref(false);
+
+/**
+ * 是否已在 Agent 中安装 KnowledgeRetrievalAnswer 工具
+ * 匹配来源：tool.Name / tool.ToolName / tool.Config.Description（若为 "中文/英文" 结构，取 "/" 后英文段）
+ * 有此工具时 Sender 才展示"知识库"按钮，与 gpt-demo/webim 表现一致
+ */
+const hasKnowledgeRetrievalTool = computed<boolean>(() => {
+    const isMatch = (raw: string): boolean => {
+        if (!raw) return false;
+        const idx = raw.lastIndexOf('/');
+        const tail = idx > -1 ? raw.slice(idx + 1) : raw;
+        return tail.trim() === 'KnowledgeRetrievalAnswer';
+    };
+    return installedToolsRaw.value.some((t) => {
+        const cfg = (t.Config || t.config || {}) as Record<string, unknown>;
+        const name = String(t.Name || t.name || '');
+        const toolName = String(t.ToolName || t.tool_name || '');
+        const desc = String(cfg.Description || cfg.description || '');
+        return isMatch(name) || isMatch(toolName) || isMatch(desc);
+    });
+});
+
+// ─── @ Mention ───────────────────────────────────────────────
+const atMentionVisible = ref(false);
+const atMentionStyle = ref({ top: '0px', left: '0px' });
+const mentionPanelRef = ref<InstanceType<typeof AtMentionPanel> | null>(null);
+const mentionSearchStr = ref('');
+let _editableEl: HTMLElement | null = null;
+
+function _ensureEditableEl(): HTMLElement | null {
+    if (_editableEl) return _editableEl;
+    const editor = qaEditorRef.value;
+    if (!editor) return null;
+    _editableEl = (editor.$el || editor).querySelector('[contenteditable="true"]') as HTMLElement;
+    return _editableEl;
+}
+
+function _getCaretPosition(): { top: number; left: number } | null {
+    const el = _ensureEditableEl();
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const sel = window.getSelection();
+    if (!sel?.rangeCount) return { top: rect.top, left: rect.left };
+    const range = sel.getRangeAt(0).cloneRange();
+    range.collapse(true);
+    const caretRect = range.getClientRects()[0];
+    return {
+        top: caretRect ? caretRect.top : rect.top,
+        left: caretRect ? caretRect.left : rect.left,
+    };
+}
+
+function _bindEditorKeydown() {
+    const el = _ensureEditableEl();
+    if (!el) return;
+    el.addEventListener('keydown', _onEditorKeydown);
+}
+
+function _onEditorKeydown(e: KeyboardEvent) {
+    if (atMentionVisible.value) {
+        // 键盘导航交给 mention 面板
+        if (mentionPanelRef.value?.handleKeydown(e)) {
+            e.preventDefault();
+            return;
+        }
+        if (e.key === 'Escape') { _hideMention(); return; }
+        if (e.key === 'Backspace') {
+            if (mentionSearchStr.value.length > 0) {
+                mentionSearchStr.value = mentionSearchStr.value.slice(0, -1);
+            } else {
+                _hideMention();
+            }
+            return;
+        }
+        // 搜索字符进入编辑器（不过滤），仅用于过滤列表
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+            mentionSearchStr.value += e.key;
+            return;
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End') {
+            return;
+        }
+        _hideMention();
+        return;
+    }
+    // @ 触发：先弹面板（用缓存数据），后台异步刷新
+    if (e.key === '@' && props.enableSkills) {
+        const appId = props.skillsApplicationId;
+        // 缓存有数据则立即弹面板，没有则等刷新完成
+        const hasData = appId && (agentDetailMap.value[appId]?.skills?.length || 0) > 0;
+        const showPanel = () => {
+            requestAnimationFrame(() => {
+                const pos = _getCaretPosition();
+                if (pos) {
+                    atMentionStyle.value = { top: `${pos.top - 290}px`, left: `${pos.left}px` };
+                    mentionSearchStr.value = '';
+                    atMentionVisible.value = true;
+                    mentionPanelRef.value?.resetNavigation();
+                }
+            });
+        };
+        if (hasData) {
+            showPanel();
+            refreshSkills(); // 后台异步刷新，计算属性自动更新面板
+        } else {
+            refreshSkills().finally(showPanel);
+        }
+    }
+}
+
+function _hideMention() {
+    atMentionVisible.value = false;
+    mentionSearchStr.value = '';
+}
+
+/** 获取底层 wangEditor 实例 */
+function _getEditorInstance(): IDomEditor | null {
+    return (qaEditorRef.value?.editor as IDomEditor | undefined) || null;
+}
+
+/** 在 Slate 文本节点中查找光标前最后一个 @ 的位置 */
+function _findLastAtPoint(editor: IDomEditor): { path: number[]; offset: number } | null {
+    try {
+        const textEntries = Array.from(SlateNode.texts(editor));
+        for (let i = textEntries.length - 1; i >= 0; i--) {
+            const entry = textEntries[i];
+            if (!entry) continue;
+            const [node, path] = entry;
+            const text = (node as unknown as { text?: string }).text || '';
+            const atIndex = text.lastIndexOf('@');
+            if (atIndex !== -1) {
+                return { path: path as number[], offset: atIndex };
+            }
+        }
+    } catch (_) { /* ignore */ }
+    return null;
+}
+
+/**
+ * 选中 mention 项后：删除已输入的 @ + 搜索字符，插入 mention inline-void 节点
+ */
+function onAtMentionSelect(item: { type: string; id: string; name: string; displayName: string; categoryLabel: string }) {
+    // 捕获搜索字符长度（_hideMention 会清空 mentionSearchStr）
+    const searchLen = mentionSearchStr.value.length;
+    _hideMention();
+    const editor = _getEditorInstance();
+    if (!editor) return;
+    const editableEl = _ensureEditableEl();
+    if (editableEl) editableEl.focus();
+
+    const mentionNode = {
+        type: 'mention',
+        mentionType: item.type,
+        mentionId: item.id,
+        mentionName: item.name || item.displayName || '',
+        mentionDisplayName: item.displayName || item.name || '',
+        displayLabel: item.categoryLabel || '',
+        children: [{ text: '' }],
+    };
+
+    nextTick(() => {
+        try {
+            // 定位并删除已输入的 @ 及其后的搜索字符
+            const atPoint = _findLastAtPoint(editor);
+            if (atPoint) {
+                // 删除范围：@ 起始到 @ + 1（@ 本身）+ 搜索字符数，并按文本节点长度裁剪
+                let endOffset = atPoint.offset + 1 + searchLen;
+                try {
+                    const textNode = SlateNode.get(editor, atPoint.path) as unknown as { text?: string };
+                    const textLen = (textNode.text || '').length;
+                    if (endOffset > textLen) endOffset = textLen;
+                } catch (_) { /* ignore */ }
+                const atRange = {
+                    anchor: atPoint,
+                    focus: { path: atPoint.path, offset: endOffset },
+                };
+                SlateTransforms.select(editor, atRange);
+                editor.deleteFragment();
+            } else {
+                try { editor.restoreSelection(); } catch (_) { /* ignore */ }
+                if (!editor.selection) {
+                    const endPoint = SlateEditor.end(editor, []);
+                    editor.select(endPoint);
+                }
+            }
+
+            // 插入 mention 节点，并在其后补一个空格使光标脱离 void 节点
+            SlateTransforms.insertNodes(editor, mentionNode as unknown as SlateNode);
+            editor.move(1);
+            editor.insertText(' ');
+        } catch (e) {
+            console.warn('[Sender] insert mention failed', e);
+        }
+    });
+}
+
+// 挂载时绑定编辑器事件
+onMounted(() => {
+    _bindEditorKeydown();
+    document.addEventListener('click', _onClickOutsideMention);
+});
+onUnmounted(() => {
+    document.removeEventListener('click', _onClickOutsideMention);
+});
+
+function _onClickOutsideMention(e: MouseEvent) {
+    if (!atMentionVisible.value) return;
+    // 简单判断：点击不在面板内容上就关闭
+    // Teleport 渲染后由组件自身的 overlay 控制
+}
+
+// ─── Skills 事件处理 ──────────────────────────────────────────────
+const onSkillsPopoverSelect = (item: SkillSelectEvent) => {
+    onAtMentionSelect(item);
+    emit('skill-select', item);
+};
+
+const onSkillsVisibleChange = (visible: boolean) => {
+    emit('skills-visible-change', visible);
+    console.log('[Sender] onSkillsVisibleChange, visible:', visible);
+    if (visible) {
+        refreshSkills();
+    }
+};
+
+const onSkillsManage = () => {
+    emit('skills-manage');
+    refreshSkills();
+    showSkillsManage.value = true;
+};
+
+const onSkillInstalled = (skill: Record<string, unknown>) => {
+    emit('skill-installed', skill);
+    refreshSkills();
+};
+
+const onSkillUninstalled = (skill: Record<string, unknown>) => {
+    emit('skill-uninstalled', skill);
+    refreshSkills();
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const onSkillDeleted = (item: any) => {
+    removeSkillById(item.id);
+    emit('skill-uninstalled', item);
+};
+
+/**
+ * 加号菜单状态
+ */
+const showPlusMenu = ref(false);
+const plusMenuRef = ref<HTMLDivElement | null>(null);
+const imageInputRef = ref<HTMLInputElement | null>(null);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+
+/**
+ * 图片 accept 属性
+ */
+const imageAccept = ALLOWED_IMAGE_TYPES.map(t => {
+    const ext = t.split('/')[1];
+    return `.${ext === 'jpeg' ? 'jpg,.jpeg' : ext}`;
+}).join(',');
+
+/**
+ * 文件 accept 属性
+ */
+const fileAccept = '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json';
+
+const placeholder = computed(() => {
+    if (props.channelInputDisabled) return '请先选择渠道会话';
+    return props.isMobile ? (i18n.value.placeholderMobile || '') : (i18n.value.placeholder || '');
+});
+
+onMounted(() => {
+    document.addEventListener('click', handleClickOutside);
+});
+
+onUnmounted(() => {
+    document.removeEventListener('click', handleClickOutside);
+});
+
+/**
+ * 点击外部关闭菜单
+ */
+const handleClickOutside = (e: MouseEvent) => {
+    if (plusMenuRef.value && !plusMenuRef.value.contains(e.target as Node)) {
+        showPlusMenu.value = false;
+    }
+};
+
+/**
+ * 切换加号菜单
+ */
+const togglePlusMenu = () => {
+    if (props.isUploading) return;
+    showPlusMenu.value = !showPlusMenu.value;
+};
+
+/**
+ * 选择图片
+ */
+const handleSelectImage = () => {
+    if (props.isUploading) return;
+    showPlusMenu.value = false;
+    imageInputRef.value?.click();
+};
+
+/**
+ * 选择文件
+ */
+const handleSelectFile = () => {
+    if (props.isUploading) return;
+    showPlusMenu.value = false;
+    fileInputRef.value?.click();
+};
+
+/**
+ * 编辑器内容变更
+ */
+const handleEditorInput = (html: string) => {
+    editorHtml.value = html;
+};
+
+/**
+ * 编辑器聚焦
+ */
+const handleEditorFocus = () => {
+    inputFocus.value = true;
+};
+
+/**
+ * 编辑器失焦
+ */
+const handleEditorBlur = () => {
+    inputFocus.value = false;
+};
+
+/**
+ * 键盘事件：Enter 发送，Ctrl/Meta+Enter 换行
+ * 通过 isComposing 判断是否处于 IME 组合输入状态，避免输入法确认时误触发送
+ */
+const handleKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return;
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.metaKey || event.ctrlKey) {
+        qaEditorRef.value?.insertHtml('<br/>')
+    } else if (!event.shiftKey) {
+        event.preventDefault();
+        handleSend();
+    }
+};
+
+/**
+ * 统一文件选择校验逻辑
+ */
+const handleFilesSelected = (event: Event, allowedTypes: string[]) => {
+    const input = event.target as HTMLInputElement;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+
+    const currentCount = fileList.value.length;
+    if (currentCount + files.length > FILE_COUNT_LIMIT) {
+        MessagePlugin.warning(i18n.value.fileLimitExceeded.replace('{count}', String(FILE_COUNT_LIMIT)));
+        return;
+    }
+
+    const validFiles: File[] = [];
+    Array.from(files).forEach((file) => {
+        if (!allowedTypes.includes(file.type) && !isExtensionAllowed(file.name, allowedTypes)) {
+            const text = i18n.value.notSupport || getMessage(MessageCode.FILE_FORMAT_NOT_SUPPORT, props.language).message;
+            MessagePlugin.error(text);
+            emit('message', MessageCode.FILE_FORMAT_NOT_SUPPORT, text);
+            return;
+        }
+
+        const category = getFileCategory(file.type);
+        const sizeLimit = FILE_SIZE_LIMITS[category];
+        if (file.size > sizeLimit) {
+            MessagePlugin.error(i18n.value.fileSizeExceeded.replace('{size}', formatFileSize(sizeLimit)));
+            return;
+        }
+
+        validFiles.push(file);
+    });
+
+    if (validFiles.length > 0) {
+        emit('uploadFile', validFiles);
+    }
+
+    input.value = '';
+};
+
+/**
+ * 通过扩展名检查文件类型（兜底）
+ */
+const isExtensionAllowed = (fileName: string, allowedTypes: string[]): boolean => {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (!ext) return false;
+    const extToMime: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', bmp: 'image/bmp', webp: 'image/webp',
+        pdf: 'application/pdf', doc: 'application/msword',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ppt: 'application/vnd.ms-powerpoint',
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        xls: 'application/vnd.ms-excel',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json',
+    };
+    const mime = extToMime[ext];
+    return mime ? allowedTypes.includes(mime) : false;
+};
+
+const handleImageInputChange = (event: Event) => {
+    handleFilesSelected(event, ALLOWED_IMAGE_TYPES);
+};
+
+const handleFileInputChange = (event: Event) => {
+    handleFilesSelected(event, ALLOWED_DOC_TYPES);
+};
+
+const handleDeleteFile = (index: number) => {
+    fileList.value.splice(index, 1);
+    fileList.value = [...fileList.value];
+};
+
+/**
+ * 将编辑器中的内联图片转为 Markdown 格式
+ */
+function htmlImgToMarkdown(html: string): string {
+    return html.replace(/<img[^>]+src="([^"]*)"[^>]*>/g, (_, src) => {
+        return `![](${src})`;
+    });
+}
+
+/**
+ * 提取编辑器中纯文本内容（去除HTML标签）
+ */
+function getPlainText(html: string): string {
+    return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
+}
+
+const handleSend = async function () {
+    if (props.isUploading) {
+        MessagePlugin.warning(i18n.value.uploadingWait);
+        return;
+    }
+    if (props.isStreamLoad) {
+        const text = i18n.value.answering || getMessage(MessageCode.ANSWERING, props.language).message;
+        MessagePlugin.warning(text);
+        emit('message', MessageCode.ANSWERING, text);
+        return;
+    }
+    handleStopRecord();
+
+    if (!hasContent.value) return;
+
+    let _query = '';
+    for (const file of fileList.value) {
+        if (file.status === 'done' && file.url) {
+            if (props.mode === 'claw') {
+                _query += `[${file.name || ''}](${file.url})`;
+            } else if (file.category === 'image') {
+                _query += `![](${file.url})`;
+            }
+        }
+    }
+
+    // 优先使用 Slate 序列化：mention 节点转为 @skill:/@tool: 内联标记，
+    // 内联图片转为 Markdown；编辑器不可用时回退到 HTML 解析
+    let editorText = qaEditorRef.value?.getMentionText?.() || '';
+    if (!editorText) {
+        const processedContent = htmlImgToMarkdown(editorHtml.value);
+        editorText = getPlainText(processedContent) || processedContent;
+    }
+    _query += editorText;
+
+    emit('send', _query, fileList.value);
+    editorHtml.value = '';
+    qaEditorRef.value?.clear();
+    fileList.value = [];
+}
+
+/**
+ * 录音链路诊断统计（一次录音会话）。
+ * 生产环境定位问题用：点击时刻 / 已发送字节 / 首帧时刻，日志中输出各环节相对耗时。
+ * 注：Chrome 用户激活窗口约 5s，点击到 AudioContext 创建若超时，会被 autoplay 策略挂起。
+ */
+const asrDiag = { startTs: 0, sentBytes: 0, firstFrameAt: 0 };
+
+/**
+ * 处理开始录音事件
+ */
+const handleStartRecord = async () => {
+    recording.value = true;
+    asrDiag.startTs = performance.now();
+    asrDiag.sentBytes = 0;
+    asrDiag.firstFrameAt = 0;
+    console.log('[ASR] startRecord clicked, useInternalRecord =', props.useInternalRecord, ', asrUrlApi =', props.asrUrlApi || '(default)');
+    
+    if (props.useInternalRecord) {
+        try {
+            const res = await getAsrUrl(props.asrUrlApi || undefined);
+            inputValueBefore.value = getPlainText(editorHtml.value);
+            const url = res.url;
+            console.log('[ASR] getAsrUrl done in', Math.round(performance.now() - asrDiag.startTs), 'ms since click, ws host =', url.split('/')[2] || '(unknown)');
+            asrWebSocket.value = new WebSocket(url);
+            
+            asrWebSocket.value.onopen = () => {
+                console.log('[ASR] websocket connected in', Math.round(performance.now() - asrDiag.startTs), 'ms since click (超过 5000ms 意味着用户激活已过期，AudioContext 可能被 autoplay 策略挂起)');
+                startRecording();
+                recordRef.value = setTimeout(() => {
+                    if (recording.value) {
+                        const text = i18n.value.recordTooLong || getMessage(MessageCode.RECORD_TOO_LONG, props.language).message;
+                        MessagePlugin.warning(text);
+                        emit('message', MessageCode.RECORD_TOO_LONG, text);
+                        handleStopRecord();
+                    }
+                }, recordMaxTime * 1000);
+            };
+            
+            asrWebSocket.value.onmessage = (event) => {
+                // 原始消息日志放在 recording 判断之前，确保断开前的错误消息（如鉴权失败）不被吞掉
+                console.log('[ASR] websocket message:', event.data);
+                if (!recording.value) return;
+                const msg = JSON.parse(event.data);
+                if ('result' in msg) {
+                    const newText = inputValueBefore.value + msg['result']['voice_text_str'];
+                    qaEditorRef.value?.clear();
+                    nextTick(() => {
+                        qaEditorRef.value?.insertText(newText);
+                    });
+                }
+                if ('message' in msg && 'code' in msg && msg['code'] != 0) {
+                    MessagePlugin.error(msg['message']);
+                    emit('message', MessageCode.ASR_SERVICE_FAILED, msg['message']);
+                }
+            };
+            
+            asrWebSocket.value.onclose = (event) => {
+                // 1000=正常关闭；1006=异常断开；4002=鉴权失败（腾讯云 ASR）；4001=参数错误；4003=服务拒绝
+                console.warn('[ASR] websocket closed, code =', event.code, ', reason =', event.reason || '(empty)', ', wasClean =', event.wasClean,
+                    ', sentBytes =', asrDiag.sentBytes, ', duration =', Math.round((performance.now() - asrDiag.startTs) / 1000) + 's',
+                    asrDiag.sentBytes === 0 ? '← 音频 0 字节：采集链路（getUserMedia/AudioContext/AudioWorklet）未产出数据' : '');
+                recording.value = false;
+                if (recordRef.value) {
+                    clearTimeout(recordRef.value);
+                    recordRef.value = null;
+                }
+            };
+
+            asrWebSocket.value.onerror = (event) => {
+                console.error('[ASR] websocket error:', event);
+            };
+        } catch (error) {
+            recording.value = false;
+            const text = i18n.value.asrServiceFailed || getMessage(MessageCode.ASR_SERVICE_FAILED, props.language).message;
+            MessagePlugin.error(text);
+            emit('message', MessageCode.ASR_SERVICE_FAILED, text);
+        }
+    }
+    
+    emit('startRecord');
+}
+
+/**
+ * 麦克风权限被拒（NotAllowedError）时的诊断日志。
+ *
+ * 「浏览器已授权仍报权限错误」的常见根因：
+ *  1) 站点权限被拒：地址栏锁定图标中麦克风为「阻止」
+ *  2) iframe Permissions Policy 拦截：页面嵌在 iframe 中且宿主未声明 allow="microphone"，
+ *     此时浏览器不弹权限框，即使浏览器/系统层面已授权，iframe 内 getUserMedia 仍抛 NotAllowedError
+ *  3) 操作系统隐私设置禁用了浏览器访问麦克风（Windows 设置-隐私 / macOS 隐私与安全性）
+ */
+function logMicPermissionDiagnostics(): void {
+    let inIframe = false;
+    try {
+        inIframe = window.self !== window.top;
+    } catch {
+        // 跨域 iframe 访问 window.top 抛错，视为嵌套
+        inIframe = true;
+    }
+    const fp = (document as unknown as {
+        featurePolicy?: { allowsFeature?: (feature: string) => boolean };
+    }).featurePolicy;
+    const ua = navigator.userAgent;
+    console.error('[Recorder] mic diagnostics:', {
+        inIframe,
+        micAllowedByPermissionsPolicy: typeof fp?.allowsFeature === 'function' ? fp.allowsFeature('microphone') : 'unknown',
+        isSecureContext: window.isSecureContext,
+        // 企业微信(wxwork)/微信(MicroMessenger) 内置浏览器对网页 getUserMedia 支持极差：
+        // 多数版本不弹权限框直接 NotAllowedError，且无地址栏可修改站点权限。
+        // 命中时建议引导用户「在浏览器中打开」（右上角 ... 菜单）使用外部 Chrome。
+        uaContainsWxwork: ua.includes('wxwork'),
+        uaContainsWeChat: ua.includes('MicroMessenger'),
+        userAgent: ua,
+    });
+    if (navigator.permissions?.query) {
+        navigator.permissions.query({ name: 'microphone' } as unknown as PermissionDescriptor)
+            .then((status) => console.error('[Recorder] mic permission state:', status.state))
+            .catch(() => {
+                // 浏览器不支持 microphone 权限查询，忽略
+            });
+    }
+}
+
+/**
+ * 开始录音（内部方法）
+ */
+const startRecording = () => {
+    const requestId = '0';
+    recorder.value = new WebRecorder({ requestId });
+    recorder.value.OnReceivedData = (data: any) => {
+        if (!asrDiag.firstFrameAt) {
+            asrDiag.firstFrameAt = performance.now();
+            console.log('[ASR] first audio frame at', Math.round(asrDiag.firstFrameAt - asrDiag.startTs), 'ms since click, size =', data.length);
+        }
+        asrDiag.sentBytes += data.length;
+        if (asrWebSocket.value?.readyState === WebSocket.OPEN) {
+            asrWebSocket.value?.send(data);
+        } else {
+            console.warn('[ASR] audio frame dropped: ws not open, readyState =', asrWebSocket.value?.readyState);
+        }
+    };
+    recorder.value.OnError = (err: any) => {
+        console.error('[Recorder] OnError:', err);
+        let errMsg: string;
+        let errCode: MessageCode = MessageCode.RECORD_FAILED;
+        if (err && typeof err === 'object' && 'code' in err) {
+            const errorCodeMap: Record<string, { i18nKey: keyof SenderI18n; messageCode: MessageCode }> = {
+                CHROME_SECURITY_ERROR: { i18nKey: 'chromeSecurityError', messageCode: MessageCode.CHROME_SECURITY_ERROR },
+                BROWSER_NOT_SUPPORT: { i18nKey: 'browserNotSupport', messageCode: MessageCode.BROWSER_NOT_SUPPORT },
+                AUDIO_CONTEXT_NOT_SUPPORT: { i18nKey: 'audioContextNotSupport', messageCode: MessageCode.AUDIO_CONTEXT_NOT_SUPPORT },
+                WEB_AUDIO_API_NOT_SUPPORT: { i18nKey: 'webAudioApiNotSupport', messageCode: MessageCode.WEB_AUDIO_API_NOT_SUPPORT },
+                MEDIA_STREAM_SOURCE_NOT_SUPPORT: { i18nKey: 'mediaStreamSourceNotSupport', messageCode: MessageCode.MEDIA_STREAM_SOURCE_NOT_SUPPORT },
+            };
+            const mapping = errorCodeMap[err.code as string];
+            if (mapping) {
+                errMsg = i18n.value[mapping.i18nKey] || getMessage(mapping.messageCode, props.language).message;
+                errCode = mapping.messageCode;
+            } else {
+                errMsg = i18n.value.recordFailed || getMessage(MessageCode.RECORD_FAILED, props.language).message;
+            }
+        } else if (err && typeof err === 'object' && 'name' in err) {
+            // getUserMedia 抛出的 DOMException：按 err.name 精确提示，避免笼统的「录音失败」
+            // NotAllowedError=权限被拒或被 Permissions Policy 拦截；NotFoundError=无麦克风设备；NotReadableError=设备被占用
+            const domErrorMap: Record<string, { i18nKey: keyof SenderI18n; messageCode: MessageCode }> = {
+                NotAllowedError: { i18nKey: 'micPermissionDenied', messageCode: MessageCode.MIC_PERMISSION_DENIED },
+                NotFoundError: { i18nKey: 'micNotFound', messageCode: MessageCode.MIC_NOT_FOUND },
+                NotReadableError: { i18nKey: 'micOccupied', messageCode: MessageCode.MIC_OCCUPIED },
+            };
+            const domMapping = domErrorMap[err.name as string];
+            if (domMapping) {
+                errMsg = i18n.value[domMapping.i18nKey] || getMessage(domMapping.messageCode, props.language).message;
+                errCode = domMapping.messageCode;
+            } else {
+                errMsg = i18n.value.recordFailed || getMessage(MessageCode.RECORD_FAILED, props.language).message;
+            }
+            // 权限被拒时输出诊断，区分站点权限 / iframe 策略 / 系统隐私设置
+            if (err.name === 'NotAllowedError') logMicPermissionDiagnostics();
+        } else {
+            errMsg = typeof err === 'string' ? err : (i18n.value.recordFailed || getMessage(MessageCode.RECORD_FAILED, props.language).message);
+        }
+        MessagePlugin.error(errMsg);
+        emit('message', errCode, errMsg);
+        recording.value = false;
+    };
+    recorder.value.start();
+}
+
+/**
+ * 处理停止录音事件
+ */
+const handleStopRecord = () => {
+    if (!recording.value) return;
+    recording.value = false;
+    console.log('[ASR] stopRecord by user, sentBytes =', asrDiag.sentBytes, ', duration =', Math.round((performance.now() - asrDiag.startTs) / 1000) + 's');
+    
+    if (props.useInternalRecord) {
+        recorder.value?.stop();
+        recorder.value = null;
+        asrWebSocket.value?.close();
+        asrWebSocket.value = null;
+        if (recordRef.value) {
+            clearTimeout(recordRef.value);
+            recordRef.value = null;
+        }
+    }
+    
+    emit('stopRecord');
+}
+
+/**
+ * 修改输入框内容（供外部调用）
+ */
+const changeSenderVal = (value: string, files: FileProps[]) => {
+    editorHtml.value = value;
+    if (qaEditorRef.value) {
+        qaEditorRef.value.clear();
+        if (value) {
+            nextTick(() => {
+                qaEditorRef.value?.insertHtml(value);
+            });
+        }
+    }
+    fileList.value = files;
+}
+
+/**
+ * 添加文件到列表（供外部调用）
+ */
+const addFile = (file: FileProps) => {
+    fileList.value.push(file);
+}
+
+/**
+ * 根据 uid 更新文件属性（供外部调用）
+ */
+const updateFile = (uid: string, updates: Partial<FileProps>) => {
+    const index = fileList.value.findIndex(f => f.uid === uid);
+    if (index !== -1) {
+        fileList.value[index] = { ...fileList.value[index], ...updates } as FileProps;
+        fileList.value = [...fileList.value];
+    }
+}
+
+/**
+ * 根据 uid 删除文件（供外部调用）
+ */
+const removeFile = (uid: string) => {
+    const index = fileList.value.findIndex(f => f.uid === uid);
+    if (index !== -1) {
+        fileList.value.splice(index, 1);
+        fileList.value = [...fileList.value];
+    }
+}
+
+/**
+ * 设置录音状态（供外部调用）
+ */
+const setRecording = (value: boolean) => {
+    recording.value = value;
+}
+
+/**
+ * 更新输入值（供外部调用）
+ */
+const updateInputValue = (value: string) => {
+    editorHtml.value = value;
+    if (qaEditorRef.value) {
+        qaEditorRef.value.clear();
+        if (value) {
+            nextTick(() => {
+                qaEditorRef.value?.insertText(value);
+            });
+        }
+    }
+}
+
+/**
+ * 暴露给父组件的方法
+ */
+defineExpose({
+    changeSenderVal,
+    addFile,
+    updateFile,
+    removeFile,
+    setRecording,
+    updateInputValue
+})
+</script>
+
+<template>
+    <div class="sender-wrapper">
+        <!-- 快捷按钮插槽：消息列表为空时，外部注入 assist-quick-buttons（在输入框边框外侧上方） -->
+        <slot name="quick-buttons" />
+
+        <div class="sender-container" :class="{ 'is-uploading': isUploading, 'is-focused': inputFocus }">
+            <!-- 文件预览区域 -->
+            <div v-if="fileList.length > 0" class="sender-files">
+                <FileList :fileList="fileList" :theme="theme" :mode="mode" @delete="handleDeleteFile"/>
+        </div>
+
+        <!-- 编辑器区域 -->
+        <div class="sender-editor-area" @keydown="handleKeydown">
+            <QaEditor
+                ref="qaEditorRef"
+                :value="editorHtml"
+                :placeholder="placeholder"
+                :readOnly="isUploading || channelInputDisabled"
+                :disabled="channelInputDisabled"
+                :hideToolBar="true"
+                :allowPasteImage="true"
+                :theme="theme"
+                @input="handleEditorInput"
+                @focus="handleEditorFocus"
+                @blur="handleEditorBlur"
+            />
+        </div>
+
+        <!-- 底部工具栏 -->
+        <div class="sender-toolbar" :class="{ 'is-mobile': isMobile }">
+            <!-- 移动端首行：模型选择器（v-if 按模式渲染，保证 DOM 顺序正确） -->
+            <div v-if="isMobile" class="sender-toolbar__primary">
+                <ModelSelector
+                    v-if="enableModelSelector && mode === 'claw'"
+                    class="sender-model-selector"
+                    :selected="selectedModel"
+                    :options="modelOptions"
+                    :application-id="currentApplicationId"
+                    :theme="theme"
+                    :language="language"
+                    is-button-mode
+                    @update:selected="(model: ModelOption) => { emit('update:selectedModel', model); emit('modelChange', model); }"
+                />
+            </div>
+
+            <!-- 次行（isMobile 时换行）：麦克风、上传文件 → PC 端模型选择器 → Skills、连接器、工具 -->
+            <div class="sender-toolbar__extras">
+                <TTooltip v-if="enableVoiceInput && !recording" :content="i18n.startRecord">
+                    <span class="recording-icon" :class="{ isMobile: isMobile }" @click="handleStartRecord">
+                        <CustomizedIcon name="voice_input" :theme="theme" :showHoverBg="!isMobile"/>
+                    </span>
+                </TTooltip>
+
+                <TTooltip v-if="enableVoiceInput && recording" :content="i18n.stopRecord">
+                    <span class="recording-icon stop-icon" :class="{ isMobile: isMobile }" @click="handleStopRecord">
+                        <RecordIcon />
+                    </span>
+                </TTooltip>
+
+                <!-- 加号菜单按钮 -->
+                <div ref="plusMenuRef" class="plus-menu-wrapper">
+                    <span class="plus-btn" :class="{ active: showPlusMenu, disabled: isUploading }" @click="togglePlusMenu">
+                        <CustomizedIcon remote name="basic_new_line" :theme="theme" :showHoverBg="false" />
+                    </span>
+                    <Transition name="fade-up">
+                        <div v-if="showPlusMenu" class="plus-menu-popover">
+                            <div class="plus-menu-item" @click="handleSelectImage">
+                                <CustomizedIcon remote name="basic_picture_line" :theme="theme" size="s" :showHoverBg="false" />
+                                <span>{{ i18n.uploadImage }}</span>
+                            </div>
+                            <div class="plus-menu-item" @click="handleSelectFile">
+                                <CustomizedIcon remote name="basic_file_line" :theme="theme" size="s" :showHoverBg="false" />
+                                <span>{{ i18n.uploadFile }}</span>
+                            </div>
+                        </div>
+                    </Transition>
+                    <!-- 隐藏的文件选择 input -->
+                    <input ref="imageInputRef" type="file" :accept="imageAccept" multiple hidden @change="handleImageInputChange" />
+                    <input ref="fileInputRef" type="file" :accept="fileAccept" multiple hidden @change="handleFileInputChange" />
+                </div>
+
+                <!-- PC 端：模型选择器置于上传之后、Skills 之前 -->
+                <ModelSelector
+                    v-if="enableModelSelector && !isMobile && mode === 'claw'"
+                    class="sender-model-selector"
+                    :selected="selectedModel"
+                    :options="modelOptions"
+                    :application-id="currentApplicationId"
+                    :theme="theme"
+                    :language="language"
+                    is-button-mode
+                    @update:selected="(model: ModelOption) => { emit('update:selectedModel', model); emit('modelChange', model); }"
+                />
+
+                <!-- Skills 按钮 -->
+                <SkillsPopover
+                    v-if="enableSkills && mode === 'claw'"
+                    ref="skillsPopoverRef"
+                    :installed-skills="normalizedSkills"
+                    :loading="skillsRefreshing"
+                    :i18n="skillsI18n"
+                    :language="language"
+                    :theme="theme"
+                    @select="onSkillsPopoverSelect"
+                    @manage="onSkillsManage"
+                    @visible-change="onSkillsVisibleChange"
+                />
+
+                <!-- 连接器按钮 -->
+                <div v-if="enableConnector && mode === 'claw'"  class="toolbar-pill-btn" @click="showConnector = true">
+                    <CustomizedIcon remote name="basic_connector_line" size="s" :show-hover-bg="false" :color="'var(--td-text-color-secondary)'" :theme="theme"/>
+                    <span class="toolbar-pill-btn__text">{{ skillsI18n.connector }}</span>
+                </div>
+
+                <!-- 工具按钮 -->
+                <div v-if="enableTools && mode === 'claw'" class="toolbar-pill-btn" @click="showPluginManage = true">
+                    <CustomizedIcon remote name="basic_plugin_line" size="s" :show-hover-bg="false" :color="'var(--td-text-color-secondary)'" :theme="theme"/>
+                    <span class="toolbar-pill-btn__text">{{ skillsI18n.tools }}</span>
+                </div>
+
+                <!-- 知识库按钮：仅当已启用 KnowledgeRetrievalAnswer 工具时才显示 -->
+                <div v-if="enableKnowledge && hasKnowledgeRetrievalTool && mode === 'claw'" class="toolbar-pill-btn" @click="showKnowledgeDialog = true">
+                    <CustomizedIcon remote name="basic_book_line" size="s" :show-hover-bg="false" :color="'var(--td-text-color-secondary)'" :theme="theme"/>
+                    <span class="toolbar-pill-btn__text">{{ skillsI18n.knowledgeBase }}</span>
+                </div>
+            </div>
+
+            <div class="sender-toolbar__right">
+                <CustomizedIcon class="send-icon waiting" :class="{ disabled: sendDisabled }" v-if="!isStreamLoad && !hasContent" nativeIcon :showHoverBg="false" :name="theme === 'dark' ? 'send_dark' : 'send'" @click="handleSend" />
+                <CustomizedIcon class="send-icon success" :class="{ disabled: sendDisabled }" v-if="!isStreamLoad && hasContent" nativeIcon :showHoverBg="false" name="send_fill" @click="handleSend" />
+                <CustomizedIcon class="send-icon stop" v-if="isStreamLoad" nativeIcon :showHoverBg="false" :name="theme === 'dark' ? 'pause_dark' : 'pause'" @click="emit('stop')" />
+            </div>
+        </div>
+
+        <!-- Skills 管理弹窗 -->
+        <SkillManageDialog
+            v-if="enableSkills"
+            v-model="showSkillsManage"
+            :manage-list="manageItems"
+            :loading="skillsRefreshing"
+            :i18n="skillsI18n"
+            :language="language"
+            :theme="theme"
+            @add="showSkillsInstall = true"
+            @delete="onSkillDeleted"
+        />
+
+        <!-- Skills 安装弹窗（必须在管理弹窗之后，保证叠加时在上层） -->
+        <SkillsInstallDialog
+            v-if="enableSkills"
+            v-model="showSkillsInstall"
+            :installed-skill-ids="Array.from(skillsInstalledIds)"
+            :installed-skills="skillListForInstall"
+            :application-id="skillsApplicationId"
+            :space-id="spaceId"
+            :i18n="skillsI18n"
+            :language="language"
+            :theme="theme"
+            @skill-installed="onSkillInstalled"
+        />
+
+        <!-- 连接器弹窗 -->
+        <ConnectorDialog
+            v-if="enableSkills"
+            v-model="showConnector"
+            :application-id="skillsApplicationId"
+            :space-id="spaceId"
+            :theme="theme"
+            :language="language"
+            :i18n="skillsI18n"
+            @change="refreshSkills"
+        />
+
+        <!-- 管理工具弹窗（首次打开的入口） -->
+        <PluginManageDialog
+            v-if="enableSkills"
+            v-model="showPluginManage"
+            :application-id="skillsApplicationId"
+            :space-id="spaceId"
+            :theme="theme"
+            :language="language"
+            :i18n="skillsI18n"
+            @change="refreshSkills"
+        />
+
+        <!-- 工具安装弹窗（独立打开时使用） -->
+        <PluginInstallDialog
+            v-if="enableSkills"
+            v-model="showPlugin"
+            :application-id="skillsApplicationId"
+            :space-id="spaceId"
+            :installed-tool-ids="currentInstalledToolIds"
+            :installed-tools="currentInstalledTools"
+            :theme="theme"
+            :language="language"
+            :i18n="skillsI18n"
+            @installed="refreshSkills"
+        />
+
+        <!-- 知识库管理弹窗 -->
+        <KnowledgeDialog
+            v-if="enableKnowledge"
+            v-model="showKnowledgeDialog"
+            :application-id="skillsApplicationId"
+            :space-id="spaceId"
+            :theme="theme"
+            :language="language"
+            :i18n="skillsI18n"
+            @change="refreshSkills"
+        />
+
+        <!-- @ Mention 面板 -->
+        <Teleport to="body">
+            <div v-if="atMentionVisible" class="at-mention-overlay" @click.self="_hideMention">
+                <div :style="atMentionStyle" style="position:absolute">
+                    <AtMentionPanel
+                        ref="mentionPanelRef"
+                        :installed-skills="normalizedSkills"
+                        :installed-knowledge="mentionKnowledge"
+                        :installed-connectors="mentionConnectors"
+                        :installed-tools="mentionTools"
+                        :search-keyword="mentionSearchStr"
+                        :i18n="skillsI18n"
+                        :language="language"
+                        @select="onAtMentionSelect"
+                        @close="_hideMention"
+                    />
+                </div>
+            </div>
+        </Teleport>
+    </div>
+    </div>
+</template>
+
+<style scoped>
+/* ── 外层包裹：确保 quick-buttons 和 sender-container 垂直排列 ── */
+.sender-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+/* ── 主容器 ── */
+.sender-container {
+    width: 100%;
+    max-width: 800px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--td-component-border);
+    border-radius: var(--td-radius-xl, 16px);
+    background: var(--td-bg-color-container, #fff);
+    /* 同时过渡 border-color / box-shadow / transform，曲线选用接近 Material 的 standard easing，进出更柔和 */
+    transition:
+        border-color 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+        box-shadow 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+        transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: visible;
+    will-change: box-shadow, border-color;
+    margin: 5px;
+}
+
+.sender-container:hover {
+    /* 边框略浅染品牌色，配合双层阴影营造自然抬起感（外层柔光 + 内层焦点环） */
+    border-color: var(--td-brand-color, #0052d9);
+    box-shadow:
+        0 4px 16px -4px rgba(0, 82, 217, 0.18),
+        0 0 0 3px rgba(0, 82, 217, 0.08);
+}
+
+/* 输入聚焦时给出更明显但仍克制的强调态 */
+.sender-container:focus-within {
+    border-color: var(--td-brand-color, #0052d9);
+    box-shadow:
+        0 6px 20px -6px rgba(0, 82, 217, 0.22),
+        0 0 0 3px rgba(0, 82, 217, 0.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sender-container,
+    .sender-container * {
+        transition: none !important;
+    }
+}
+
+.sender-container.is-uploading {
+    opacity: 0.65;
+    pointer-events: auto;
+}
+
+/* ── 文件预览区域 ── */
+.sender-files {
+    padding: 10px 14px 0;
+}
+
+/* ── 编辑器区域 ── */
+.sender-editor-area {
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--td-scrollbar-color, rgba(0,0,0,.12)) transparent;
+}
+
+.sender-editor-area::-webkit-scrollbar {
+    width: 5px;
+}
+
+.sender-editor-area::-webkit-scrollbar-thumb {
+    background: var(--td-scrollbar-color, rgba(0,0,0,.12));
+    border-radius: var(--td-radius-small);
+}
+
+.sender-editor-area::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ── 底部工具栏 ── */
+.sender-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--td-size-1) 10px var(--td-size-4);
+    cursor: default;
+    gap: var(--td-size-2);
+}
+
+.sender-toolbar__primary {
+    display: flex;
+    align-items: center;
+}
+
+.sender-toolbar__extras {
+    display: flex;
+    align-items: center;
+    gap: var(--td-size-1);
+}
+
+.sender-toolbar__right {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* ── 移动端布局 ── */
+.sender-toolbar.is-mobile {
+    flex-wrap: wrap;
+}
+
+.sender-toolbar.is-mobile .sender-toolbar__extras {
+    order: 3;
+    width: 100%;
+    margin-top: var(--td-size-3);
+    gap: 4px;
+}
+
+.sender-toolbar.is-mobile .sender-toolbar__right {
+    order: 2;
+}
+
+.sender-toolbar.is-mobile .sender-toolbar__primary {
+    order: 1;
+    flex: 1;
+}
+
+/* ── 加号菜单 ── */
+.plus-menu-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.plus-btn {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: var(--td-radius-medium);
+    transition: background 0.15s ease;
+}
+
+.plus-btn:hover {
+    background-color: var(--td-bg-color-container-hover);
+}
+
+.plus-btn:active {
+    background-color: var(--td-bg-color-container-active);
+}
+
+.plus-btn.active {
+    background-color: var(--td-bg-color-container-hover);
+}
+
+.plus-btn.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.plus-menu-popover {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    min-width: 148px;
+    padding: 5px;
+    border-radius: var(--td-radius-large);
+    background: var(--td-bg-color-container);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 8px 32px rgba(0, 0, 0, 0.06);
+    border: 1px solid var(--td-component-stroke);
+    z-index: 2000;
+}
+
+.plus-menu-item {
+    display: flex;
+    align-items: center;
+    gap: var(--td-size-4);
+    padding: 7px 10px;
+    border-radius: var(--td-radius-medium);
+    font-size: 13px;
+    line-height: var(--td-line-height-body-small);
+    color: var(--td-text-color-primary);
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+
+.plus-menu-item:hover {
+    background-color: var(--td-bg-color-container-hover);
+}
+
+.plus-menu-item:active {
+    background-color: var(--td-bg-color-container-active);
+}
+
+/* ── 菜单出入动画 ── */
+.fade-up-enter-active,
+.fade-up-leave-active {
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.fade-up-enter-from,
+.fade-up-leave-to {
+    opacity: 0;
+    transform: translateY(4px);
+}
+
+/* ── 模型选择器 ── */
+.sender-model-selector {
+    display: inline-flex;
+    align-items: center;
+}
+
+/* ── 录音按钮 ── */
+.recording-icon {
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    margin-right: var(--td-size-1);
+    cursor: pointer;
+    border-radius: var(--td-radius-medium);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.recording-icon:hover {
+    color: var(--td-brand-color);
+    background: var(--td-bg-color-container-hover);
+}
+
+.recording-icon .stop-icon {
+    color: var(--td-error-color);
+}
+
+/* ── 发送按钮 ── */
+.send-icon {
+    padding: 0 !important;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.15s ease, transform 0.12s ease;
+}
+
+.send-icon:active {
+    transform: scale(0.94);
+}
+
+.send-icon.disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.send-icon.stop {
+    color: var(--td-text-color-secondary);
+}
+
+.send-icon.stop:hover {
+    color: var(--td-text-color-primary);
+}
+
+/* ── Skills 添加按钮 ── */
+.skills-add-btn {
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    margin-left: var(--td-size-1);
+}
+
+/* ── 工具栏 pill 按钮（尺寸/字号/hover 行为与 SkillsPopover 触发按钮对齐） ── */
+.toolbar-pill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--td-size-2);
+    padding: 0 var(--td-size-4);
+    height: var(--td-comp-size-m);
+    border-radius: var(--td-radius-default);
+    font-size: var(--td-font-size-body-small);
+    line-height: 1;
+    color: var(--td-text-color-secondary);
+    background: transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.2s;
+}
+
+.toolbar-pill-btn:hover {
+    background: var(--td-bg-color-container-hover);
+}
+
+.toolbar-pill-btn:active {
+    background: var(--td-bg-color-component-active);
+}
+
+.toolbar-pill-btn__text {
+    white-space: nowrap;
+}
+
+/* ── 移动端隐藏文字 ── */
+.sender-toolbar.is-mobile .toolbar-pill-btn__text,
+.sender-toolbar.is-mobile :deep(.skills-popover-trigger__text) {
+    display: none;
+}
+
+/* ── @Mention overlay ── */
+.at-mention-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5600;
+}
+</style>
+
+<!-- mention tag 非 scoped 样式（chip 渲染在 QaEditor 的 contenteditable 内，需全局生效）对齐 webim .at-mention-tag -->
+<style>
+.at-mention-tag {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 5px;
+    margin: 0 2px;
+    background: var(--td-brand-color-light, #F1F6FF);
+    border: 1px solid var(--td-brand-color-light-hover, #DBE8FF);
+    border-radius: var(--td-radius-small);
+    font-size: var(--td-font-size-body-small);
+    line-height: 16px;
+    color: var(--td-brand-color, #4A70FF);
+    cursor: default;
+    user-select: none;
+    vertical-align: middle;
+    white-space: nowrap;
+    transition: background 0.12s ease;
+}
+
+.at-mention-tag:hover {
+    background: var(--td-brand-color-light-hover, #E4EDFF);
+}
+
+.at-mention-tag__icon {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 12px;
+    height: 12px;
+    background-size: 12px 12px;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.at-mention-tag__icon--skills {
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M7.94938 7.45818L7.80801 7.56435L7.72895 7.72248L7.25076 8.67885H4.74924L4.27105 7.72248L4.19199 7.56435L4.05062 7.45818C3.25943 6.86399 2.75 5.9203 2.75 4.85742C2.75 3.0625 4.20507 1.60742 6 1.60742C7.79493 1.60742 9.25 3.0625 9.25 4.85742C9.25 5.9203 8.74057 6.86399 7.94938 7.45818ZM4.28571 9.42885H7.71429L8.39977 8.05789C9.37146 7.32813 10 6.16618 10 4.85742C10 2.64828 8.20914 0.857422 6 0.857422C3.79086 0.857422 2 2.64828 2 4.85742C2 6.16618 2.62854 7.32813 3.60023 8.05789L4.28571 9.42885ZM6.57143 11.1431C7.20261 11.1431 7.71429 10.6315 7.71429 10.0003H4.28571C4.28571 10.6315 4.79739 11.1431 5.42857 11.1431H6.57143Z' fill='%234A70FF'/%3E%3C/svg%3E");
+}
+
+.at-mention-tag__icon--plugins,
+.at-mention-tag__icon--connectors {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 13 13' fill='none'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M12.2383 8.21079L6.32226 11.5402C6.2693 11.5702 6.20456 11.5703 6.15169 11.5402L0.209638 8.21144C0.117809 8.16004 0.00446184 8.22593 0.00390912 8.33123L2.87514e-06 9.11183C-0.000390956 9.18679 0.0397001 9.25643 0.10482 9.29347L5.63932 12.4413C6.00986 12.652 6.46399 12.6519 6.83463 12.4413L12.3659 9.29542C12.4328 9.25735 12.4733 9.18489 12.4707 9.10792L12.4447 8.32667C12.4412 8.22304 12.3286 8.15994 12.2383 8.21079ZM12.2383 5.52719L6.32226 8.85662C6.2693 8.88665 6.20456 8.88671 6.15169 8.85662L0.209638 5.52784C0.117809 5.47638 0.00446184 5.54241 0.00390912 5.64763L2.87514e-06 6.42823C-0.000390956 6.50313 0.0397001 6.57284 0.10482 6.60987L5.63932 9.75766C6.00986 9.96842 6.46399 9.96832 6.83463 9.75766L12.3659 6.61183C12.4328 6.57376 12.4733 6.50137 12.4707 6.42433L12.4447 5.64308C12.4412 5.53951 12.3286 5.47634 12.2383 5.52719ZM5.89583 0.0903423L0.324872 3.25831C0.0920792 3.39079 0.0920772 3.72675 0.324872 3.85922L5.89583 7.02719C6.1076 7.14761 6.36694 7.14762 6.57877 7.02719L12.1491 3.85922C12.382 3.72676 12.382 3.39077 12.1491 3.25831L6.57877 0.0903423C6.36694 -0.0301232 6.1076 -0.030105 5.89583 0.0903423ZM1.89323 3.55844L6.23698 6.02914L10.5814 3.55844L6.23698 1.08839L1.89323 3.55844Z' fill='%234A70FF'/%3E%3C/svg%3E");
+    background-size: 13px 13px;
+}
+
+.at-mention-tag__icon--knowledge {
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6 1.5C5.17157 1.5 4.5 2.17157 4.5 3V4H3.5C2.67157 4 2 4.67157 2 5.5V9.5C2 10.3284 2.67157 11 3.5 11H8.5C9.32843 11 10 10.3284 10 9.5V5.5C10 4.67157 9.32843 4 8.5 4H7.5V3C7.5 2.17157 6.82843 1.5 6 1.5ZM4 3C4 1.89543 4.89543 1 6 1C7.10457 1 8 1.89543 8 3V4H4V3ZM3.5 5H8.5C8.77614 5 9 5.22386 9 5.5V9.5C9 9.77614 8.77614 10 8.5 10H3.5C3.22386 10 3 9.77614 3 9.5V5.5C3 5.22386 3.22386 5 3.5 5Z' fill='%234A70FF'/%3E%3C/svg%3E");
+}
+
+.at-mention-tag__text {
+    margin-left: 3px;
+    font-family: 'PingFang SC', -apple-system, sans-serif;
+    font-weight: 400;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.at-mention-tag__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    margin-left: var(--td-size-1);
+    cursor: pointer;
+    border-radius: var(--td-radius-circle);
+    transition: background 0.12s ease;
+    background-size: 10px 10px;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M2.82542 9.67801C2.87136 9.65898 2.91255 9.6178 2.99492 9.53543L6.00011 6.53023L9.0053 9.53541C9.08766 9.61778 9.12885 9.65897 9.17479 9.678C9.23605 9.70337 9.30488 9.70337 9.36613 9.678C9.41208 9.65897 9.45326 9.61778 9.53563 9.53541C9.61799 9.45305 9.65918 9.41186 9.67821 9.36592C9.70358 9.30466 9.70358 9.23584 9.67821 9.17458C9.65918 9.12864 9.61799 9.08745 9.53563 9.00508L6.53044 5.9999L9.53565 2.99469C9.61802 2.91232 9.65921 2.87114 9.67824 2.8252C9.70361 2.76394 9.70361 2.69511 9.67824 2.63386C9.65921 2.58791 9.61802 2.54673 9.53565 2.46436C9.45329 2.38199 9.4121 2.34081 9.36616 2.32178C9.3049 2.29641 9.23608 2.29641 9.17482 2.32178C9.12888 2.34081 9.08769 2.38199 9.00532 2.46436L6.00011 5.46957L2.99489 2.46435C2.91252 2.38198 2.87134 2.34079 2.8254 2.32176C2.76414 2.29639 2.69531 2.29639 2.63405 2.32176C2.58811 2.34079 2.54693 2.38198 2.46456 2.46434C2.38219 2.54671 2.34101 2.5879 2.32198 2.63384C2.2966 2.6951 2.2966 2.76392 2.32198 2.82518C2.34101 2.87112 2.38219 2.91231 2.46456 2.99468L5.46978 5.9999L2.46459 9.0051C2.38222 9.08747 2.34103 9.12865 2.322 9.17459C2.29663 9.23585 2.29663 9.30468 2.322 9.36593C2.34103 9.41188 2.38222 9.45306 2.46459 9.53543C2.54695 9.6178 2.58814 9.65898 2.63408 9.67801C2.69534 9.70338 2.76416 9.70338 2.82542 9.67801Z' fill='%234A70FF'/%3E%3C/svg%3E");
+}
+
+.at-mention-tag__close:hover {
+    background-color: rgba(74, 112, 255, 0.15);
+}
+</style>
