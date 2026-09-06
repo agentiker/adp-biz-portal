@@ -284,6 +284,7 @@
   - 验证命令与结果：`docker compose --env-file docker/.env.example config` 通过；`server/.venv/bin/python -m py_compile server/router/health.py server/middleware/application.py server/middleware/database.py server/middleware/limit.py` 通过；`git diff --check` 通过。未宣称真实生产部署、备份恢复或 HTTPS 验收完成。
   - 服务器部署记录（2026-09-07）：提交 `de508a582220f5332e6c06944f6da597ee53e1b8` 已同步至 `/opt/tencent-adp-gateway`；Compose 项目 `tencent-adp-gateway` 的 PostgreSQL、迁移、API、Worker 和反向代理均已启动；`/healthz` 与 `/readyz` 均返回 200，schema revision 为 9。服务器 host Nginx 已增加 `adp.xdimspace.cn` 独立反向代理配置。HTTPS 证书申请因 DNS 当前解析到 `43.174.225.201`（本服务器为另一地址）未通过，待将 A 记录指向本服务器后重试；当前不能宣称公网 HTTPS 已验收。Sellclip PostgreSQL/Redis 容器已停止但未删除，数据卷保留。
   - 502 修复记录（2026-09-07）：Certbot 失败后 HTTPS 请求落入 Sellclip 默认虚拟主机；已补充 `adp.xdimspace.cn:443` 独立虚拟主机并反代至 `127.0.0.1:18080`。`curl -k --resolve adp.xdimspace.cn:443:127.0.0.1 https://adp.xdimspace.cn/healthz` 返回 200；公网请求现返回 ADP 响应。当前证书仍暂复用 Sellclip 证书，DNS 指向确认后必须申请 adp 专用证书。
+  - 静态页面修复记录（2026-09-07）：首次部署镜像未包含 `server/static`，导致 `/static/app/index` 返回 `FileNotFound`；已将前端静态产物纳入服务器镜像并重建 API/Worker。当前 `/static/app/index` 和 `/healthz` 均返回 200。HTTPS 证书域名匹配仍待 DNS/ACME 验证条件满足。
 - [x] `M4-DOC-01` 编写数据字典、运维手册和错误排查手册。
   - 状态：`DONE`（2026-09-06，本地交付文档）
   - 完成证据：`docs/operations/platform-data-dictionary.md` 描述平台核心表、关键字段、关联关系、敏感数据边界和迁移 revision `1..9`；`docs/operations/troubleshooting.md` 覆盖迁移阻断、登录/锁定/权限、M3 返回状态、Worker 租约/重试、撤权、未知发送结果和 ADP 元信息降级；`docs/operations/release-and-rollback.md` 提供发布前检查、备份、迁移、启动、应用回滚和数据库回滚边界。
