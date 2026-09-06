@@ -282,6 +282,7 @@
   - 状态：`DONE`（2026-09-06，本地可复现部署基线）。
   - 完成证据：`docker-compose.yml` 编排 PostgreSQL、一次性迁移、API、Worker 和反向代理；`docker/.env.example` 提供不含凭据的环境变量模板；`docker/Dockerfile` 改为直接启动 Sanic，不再要求容器内存在可写 `.env`；`server/router/health.py` 提供不依赖上游的 `/healthz` 和校验数据库迁移 revision 的 `/readyz`，健康路由不创建请求 session、不触发 ADP 元信息刷新且不受应用限流影响；`docs/operations/release-and-rollback.md` 补充运行命令和公网边界。
   - 验证命令与结果：`docker compose --env-file docker/.env.example config` 通过；`server/.venv/bin/python -m py_compile server/router/health.py server/middleware/application.py server/middleware/database.py server/middleware/limit.py` 通过；`git diff --check` 通过。未宣称真实生产部署、备份恢复或 HTTPS 验收完成。
+  - 服务器部署记录（2026-09-07）：提交 `de508a582220f5332e6c06944f6da597ee53e1b8` 已同步至 `/opt/tencent-adp-gateway`；Compose 项目 `tencent-adp-gateway` 的 PostgreSQL、迁移、API、Worker 和反向代理均已启动；`/healthz` 与 `/readyz` 均返回 200，schema revision 为 9。服务器 host Nginx 已增加 `adp.xdimspace.cn` 独立反向代理配置。HTTPS 证书申请因 DNS 当前解析到 `43.174.225.201`（本服务器为另一地址）未通过，待将 A 记录指向本服务器后重试；当前不能宣称公网 HTTPS 已验收。Sellclip PostgreSQL/Redis 容器已停止但未删除，数据卷保留。
 - [x] `M4-DOC-01` 编写数据字典、运维手册和错误排查手册。
   - 状态：`DONE`（2026-09-06，本地交付文档）
   - 完成证据：`docs/operations/platform-data-dictionary.md` 描述平台核心表、关键字段、关联关系、敏感数据边界和迁移 revision `1..9`；`docs/operations/troubleshooting.md` 覆盖迁移阻断、登录/锁定/权限、M3 返回状态、Worker 租约/重试、撤权、未知发送结果和 ADP 元信息降级；`docs/operations/release-and-rollback.md` 提供发布前检查、备份、迁移、启动、应用回滚和数据库回滚边界。
