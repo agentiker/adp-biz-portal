@@ -217,3 +217,31 @@ async def load_active_channel_instance_credential(
     if len(rows) != 1:
         raise ChannelCredentialUnavailableError("channel instance credential is unavailable or ambiguous")
     return decrypt_credential(rows[0])
+
+
+async def load_active_channel_credentials(
+    db: AsyncSession, *, channel: str
+) -> list[tuple[str, str]]:
+    """Load all active instance credentials for a fixed public callback.
+
+    The caller must still enforce an unambiguous match; returning instance IDs
+    keeps routing decisions explicit and avoids silently selecting a tenant.
+    """
+    rows = list((await db.execute(
+        select(PlatformChannelCredential)
+        .join(PlatformEnterprise, PlatformEnterprise.Id == PlatformChannelCredential.EnterpriseId)
+        .join(IntegrationConnection, IntegrationConnection.Id == PlatformChannelCredential.ConnectionId)
+        .join(
+            EnterpriseExternalAccount,
+            (EnterpriseExternalAccount.EnterpriseId == PlatformChannelCredential.EnterpriseId)
+            & (EnterpriseExternalAccount.ConnectionId == PlatformChannelCredential.ConnectionId),
+        )
+        .where(
+            PlatformChannelCredential.Channel == channel,
+            PlatformChannelCredential.Status == PlatformChannelCredentialStatus.ACTIVE,
+            PlatformEnterprise.Status == EnterpriseStatus.ACTIVE,
+            IntegrationConnection.Status == IntegrationConnectionStatus.ACTIVE,
+            EnterpriseExternalAccount.Status == IntegrationConnectionStatus.ACTIVE,
+        )
+    )).scalars().all())
+    return [(str(row.ChannelInstanceId), decrypt_credential(row)) for row in rows]

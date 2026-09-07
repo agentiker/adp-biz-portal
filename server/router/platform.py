@@ -57,6 +57,7 @@ from core.delivery import InboundMessageInput, record_inbound_message
 from core.channel_credentials import (
     ChannelCredentialError,
     encrypt_credential,
+    load_active_channel_credentials,
     load_active_channel_instance_credential,
     serialize_credential,
 )
@@ -1045,6 +1046,31 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
         return text("success", status=200)
 
 
+async def _default_wechat_instance_id(request: Request) -> str:
+    """Resolve the fixed callback only when exactly one instance is active.
+
+    WeChat Official Account callbacks do not include the AppID in the XML
+    payload (``ToUserName`` is the public account identifier), so guessing
+    between multiple tokens would be unsafe. Deployments with multiple
+    accounts must use the instance-specific URL.
+    """
+    try:
+        rows = await load_active_channel_credentials(request.ctx.db, channel=WECHAT_OFFICIAL_ACCOUNT)
+    except ChannelCredentialError as exc:
+        raise PlatformForbidden("微信服务号渠道未配置") from exc
+    if len(rows) != 1:
+        raise PlatformForbidden("固定微信回调要求且仅允许一个启用的服务号实例")
+    return rows[0][0]
+
+
+class WechatOfficialAccountFixedCallbackApi(WechatOfficialAccountCallbackApi):
+    async def get(self, request: Request):
+        return await super().get(request, await _default_wechat_instance_id(request))
+
+    async def post(self, request: Request):
+        return await super().post(request, await _default_wechat_instance_id(request))
+
+
 class AdpExecutionContextApi(HTTPMethodView):
     """Mint a scoped token for the trusted server-side ADP adapter."""
 
@@ -2026,6 +2052,11 @@ app.add_route(WebChannelInboundStatusApi.as_view(), "/api/v1/channels/web/inboun
 app.add_route(
     WechatOfficialAccountCallbackApi.as_view(),
     "/api/v1/channels/wechat-official-account/<channel_instance_id:str>/callback",
+)
+app.add_route(WechatOfficialAccountFixedCallbackApi.as_view(), "/wechat/callback")
+app.add_route(
+    WechatOfficialAccountFixedCallbackApi.as_view(),
+    "/api/v1/channels/wechat-official-account/callback",
 )
 app.add_route(ChannelIdentityBindApi.as_view(), "/api/v1/channel-identities")
 app.add_route(ChannelIdentityRevokeApi.as_view(), "/api/v1/channel-identities/<identity_id:str>/revoke")
