@@ -13,7 +13,6 @@ import {
 import {
   createChannelCredential,
   disableChannelCredential,
-  listAdminBindings,
   listAdminChannelIdentities,
   listChannelCredentials,
   listEnterprises,
@@ -26,10 +25,8 @@ import type {
   AdminUser,
   ChannelCredential,
   ChannelIdentity,
-  IntegrationBinding,
 } from '@/platform/types'
 
-const bindings = ref<IntegrationBinding[]>([])
 const credentials = ref<ChannelCredential[]>([])
 const identities = ref<ChannelIdentity[]>([])
 const enterprises = ref<AdminEnterprise[]>([])
@@ -42,12 +39,11 @@ const submitting = ref(false)
 const activeCredential = ref<ChannelCredential | null>(null)
 const identityActionId = ref<string | null>(null)
 const formError = ref('')
-const credentialForm = ref({ bindingId: '', channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' })
+const credentialForm = ref({ channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' })
 const rotateToken = ref('')
 const modalRef = ref<HTMLElement | null>(null)
 const previouslyFocused = ref<HTMLElement | null>(null)
 
-const activeBindings = computed(() => bindings.value.filter((item) => item.status === 'active' && item.connectionStatus === 'active'))
 const activeWechatCredentials = computed(() => credentials.value.filter((item) => item.channel === 'wechat_official_account' && item.status === 'active'))
 const channelCards = computed(() => [
   {
@@ -84,7 +80,6 @@ const channelCards = computed(() => [
   },
 ])
 
-const selectedBinding = computed(() => activeBindings.value.find((item) => item.id === credentialForm.value.bindingId) || null)
 const enterpriseById = computed(() => new Map(enterprises.value.map((item) => [item.id, item])))
 const userById = computed(() => new Map(users.value.map((item) => [item.id, item])))
 
@@ -110,14 +105,12 @@ const loadData = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const [bindingRows, credentialRows, identityRows, enterpriseRows, userRows] = await Promise.all([
-      listAdminBindings(),
+    const [credentialRows, identityRows, enterpriseRows, userRows] = await Promise.all([
       listChannelCredentials(),
       listAdminChannelIdentities(),
       listEnterprises(),
       listPlatformUsers(),
     ])
-    bindings.value = bindingRows
     credentials.value = credentialRows
     identities.value = identityRows
     enterprises.value = enterpriseRows
@@ -130,7 +123,7 @@ const loadData = async () => {
 }
 
 const openCredential = () => {
-  credentialForm.value = { bindingId: activeBindings.value[0]?.id || '', channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
+  credentialForm.value = { channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
   formError.value = ''
   modal.value = 'credential'
 }
@@ -192,17 +185,10 @@ watch(modal, async (value, previous) => {
 })
 
 const submitCredential = async () => {
-  const binding = selectedBinding.value
-  if (!binding) {
-    formError.value = '请先选择有效的企业应用绑定。'
-    return
-  }
   submitting.value = true
   formError.value = ''
   try {
     await createChannelCredential({
-      enterpriseId: binding.enterpriseId,
-      connectionId: binding.connectionId,
       channel: 'wechat_official_account',
       channelInstanceId: credentialForm.value.channelInstanceId.trim(),
       credential: JSON.stringify({
@@ -213,7 +199,7 @@ const submitCredential = async () => {
       }),
     })
     modal.value = null
-    credentialForm.value = { bindingId: '', channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
+    credentialForm.value = { channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
     await loadData()
     setToast('微信服务号实例已配置，下一步请在微信后台填写回调地址')
   } catch (error) {
@@ -305,12 +291,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
     </div>
     <div class="channel-intro-actions">
       <button class="channel-button channel-button--secondary" :disabled="loading" @click="loadData"><RefreshIcon />{{ loading ? '刷新中…' : '刷新' }}</button>
-      <button class="channel-button channel-button--primary" :disabled="!activeBindings.length" @click="openCredential"><LinkIcon />接入微信服务号</button>
+      <button class="channel-button channel-button--primary" @click="openCredential"><LinkIcon />接入微信服务号</button>
     </div>
   </section>
 
   <div v-if="loadError" class="channel-alert channel-alert--error"><ErrorCircleIcon /><span>{{ loadError }}</span><button @click="loadData">重试</button></div>
-  <div v-else-if="!loading && !activeBindings.length" class="channel-alert"><LockOnIcon /><span>还没有有效的企业应用绑定。请先在“身份绑定”完成企业与 ADP 应用绑定，再配置微信服务号。</span></div>
 
   <section class="channel-catalog" aria-label="渠道目录">
     <article v-for="item in channelCards" :key="item.id" class="channel-card">
@@ -327,12 +312,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
       <span>{{ credentials.length }} 个实例</span>
     </header>
     <div v-if="loading && !credentials.length" class="channel-empty">正在加载渠道实例…</div>
-    <div v-else-if="!credentials.length" class="channel-empty"><LinkIcon /><strong>还没有渠道实例</strong><p>选择有效企业应用绑定，配置微信服务号回调 Token。</p></div>
+    <div v-else-if="!credentials.length" class="channel-empty"><LinkIcon /><strong>还没有渠道实例</strong><p>渠道是平台级入口，配置一个实例即可接收第三方消息。</p></div>
     <div v-else class="channel-table">
-      <div class="channel-table-head"><span>渠道 / 实例</span><span>企业与应用</span><span>凭据</span><span>状态</span><span>操作</span></div>
+      <div class="channel-table-head"><span>渠道 / 实例</span><span>平台归属</span><span>凭据</span><span>状态</span><span>操作</span></div>
       <article v-for="item in credentials" :key="item.id" class="channel-table-row">
         <div class="channel-table-primary"><strong>{{ channelLabel(item.channel) }}</strong><small>{{ item.channelInstanceId }}</small></div>
-        <div><strong>{{ item.enterpriseName || enterpriseById.get(item.enterpriseId)?.name || item.enterpriseId }}</strong><small>{{ item.applicationId || item.connectionId }}</small></div>
+        <div><strong>OceanDesk 平台</strong><small>全局入口渠道</small></div>
         <div><strong>{{ item.credentialMask }} · v{{ item.version }}</strong><small>更新于 {{ formatTime(item.updatedAt) }}</small></div>
         <span class="channel-status" :class="{ 'channel-status--off': item.status !== 'active' }"><i></i>{{ credentialStatus(item) }}</span>
         <div class="channel-row-actions">
@@ -368,7 +353,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
     <form v-if="modal === 'credential'" ref="modalRef" class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title" @submit.prevent="submitCredential">
       <header><div><p>微信服务号</p><h2 id="channel-modal-title">配置回调实例</h2></div><button type="button" aria-label="关闭" :disabled="submitting" @click="closeModal"><CloseIcon /></button></header>
       <div class="channel-modal-notice"><LockOnIcon /><span>支持明文和安全模式 XML 回调。凭据会加密保存，提交后不会再次显示。</span></div>
-      <label>企业应用绑定<select v-model="credentialForm.bindingId" required><option value="" disabled>请选择有效绑定</option><option v-for="item in activeBindings" :key="item.id" :value="item.id">{{ item.enterpriseName }} · {{ item.applicationId }} / {{ item.workspaceId }}</option></select></label>
       <label>渠道实例 ID<input v-model="credentialForm.channelInstanceId" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" placeholder="例如 oa-customer-service" /><small>用于生成唯一回调地址，保存后不可修改。</small></label>
       <label>回调 Token<input v-model="credentialForm.token" required minlength="3" maxlength="512" type="password" autocomplete="new-password" placeholder="与微信后台填写的 Token 一致" /></label>
       <label>微信 AppID（安全模式必填）<input v-model="credentialForm.appId" maxlength="128" autocomplete="off" placeholder="例如 wxxxxxxxxxxxxxxxx" /></label>

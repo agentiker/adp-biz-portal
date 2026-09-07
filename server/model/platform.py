@@ -113,29 +113,29 @@ class EnterpriseExternalAccount(Base):
 
 
 class PlatformChannelCredential(Base):
-    """Encrypted channel secret owned by one enterprise and connection.
+    """Encrypted platform channel secret.
 
     ``Ciphertext`` is intentionally not exposed by any serializer. The worker
     is the only caller allowed to use the decryption helper in
-    ``core.channel_credentials``.
+    ``core.channel_credentials``. Enterprise and connection columns remain
+    nullable for compatibility with pre-platform-channel deployments; new
+    channel instances are platform-owned and leave both columns empty.
     """
 
     __tablename__ = "platform_channel_credential"
     __table_args__ = (
         UniqueConstraint(
-            "EnterpriseId",
-            "ConnectionId",
             "Channel",
             "ChannelInstanceId",
             name="unique_platform_channel_credential",
         ),
         Index("idx_platform_channel_credential_status", "Status"),
-        Index("idx_platform_channel_credential_lookup", "EnterpriseId", "ConnectionId", "Channel", "ChannelInstanceId"),
+        Index("idx_platform_channel_credential_lookup", "Channel", "ChannelInstanceId", "Status"),
     )
 
     Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
-    EnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="CASCADE"), nullable=False, index=True)
-    ConnectionId = Column(UUID(), ForeignKey("integration_connection.Id", ondelete="CASCADE"), nullable=False, index=True)
+    EnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="SET NULL"), nullable=True, index=True)
+    ConnectionId = Column(UUID(), ForeignKey("integration_connection.Id", ondelete="SET NULL"), nullable=True, index=True)
     Channel = Column(String(48), nullable=False)
     ChannelInstanceId = Column(String(128), nullable=False)
     Ciphertext = Column(Text(), nullable=False)

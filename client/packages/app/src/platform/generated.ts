@@ -98,6 +98,18 @@ export interface AdminUserEnterprise {
   status: 'active' | 'suspended'
 }
 
+export interface AdpConfigStatus {
+  configured: boolean
+  applicationCount: number
+  applicationId: string | null
+  vendor: string | null
+  appKeyConfigured: boolean
+  tcSecretAppIdConfigured: boolean
+  tcSecretIdConfigured: boolean
+  tcSecretKeyConfigured: boolean
+  source: string
+}
+
 export interface BindingStatusChange {
   id: string
   status: 'active' | 'disabled'
@@ -105,10 +117,10 @@ export interface BindingStatusChange {
 
 export interface ChannelCredential {
   id: string
-  enterpriseId: string
+  enterpriseId?: string | null
   enterpriseName?: string
   customerCode?: string
-  connectionId: string
+  connectionId?: string | null
   applicationId?: string
   vendor?: string
   channel: string
@@ -145,8 +157,6 @@ export interface ChannelIdentity {
 export type ChannelIdentityStatus = 'pending' | 'active' | 'revoked' | 'expired'
 
 export interface CreateChannelCredentialRequest {
-  enterpriseId: string
-  connectionId: string
   channel: string
   channelInstanceId: string
   credential: ChannelCredentialValue

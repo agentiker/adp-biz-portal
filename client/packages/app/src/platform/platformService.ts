@@ -22,6 +22,7 @@ import type {
   ChannelCredential,
   ChannelIdentity,
   IntegrationBinding,
+  AdpConfigStatus,
 } from './types'
 
 const useMock = import.meta.env.VITE_PLATFORM_USE_MOCK === 'true'
@@ -437,6 +438,10 @@ export async function listAdminBindings(): Promise<IntegrationBinding[]> {
   return httpService.get<IntegrationBinding[]>('/api/v1/admin/bindings')
 }
 
+export async function getAdminAdpConfig(): Promise<AdpConfigStatus> {
+  return httpService.get<AdpConfigStatus>('/api/v1/admin/adp-config')
+}
+
 export async function createAdminBinding(data: {
   applicationId: string
   upstreamAppId: string
@@ -448,15 +453,12 @@ export async function createAdminBinding(data: {
   return httpService.post<IntegrationBinding>('/api/v1/admin/bindings', data)
 }
 
-export async function listChannelCredentials(enterpriseId?: string): Promise<ChannelCredential[]> {
+export async function listChannelCredentials(): Promise<ChannelCredential[]> {
   if (useMock) return mockChannelCredentials.map((item) => ({ ...item }))
-  const query = enterpriseId ? `?enterpriseId=${encodeURIComponent(enterpriseId)}` : ''
-  return httpService.get<ChannelCredential[]>(`/api/v1/admin/channel-credentials${query}`)
+  return httpService.get<ChannelCredential[]>('/api/v1/admin/channel-credentials')
 }
 
 export async function createChannelCredential(data: {
-  enterpriseId: string
-  connectionId: string
   channel: string
   channelInstanceId: string
   credential: string
@@ -465,8 +467,8 @@ export async function createChannelCredential(data: {
     const now = new Date().toISOString()
     const item: ChannelCredential = {
       id: `cred_demo_${Date.now()}`,
-      enterpriseId: data.enterpriseId,
-      connectionId: data.connectionId,
+      enterpriseId: null,
+      connectionId: null,
       channel: data.channel,
       channelInstanceId: data.channelInstanceId,
       credentialMask: '********',

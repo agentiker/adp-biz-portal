@@ -6,7 +6,6 @@ import {
   CheckCircleIcon,
   ChevronRightIcon,
   HistoryIcon,
-  LinkIcon,
   LockOnIcon,
   RefreshIcon,
   SearchIcon,
@@ -19,13 +18,12 @@ import PlatformShell from '@/components/PlatformShell.vue'
 import AdminChannelManagement from '@/components/AdminChannelManagement.vue'
 import {
   createEnterprise,
-  createAdminBinding,
   createPlatformUser,
   disablePlatformUser,
   getAdminConfig,
+  getAdminAdpConfig,
   getAdminOverview,
   listAuditEvents,
-  listAdminBindings,
   listEnterprises,
   listPlatformUsers,
   resetPlatformUserPassword,
@@ -34,7 +32,7 @@ import {
   publishAdminConfig,
   updatePlatformUserAccess,
 } from '@/platform/platformService'
-import type { AdminAuditEvent, AdminConfigState, AdminEnterprise, AdminOverview, AdminUser, IntegrationBinding, PlatformConfigPayload, PlatformRole } from '@/platform/types'
+import type { AdpConfigStatus, AdminAuditEvent, AdminConfigState, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
 import { logout } from '@/service/login'
 import { usePlatformStore } from '@/stores/platform'
 
@@ -51,7 +49,7 @@ const toast = ref('')
 const enterpriseSearch = ref('')
 const userSearch = ref('')
 const auditSearch = ref('')
-const modal = ref<'enterprise' | 'user' | 'config' | 'access' | 'binding' | null>(null)
+const modal = ref<'enterprise' | 'user' | 'config' | 'access' | null>(null)
 const detail = ref<{ title: string; lines: string[] } | null>(null)
 const secretMessage = ref('')
 const enterpriseForm = ref({ name: '', customerCode: '' })
@@ -65,8 +63,7 @@ const accessRole = ref<PlatformRole>('customer')
 const accessEnterpriseIds = ref<string[]>([])
 const accessActionLoading = ref(false)
 const accessFormError = ref('')
-const bindings = ref<IntegrationBinding[]>([])
-const bindingForm = ref({ enterpriseId: '', applicationId: '', upstreamAppId: '', workspaceId: '', externalAccountId: '', vendor: '' })
+const adpConfig = ref<AdpConfigStatus | null>(null)
 const platformStore = usePlatformStore()
 
 const roleOptions: Array<{ value: PlatformRole; label: string }> = [
@@ -99,12 +96,12 @@ const errorMessage = (error: unknown, fallback: string) => {
 
 const view = computed(() => route.name === 'admin' ? 'overview' : String(route.name || '').replace('admin-', ''))
 const pageTitle = computed(() => ({
-  overview: '运营概览', enterprises: '企业与用户', bindings: '身份绑定', channels: '渠道管理', 'agents-tools': 'Agent 与工具', audit: '会话与审计',
+  overview: '运营概览', enterprises: '企业与用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', audit: '会话与审计',
 } as Record<string, string>)[view.value] || '运营概览')
 
 const resourceMeta = computed(() => ({
   enterprises: { eyebrow: '客户目录', title: '企业与用户', description: '建立企业并为企业成员分配账号与可见业务范围。', icon: UsergroupIcon },
-  bindings: { eyebrow: '身份治理', title: 'ADP 应用绑定', description: '先把企业与 ADP 应用建立有效绑定，再配置微信服务号等渠道实例。', icon: LinkIcon },
+  bindings: { eyebrow: '平台配置', title: 'ADP 应用配置', description: '一期平台只有一个 ADP 应用。应用凭据来自服务器 .env，企业和渠道均不参与 ADP 应用绑定。', icon: ApiIcon },
   channels: { eyebrow: '消息入口', title: '渠道管理', description: '配置渠道实例、凭据和渠道身份，查看每个接入的真实验证边界。', icon: ApiIcon },
   'agents-tools': { eyebrow: '能力编排', title: 'Agent 与工具', description: '登记的 Agent 与工具目录接口尚未接入，当前不展示演示数据。', icon: SettingIcon },
   audit: { eyebrow: '可追溯性', title: '会话与审计', description: '查看脱敏事件、执行轮次与投递状态。业务正文不会在这里全量展示。', icon: HistoryIcon },
@@ -146,10 +143,7 @@ const loadData = async () => {
       users.value = userRows
     }
     if (view.value === 'bindings') {
-      const [bindingRows, enterpriseRows] = await Promise.all([listAdminBindings(), listEnterprises()])
-      bindings.value = bindingRows
-      enterprises.value = enterpriseRows
-      if (!bindingForm.value.enterpriseId) bindingForm.value.enterpriseId = enterpriseRows[0]?.id || ''
+      adpConfig.value = await getAdminAdpConfig()
     }
     if (view.value === 'audit') auditEvents.value = await listAuditEvents()
   } catch {
@@ -360,13 +354,6 @@ const showUserDetail = (item: AdminUser) => { detail.value = { title: item.name,
 const showAuditDetail = (item: AdminAuditEvent) => { detail.value = { title: item.action, lines: [`Trace ID：${item.traceId}`, `目标：${item.targetType} / ${item.targetId || '—'}`, `结果：${item.outcome}`, `时间：${item.createdAt}`] } }
 
 const handleLogout = () => logout(() => router.replace({ name: 'login' }))
-const openBinding = () => { bindingForm.value = { enterpriseId: enterprises.value[0]?.id || '', applicationId: '', upstreamAppId: '', workspaceId: '', externalAccountId: '', vendor: '' }; modal.value = 'binding' }
-const submitBinding = async () => {
-  createActionLoading.value = true
-  try { await createAdminBinding(bindingForm.value); modal.value = null; setToast('ADP 应用绑定已保存'); await loadData() }
-  catch (error) { loadError.value = errorMessage(error, '绑定保存失败，请检查应用标识和企业配置。') }
-  finally { createActionLoading.value = false }
-}
 </script>
 
 <template>
@@ -394,8 +381,17 @@ const submitBinding = async () => {
       <section class="resource-panel admin-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="auditSearch" placeholder="搜索动作、目标或 Trace ID" /></div><span class="resource-count">{{ filteredAudit.length }} 条记录</span></div><div v-if="loading && !auditEvents.length" class="resource-loading">正在加载审计记录…</div><div v-else-if="!filteredAudit.length" class="panel-empty">暂无审计记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>动作</span><span>目标</span><span>结果</span><span></span></div><div v-for="item in filteredAudit" :key="item.id" class="resource-row"><span class="resource-name"><HistoryIcon /><strong>{{ item.action }}</strong></span><span class="resource-detail">{{ item.targetType }} / {{ item.targetId || '—' }}</span><span class="row-status" :class="`row-status--${item.outcome === 'success' || item.outcome === 'found' ? 'success' : 'warning'}`"><i></i>{{ item.outcome }}</span><button class="row-more" aria-label="查看审计详情" @click="showAuditDetail(item)"><ChevronRightIcon /></button></div></div></section>
     </template>
     <template v-else-if="view === 'bindings'">
-      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openBinding"><LinkIcon />新增 ADP 应用绑定</button></div></section>
-      <section class="resource-panel admin-panel"><div class="resource-toolbar"><strong>已配置绑定</strong><span class="resource-count">{{ bindings.length }} 条</span></div><div v-if="loading && !bindings.length" class="resource-loading">正在加载绑定…</div><div v-else-if="!bindings.length" class="panel-empty">暂无绑定。请点击“新增 ADP 应用绑定”，完成后即可接入微信服务号。</div><div v-else class="resource-table"><div class="resource-table-head"><span>企业</span><span>应用</span><span>工作空间 / 外部账号</span><span>状态</span></div><div v-for="item in bindings" :key="item.id" class="resource-row"><span class="resource-name"><LinkIcon /><strong>{{ item.enterpriseName }}</strong><small>{{ item.customerCode }}</small></span><span class="resource-detail">{{ item.applicationId }}<small>{{ item.upstreamAppId }} · {{ item.vendor }}</small></span><span class="resource-detail">{{ item.workspaceId }}<small>{{ item.externalAccountId }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' && item.connectionStatus === 'active' ? 'success' : 'warning'}`"><i></i>{{ item.status === 'active' && item.connectionStatus === 'active' ? '有效' : '已停用' }}</span></div></div></section>
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
+      <section class="resource-panel admin-panel adp-config-panel">
+        <div v-if="loading && !adpConfig" class="resource-loading">正在读取服务器 .env 配置状态…</div>
+        <template v-else-if="adpConfig">
+          <div class="admin-panel-heading"><div><p class="section-kicker">平台唯一实例</p><h2>腾讯云 ADP 应用</h2></div><span class="row-status" :class="`row-status--${adpConfig.configured ? 'success' : 'warning'}`"><i></i>{{ adpConfig.configured ? '配置完整' : '配置不完整' }}</span></div>
+          <div class="adp-config-summary"><div><span>应用标识</span><strong>{{ adpConfig.applicationId || '未配置' }}</strong></div><div><span>供应商</span><strong>{{ adpConfig.vendor || '未配置' }}</strong></div><div><span>APP_CONFIGS</span><strong>{{ adpConfig.applicationCount }} 个应用</strong></div><div><span>配置来源</span><strong>{{ adpConfig.source }}</strong></div></div>
+          <div class="adp-config-checks"><div v-for="item in [{ label: 'TC_SECRET_APPID', ok: adpConfig.tcSecretAppIdConfigured }, { label: 'TC_SECRET_ID', ok: adpConfig.tcSecretIdConfigured }, { label: 'TC_SECRET_KEY', ok: adpConfig.tcSecretKeyConfigured }, { label: 'APP_CONFIGS / AppKey', ok: adpConfig.appKeyConfigured } ]" :key="item.label" class="adp-config-check"><CheckCircleIcon v-if="item.ok" /><ErrorCircleIcon v-else /><span>{{ item.label }}</span><strong>{{ item.ok ? '已配置' : '未配置' }}</strong></div></div>
+          <p class="adp-config-note">ADP 应用是平台级单例，密钥只从服务器 `.env` 读取。企业和渠道不会绑定到此配置；消息进入平台后，才按渠道身份、企业访问范围和业务权限鉴权。</p>
+        </template>
+        <div v-else class="panel-empty">暂时无法读取 ADP 配置状态，请刷新重试。</div>
+      </section>
     </template>
     <template v-else-if="view === 'channels'">
       <AdminChannelManagement />
@@ -408,7 +404,6 @@ const submitBinding = async () => {
     <div v-if="modal" class="modal-backdrop" @click.self="!createActionLoading && !accessActionLoading && !configActionLoading ? modal = null : undefined">
       <form v-if="modal === 'enterprise'" class="modal-card" @submit.prevent="submitEnterprise"><div class="modal-heading"><div><p class="section-kicker">客户目录</p><h2>新增企业</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>企业名称<input v-model="enterpriseForm.name" required maxlength="255" /></label><label>M3 客户编码<input v-model="enterpriseForm.customerCode" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" /></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建企业' }}</button></div></form>
       <form v-else-if="modal === 'user'" class="modal-card" @submit.prevent="submitUser"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>新增平台用户</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>姓名<input v-model="userForm.name" required maxlength="255" /></label><label>手机号<input v-model="userForm.phone" required inputmode="numeric" pattern="1[0-9]{10}" /></label><label>角色<select v-model="userForm.role"><option value="customer">客户员工</option><option value="staff">客服 / 销售</option><option value="ops">运维人员</option><option value="admin">平台管理员</option></select></label><label>所属企业<select v-model="userForm.enterpriseId" :required="userForm.role === 'customer'"><option value="">{{ userForm.role === 'customer' ? '请选择企业' : '不绑定企业' }}</option><option v-for="item in enterprises" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建用户' }}</button></div></form>
-      <form v-else-if="modal === 'binding'" class="modal-card" @submit.prevent="submitBinding"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>新增 ADP 应用绑定</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><p class="modal-help">这些标识需要与已配置的 ADP 应用和企业外部账号一致。保存后可在“渠道管理”选择该绑定。</p><label>企业<select v-model="bindingForm.enterpriseId" required><option value="" disabled>请选择企业</option><option v-for="item in enterprises" :key="item.id" :value="item.id">{{ item.name }} · {{ item.customerCode }}</option></select></label><label>ADP 应用 ID<input v-model="bindingForm.applicationId" required placeholder="例如 adp-prod" /></label><label>上游应用 ID<input v-model="bindingForm.upstreamAppId" required placeholder="例如 tencent-adp" /></label><label>Workspace ID<input v-model="bindingForm.workspaceId" required /></label><label>外部账号 ID<input v-model="bindingForm.externalAccountId" required /></label><label>供应商（可选）<input v-model="bindingForm.vendor" placeholder="例如 tencent" /></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '保存中…' : '保存绑定' }}</button></div></form>
       <form v-else-if="modal === 'access'" class="modal-card access-editor-card" @submit.prevent="submitAccess"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>调整访问范围</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="accessActionLoading" @click="modal = null">×</button></div><div v-if="accessUser" class="access-user-summary"><UserIcon /><div><strong>{{ accessUser.name }}</strong><small>{{ accessUser.phone }} · 当前绑定 {{ accessUser.enterprises.length }} 家企业</small></div></div><p class="modal-help">角色和企业范围会同时生效，保存后该用户已有的执行上下文会立即撤销。</p><label>角色<select v-model="accessRole" :disabled="accessActionLoading"><option v-for="option in roleOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><fieldset class="scope-fieldset"><legend>企业访问范围</legend><p class="scope-help">停用企业不能新选；已在范围中的停用企业需要取消勾选后才能保存。</p><label v-for="item in enterprises" :key="item.id" class="scope-option" :class="{ 'scope-option--suspended': item.status === 'suspended' }"><input v-model="accessEnterpriseIds" type="checkbox" :value="item.id" :disabled="accessActionLoading || (item.status === 'suspended' && !accessEnterpriseIds.includes(item.id))" /><span><strong>{{ item.name }}</strong><small>{{ item.customerCode }} · {{ item.status === 'active' ? '正常' : '已停用' }}</small></span></label><span v-if="!enterprises.length" class="scope-empty">暂无可用企业</span></fieldset><div v-if="accessFormError" class="form-error" role="alert"><ErrorCircleIcon /><span>{{ accessFormError }}</span></div><div class="modal-actions"><button type="button" class="outline-action" :disabled="accessActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="accessActionLoading">{{ accessActionLoading ? '保存中…' : '保存访问范围' }}</button></div></form>
       <form v-else-if="modal === 'config'" class="modal-card config-editor-card" @submit.prevent="submitConfigDraft"><div class="modal-heading"><div><p class="section-kicker">平台配置</p><h2>编辑配置草稿</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="modal = null">×</button></div><p class="modal-help">每行一项能力。保存后生成草稿，发布前仍可继续修改。</p><label>能力清单<textarea v-model="configForm.itemsText" required maxlength="1800" rows="7" placeholder="例如：客户登录与会话&#10;M3 只读工具"></textarea></label><fieldset class="flag-fieldset"><legend>功能开关</legend><label class="checkbox-row"><input v-model="configForm.portal" type="checkbox" /><span>客户门户</span></label><label class="checkbox-row"><input v-model="configForm.m3ReadOnly" type="checkbox" /><span>M3 只读工具</span></label><label class="checkbox-row"><input v-model="configForm.audit" type="checkbox" /><span>审计记录</span></label><label class="checkbox-row"><input v-model="configForm.webChannel" type="checkbox" /><span>官网渠道</span></label></fieldset><label>变更说明<textarea v-model="configForm.notes" maxlength="500" rows="3" placeholder="可选，说明本次配置变更原因"></textarea></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="configActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="configActionLoading">{{ configActionLoading ? '保存中…' : '保存草稿' }}</button></div></form>
     </div>
