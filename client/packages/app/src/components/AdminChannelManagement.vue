@@ -42,7 +42,7 @@ const submitting = ref(false)
 const activeCredential = ref<ChannelCredential | null>(null)
 const identityActionId = ref<string | null>(null)
 const formError = ref('')
-const credentialForm = ref({ bindingId: '', channelInstanceId: '', token: '' })
+const credentialForm = ref({ bindingId: '', channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' })
 const rotateToken = ref('')
 const modalRef = ref<HTMLElement | null>(null)
 const previouslyFocused = ref<HTMLElement | null>(null)
@@ -61,7 +61,7 @@ const channelCards = computed(() => [
   {
     id: 'wechat_official_account',
     name: '微信服务号',
-    note: activeWechatCredentials.value.length ? `${activeWechatCredentials.value.length} 个启用实例，等待真实账号联调` : '明文回调框架已完成，尚未配置实例',
+    note: activeWechatCredentials.value.length ? `${activeWechatCredentials.value.length} 个启用实例，等待真实账号联调` : '明文与 AES 回调框架已完成，尚未配置实例',
     status: activeWechatCredentials.value.length ? '已配置' : '未配置',
     tone: activeWechatCredentials.value.length ? 'configured' : 'neutral',
     icon: LinkIcon,
@@ -130,7 +130,7 @@ const loadData = async () => {
 }
 
 const openCredential = () => {
-  credentialForm.value = { bindingId: activeBindings.value[0]?.id || '', channelInstanceId: '', token: '' }
+  credentialForm.value = { bindingId: activeBindings.value[0]?.id || '', channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
   formError.value = ''
   modal.value = 'credential'
 }
@@ -205,10 +205,15 @@ const submitCredential = async () => {
       connectionId: binding.connectionId,
       channel: 'wechat_official_account',
       channelInstanceId: credentialForm.value.channelInstanceId.trim(),
-      credential: JSON.stringify({ token: credentialForm.value.token }),
+      credential: JSON.stringify({
+        token: credentialForm.value.token,
+        ...(credentialForm.value.appId.trim() ? { appId: credentialForm.value.appId.trim() } : {}),
+        ...(credentialForm.value.appSecret.trim() ? { appSecret: credentialForm.value.appSecret.trim() } : {}),
+        ...(credentialForm.value.encodingAesKey.trim() ? { encodingAesKey: credentialForm.value.encodingAesKey.trim() } : {}),
+      }),
     })
     modal.value = null
-    credentialForm.value.token = ''
+    credentialForm.value = { bindingId: '', channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
     await loadData()
     setToast('微信服务号实例已配置，下一步请在微信后台填写回调地址')
   } catch (error) {
@@ -362,10 +367,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
   <div v-if="modal" class="channel-modal-backdrop" @click.self="closeModal">
     <form v-if="modal === 'credential'" ref="modalRef" class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title" @submit.prevent="submitCredential">
       <header><div><p>微信服务号</p><h2 id="channel-modal-title">配置回调实例</h2></div><button type="button" aria-label="关闭" :disabled="submitting" @click="closeModal"><CloseIcon /></button></header>
-      <div class="channel-modal-notice"><LockOnIcon /><span>当前只支持明文 XML 回调。Token 会加密保存，提交后不会再次显示。</span></div>
+      <div class="channel-modal-notice"><LockOnIcon /><span>支持明文和安全模式 XML 回调。凭据会加密保存，提交后不会再次显示。</span></div>
       <label>企业应用绑定<select v-model="credentialForm.bindingId" required><option value="" disabled>请选择有效绑定</option><option v-for="item in activeBindings" :key="item.id" :value="item.id">{{ item.enterpriseName }} · {{ item.applicationId }} / {{ item.workspaceId }}</option></select></label>
       <label>渠道实例 ID<input v-model="credentialForm.channelInstanceId" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" placeholder="例如 oa-customer-service" /><small>用于生成唯一回调地址，保存后不可修改。</small></label>
       <label>回调 Token<input v-model="credentialForm.token" required minlength="3" maxlength="512" type="password" autocomplete="new-password" placeholder="与微信后台填写的 Token 一致" /></label>
+      <label>微信 AppID（安全模式必填）<input v-model="credentialForm.appId" maxlength="128" autocomplete="off" placeholder="例如 wxxxxxxxxxxxxxxxx" /></label>
+      <label>微信 AppSecret（发送消息时使用）<input v-model="credentialForm.appSecret" maxlength="512" type="password" autocomplete="new-password" /></label>
+      <label>EncodingAESKey（安全模式）<input v-model="credentialForm.encodingAesKey" maxlength="44" autocomplete="off" placeholder="微信后台生成的 43 位密钥" /><small>填写 AppID 和 EncodingAESKey 后，回调地址可选择安全模式；只填 Token 则保持明文兼容。</small></label>
       <div v-if="formError" class="channel-form-error"><ErrorCircleIcon />{{ formError }}</div>
       <footer><button type="button" class="channel-button channel-button--secondary" :disabled="submitting" @click="closeModal">取消</button><button type="submit" class="channel-button channel-button--primary" :disabled="submitting">{{ submitting ? '保存中…' : '保存并生成地址' }}</button></footer>
     </form>
@@ -384,11 +392,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
       <div v-else class="channel-modal-notice"><ErrorCircleIcon /><span>请先配置一个启用的微信服务号实例，才能生成回调地址。</span></div>
       <ol>
         <li>在微信公众平台服务器配置中粘贴回调地址，Token 必须与本平台保存值一致。</li>
-        <li>当前消息加解密方式请选择“明文模式”；AES/EncodingAESKey 尚未实现。</li>
+        <li>可在微信后台选择明文模式，或填写 AppID/EncodingAESKey 后选择安全模式。</li>
         <li>先在平台完成 OpenID 渠道身份确认，再向服务号发送文本消息。</li>
         <li>检查消息是否进入 durable queue、Worker 是否生成回复任务；当前真实客服消息发送尚未配置。</li>
       </ol>
-      <div class="channel-guide-warning"><strong>真实联调尚未完成</strong><p>保存凭据或通过本地签名单测不等于微信账号已接通。真实回调、OpenID 样本、AES 和发送 API 仍需渠道账号验证。</p></div>
+      <div class="channel-guide-warning"><strong>真实联调仍需账号验证</strong><p>本地已覆盖明文与 AES 协议边界，但真实回调、OpenID 身份绑定和发送 API 仍需微信服务号后台验证。</p></div>
       <footer><button type="button" class="channel-button channel-button--primary" @click="closeModal">知道了</button></footer>
     </section>
   </div>

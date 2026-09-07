@@ -116,7 +116,9 @@ def render(spec: dict[str, Any]) -> str:
     for name in sorted(schemas):
         chunks.append(render_schema(name, schemas[name]))
         chunks.append("\n")
-    return "".join(chunks)
+    # Keep generated files to one terminal newline so repository whitespace
+    # checks remain stable when the last schema changes.
+    return "".join(chunks).rstrip() + "\n"
 
 
 def main() -> int:

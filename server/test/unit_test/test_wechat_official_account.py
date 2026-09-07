@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import base64
 import json
+import struct
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from integrations.channels.wechat_official_account import (
     WechatOfficialAccountAdapter,
@@ -20,6 +23,14 @@ from integrations.channels.base import OutboundMessage
 
 def _signature(token: str, timestamp: str, nonce: str) -> str:
     return hashlib.sha1("".join(sorted((token, timestamp, nonce))).encode()).hexdigest()
+
+
+def _encrypted_payload(*, xml: bytes, app_id: str, key: bytes) -> str:
+    payload = b"r" * 16 + struct.pack("!I", len(xml)) + xml + app_id.encode()
+    padding = 32 - (len(payload) % 32)
+    payload += bytes([padding]) * padding
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(key[:16])).encryptor()
+    return base64.b64encode(encryptor.update(payload) + encryptor.finalize()).decode()
 
 
 def _xml(*, msg_id: str = "123", content: str = "BL-001", create_time: int | None = None) -> bytes:
@@ -73,6 +84,57 @@ def test_xml_rejects_entities_and_stale_callbacks():
         adapter.normalize_xml(body=b'<!DOCTYPE xml [<!ENTITY xxe "bad">]><xml><Content>&xxe;</Content></xml>', trace_id="trace")
     with pytest.raises(WechatProtocolError, match="时间窗口"):
         adapter.normalize_xml(body=_xml(create_time=100), trace_id="trace", now=100000)
+
+
+def test_aes_callback_verifies_decrypts_and_rejects_wrong_app_id():
+    key = b"0123456789abcdef0123456789abcdef"
+    aes_key = base64.b64encode(key).decode().rstrip("=")
+    adapter = WechatOfficialAccountAdapter(
+        channel_instance_id="oa-aes",
+        token="token-aes",
+        app_id="wx-test-app",
+        encoding_aes_key=aes_key,
+    )
+    timestamp = str(int(time.time()))
+    nonce = "nonce-aes-1"
+    body = _xml(msg_id="aes-message")
+    encrypted = _encrypted_payload(xml=body, app_id="wx-test-app", key=key)
+    msg_signature = hashlib.sha1("".join(sorted(("token-aes", timestamp, nonce, encrypted))).encode()).hexdigest()
+    adapter.verify_encrypted_callback(msg_signature=msg_signature, timestamp=timestamp, nonce=nonce, encrypt=encrypted)
+    assert adapter.decrypt_xml(encrypted) == body
+    with pytest.raises(WechatProtocolError, match="签名"):
+        adapter.verify_encrypted_callback(msg_signature="0" * 40, timestamp=timestamp, nonce="nonce-aes-bad", encrypt=encrypted)
+    with pytest.raises(WechatProtocolError, match="解密"):
+        adapter.decrypt_xml(base64.b64encode(b"short").decode())
+    with pytest.raises(WechatProtocolError, match="重复"):
+        adapter.verify_encrypted_callback(msg_signature=msg_signature, timestamp=timestamp, nonce=nonce, encrypt=encrypted)
+
+    wrong_app = _encrypted_payload(xml=_xml(msg_id="wrong-app"), app_id="wx-other", key=key)
+    with pytest.raises(WechatProtocolError, match="AppID"):
+        adapter.decrypt_xml(wrong_app)
+
+
+def test_aes_verification_echo_returns_decrypted_challenge():
+    key = b"abcdef0123456789abcdef0123456789"
+    aes_key = base64.b64encode(key).decode().rstrip("=")
+    adapter = WechatOfficialAccountAdapter(
+        channel_instance_id="oa-aes-echo",
+        token="token-aes-echo",
+        app_id="wx-echo",
+        encoding_aes_key=aes_key,
+    )
+    timestamp = str(int(time.time()))
+    nonce = "nonce-aes-echo"
+    encrypted = _encrypted_payload(xml=b"challenge", app_id="wx-echo", key=key)
+    signature = hashlib.sha1("".join(sorted(("token-aes-echo", timestamp, nonce, encrypted))).encode()).hexdigest()
+    assert adapter.verification_echo(
+        signature="",
+        msg_signature=signature,
+        timestamp=timestamp,
+        nonce=nonce,
+        echostr=encrypted,
+        encrypted=True,
+    ) == "challenge"
 
 
 @pytest.mark.asyncio
@@ -139,16 +201,17 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
             {
                 "task": "M3-WECHAT-OA-01",
                 "date": "2026-09-06",
-                "scope": "local plaintext WeChat Official Account adapter framework",
+                "scope": "local plaintext and AES WeChat Official Account adapter framework",
                 "tests": {
-                    "officialAccountSuite": "7 passed",
-                    "channelRegression": "27 passed",
+                    "officialAccountSuite": "10 passed",
+                    "channelRegression": "30 passed",
                     "signature": True,
                     "xmlNormalized": True,
                     "identityBound": True,
                     "unboundIdentityRejectedBeforeEnqueue": True,
                     "enqueued": True,
                     "unknownTransportMarkedUncertain": True,
+                    "aesCallbackVerifiedAndDecrypted": True,
                 },
                 "commands": [
                     "server/.venv/bin/pytest server/test/unit_test/test_wechat_official_account.py -q",
@@ -168,6 +231,51 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
         )
         + "\n"
     )
+
+
+@pytest.mark.asyncio
+async def test_public_callback_accepts_encrypted_xml(monkeypatch):
+    from sanic import Sanic
+    from app_factory import create_app_with_configs
+
+    if not Sanic._app_registry:
+        create_app_with_configs()
+    import router.platform as platform_router
+
+    now = int(time.time())
+    token = "token-route-aes"
+    app_id = "wx-route-aes"
+    key = b"route-aes-key-012345678901234567"
+    aes_key = base64.b64encode(key).decode().rstrip("=")
+    nonce = "nonce-route-aes-1"
+    message_body = _xml(msg_id="route-aes-message", create_time=now)
+    encrypted = _encrypted_payload(xml=message_body, app_id=app_id, key=key)
+    msg_signature = hashlib.sha1("".join(sorted((token, str(now), nonce, encrypted))).encode()).hexdigest()
+    captured = {}
+    identity = SimpleNamespace(UserId="user-aes", AccountId="account-aes", EnterpriseId="enterprise-aes")
+
+    async def fake_credential(_db, *, channel, channel_instance_id):
+        assert channel == "wechat_official_account"
+        assert channel_instance_id == "oa-route-aes"
+        return json.dumps({"token": token, "appId": app_id, "encodingAesKey": aes_key})
+
+    async def fake_record(_db, *, message, task_type, task_payload, **_kwargs):
+        captured["message"] = message
+        return SimpleNamespace(Id="inbound-aes", Status="queued"), SimpleNamespace(Id="task-aes"), True
+
+    monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
+    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=identity))
+    monkeypatch.setattr(platform_router, "record_inbound_message", fake_record)
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock())),
+        args={"msg_signature": msg_signature, "timestamp": str(now), "nonce": nonce, "encrypt_type": "aes"},
+        headers={"X-Request-Id": "trace-route-aes"},
+        body=(f"<xml><Encrypt><![CDATA[{encrypted}]]></Encrypt></xml>").encode(),
+    )
+    response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-aes")
+    assert response.body == b"success"
+    assert captured["message"].external_message_id == "route-aes-message"
+    request.ctx.db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
