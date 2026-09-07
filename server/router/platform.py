@@ -8,6 +8,7 @@ are all derived from the revocable platform session.
 from __future__ import annotations
 
 import logging
+import json as stdlib_json
 import uuid
 from functools import wraps
 from typing import Any
@@ -56,6 +57,7 @@ from core.platform import (
 from core.delivery import InboundMessageInput, record_inbound_message
 from core.channel_credentials import (
     ChannelCredentialError,
+    decrypt_credential,
     encrypt_credential,
     load_active_channel_credentials,
     load_active_channel_instance_credential,
@@ -960,20 +962,48 @@ class WebChannelInboundStatusApi(HTTPMethodView):
         })
 
 
-def _wechat_token(credential: str) -> str:
-    """Accept a legacy plain token or a structured credential JSON object."""
-    value = credential.strip()
-    if value.startswith("{"):
+def _wechat_credential(credential: Any) -> dict[str, str]:
+    """Normalize legacy token-only and structured official-account credentials."""
+    value = credential.strip() if isinstance(credential, str) else credential
+    if isinstance(value, str) and value.startswith("{"):
         try:
-            import json as stdlib_json
-
             parsed = stdlib_json.loads(value)
         except (TypeError, ValueError) as exc:
             raise PlatformBadRequest("微信服务号凭据格式不正确") from exc
-        value = parsed.get("token", "") if isinstance(parsed, dict) else ""
-    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 512:
+        if not isinstance(parsed, dict):
+            raise PlatformBadRequest("微信服务号凭据格式不正确")
+        result = {
+            str(key): item.strip()
+            for key, item in parsed.items()
+            if key in {"token", "appId", "app_id", "appSecret", "app_secret", "encodingAesKey", "encoding_aes_key"}
+            and isinstance(item, str)
+            and item.strip()
+        }
+    elif isinstance(value, dict):
+        parsed = value
+        result = {
+            str(key): item.strip()
+            for key, item in parsed.items()
+            if key in {"token", "appId", "app_id", "appSecret", "app_secret", "encodingAesKey", "encoding_aes_key"}
+            and isinstance(item, str)
+            and item.strip()
+        }
+    else:
+        result = {"token": value}
+    raw_token = result.get("token", "")
+    token = raw_token.strip() if isinstance(raw_token, str) else ""
+    if not token or len(token) > 512:
         raise PlatformBadRequest("微信服务号凭据格式不正确")
-    return value.strip()
+    result["token"] = token
+    app_id = result.get("appId") or result.get("app_id")
+    aes_key = result.get("encodingAesKey") or result.get("encoding_aes_key")
+    if aes_key and not app_id:
+        raise PlatformBadRequest("配置EncodingAESKey时必须同时提供AppID")
+    if app_id and len(app_id) > 128:
+        raise PlatformBadRequest("微信AppID格式不正确")
+    if aes_key and len(aes_key) not in (43, 44):
+        raise PlatformBadRequest("微信EncodingAESKey格式不正确")
+    return result
 
 
 async def _wechat_adapter(request: Request, channel_instance_id: str) -> WechatOfficialAccountAdapter:
@@ -987,10 +1017,16 @@ async def _wechat_adapter(request: Request, channel_instance_id: str) -> WechatO
         )
     except ChannelCredentialError as exc:
         raise PlatformForbidden("微信服务号渠道未配置") from exc
-    return WechatOfficialAccountAdapter(
-        channel_instance_id=channel_instance_id.strip(),
-        token=_wechat_token(credential),
-    )
+    config = _wechat_credential(credential)
+    try:
+        return WechatOfficialAccountAdapter(
+            channel_instance_id=channel_instance_id.strip(),
+            token=config["token"],
+            app_id=config.get("appId") or config.get("app_id"),
+            encoding_aes_key=config.get("encodingAesKey") or config.get("encoding_aes_key"),
+        )
+    except ValueError as exc:
+        raise PlatformBadRequest("微信服务号安全模式凭据格式不正确") from exc
 
 
 class WechatOfficialAccountCallbackApi(HTTPMethodView):
@@ -1004,6 +1040,8 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
                 timestamp=request.args.get("timestamp", ""),
                 nonce=request.args.get("nonce", ""),
                 echostr=request.args.get("echostr", ""),
+                msg_signature=request.args.get("msg_signature"),
+                encrypted=request.args.get("encrypt_type", "").lower() == "aes",
             )
         except WechatProtocolError:
             raise
@@ -1011,12 +1049,24 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
 
     async def post(self, request: Request, channel_instance_id: str):
         adapter = await _wechat_adapter(request, channel_instance_id)
-        adapter.verify_callback(
-            signature=request.args.get("signature", ""),
-            timestamp=request.args.get("timestamp", ""),
-            nonce=request.args.get("nonce", ""),
-        )
-        envelope = adapter.normalize_xml(body=request.body, trace_id=_trace_id(request))
+        encrypted = request.args.get("encrypt_type", "").lower() == "aes" or bool(request.args.get("msg_signature"))
+        if encrypted:
+            encrypted_body = adapter.extract_encrypted(request.body)
+            adapter.verify_encrypted_callback(
+                msg_signature=request.args.get("msg_signature", ""),
+                timestamp=request.args.get("timestamp", ""),
+                nonce=request.args.get("nonce", ""),
+                encrypt=encrypted_body,
+            )
+            body = adapter.decrypt_xml(encrypted_body)
+        else:
+            adapter.verify_callback(
+                signature=request.args.get("signature", ""),
+                timestamp=request.args.get("timestamp", ""),
+                nonce=request.args.get("nonce", ""),
+            )
+            body = request.body
+        envelope = adapter.normalize_xml(body=body, trace_id=_trace_id(request))
         identity = await resolve_active_channel_identity(
             request.ctx.db,
             channel=adapter.channel,
@@ -1902,7 +1952,21 @@ class AdminChannelCredentialRotateApi(HTTPMethodView):
         if "credential" not in body:
             raise PlatformBadRequest("credential为必填项")
         enterprise, connection = await _load_active_credential_scope(request, str(row.EnterpriseId), str(row.ConnectionId))
-        encrypted = _encrypt_for_admin(body["credential"])
+        credential_value = body["credential"]
+        # Token-only rotation must not silently downgrade an encrypted WeChat
+        # instance back to plaintext mode. Preserve the existing non-token
+        # fields unless the caller explicitly supplies replacements.
+        if row.Channel == WECHAT_OFFICIAL_ACCOUNT and isinstance(credential_value, str):
+            incoming = _wechat_credential(credential_value)
+            try:
+                previous = _wechat_credential(decrypt_credential(row))
+            except ChannelCredentialError as exc:
+                raise PlatformBadRequest("微信服务号旧凭据无法读取，请重新配置完整凭据") from exc
+            for key in ("appId", "app_id", "appSecret", "app_secret", "encodingAesKey", "encoding_aes_key"):
+                if key not in incoming and key in previous:
+                    incoming[key] = previous[key]
+            credential_value = stdlib_json.dumps(incoming, ensure_ascii=False, separators=(",", ":"))
+        encrypted = _encrypt_for_admin(credential_value)
         row.Ciphertext = encrypted.ciphertext
         row.KeyVersion = encrypted.key_version
         row.Fingerprint = encrypted.fingerprint

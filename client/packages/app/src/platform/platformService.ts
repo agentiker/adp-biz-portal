@@ -437,6 +437,17 @@ export async function listAdminBindings(): Promise<IntegrationBinding[]> {
   return httpService.get<IntegrationBinding[]>('/api/v1/admin/bindings')
 }
 
+export async function createAdminBinding(data: {
+  applicationId: string
+  upstreamAppId: string
+  enterpriseId: string
+  workspaceId: string
+  externalAccountId: string
+  vendor?: string
+}): Promise<IntegrationBinding> {
+  return httpService.post<IntegrationBinding>('/api/v1/admin/bindings', data)
+}
+
 export async function listChannelCredentials(enterpriseId?: string): Promise<ChannelCredential[]> {
   if (useMock) return mockChannelCredentials.map((item) => ({ ...item }))
   const query = enterpriseId ? `?enterpriseId=${encodeURIComponent(enterpriseId)}` : ''

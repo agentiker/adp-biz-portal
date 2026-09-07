@@ -20,7 +20,7 @@
 | M0 技术验证与风险收敛 | 部分完成 | 风险边界和验证清单已整理 | M3/渠道/ADP 的真实文档、权限、样本和联调 |
 | M1 业务底座与后台 | 本地第一版和安全回归完成 | 企业、用户、角色、范围、登录、配置、ADP Chat 调试入口、后台浏览器验收和响应式收尾；旧路径安全回归和版本化迁移已完成 | 上游 Workspace 归属闭环、真实跨企业隔离证据、生产多实例限流存储 |
 | M2 官网 + M3 只读闭环 | 本地 Worker/Portal 编排和 ADP Provider 边界完成，真实第三方闭环未完成 | 执行上下文、服务端 Agent 映射、ADP SSE/证据边界、M3 受控 Provider、任务队列、可运行 Worker、API 接线、Portal 会话持久化、隔离验收、重试边界和撤权后的待发送任务失效 | 真实渠道接入、真实 ADP Agent 联调、真实 M3 |
-| M3 多渠道接入 | 本地统一框架与 Web 渠道 E2E 已完成，真实渠道协议未联调 | 渠道契约/能力声明/注册表、标准入站出站边界、Web 异步入站状态查询、durable inbound -> Worker -> Agent/M3 Provider -> Portal 回复闭环、重复消息幂等和本地隔离验证；渠道凭据与身份绑定边界也已完成 | 微信服务号、微信客服、企微适配器、验签/解密、真实身份样本、发送协议和真实联调 |
+| M3 多渠道接入 | 本地统一框架与 Web 渠道 E2E 已完成，微信服务号明文/AES 协议边界已覆盖，真实渠道协议未联调 | 渠道契约/能力声明/注册表、标准入站出站边界、Web 异步入站状态查询、durable inbound -> Worker -> Agent/M3 Provider -> Portal 回复闭环、重复消息幂等和本地隔离验证；渠道凭据与身份绑定边界也已完成；微信服务号支持明文与安全模式回调验签/解密/AppID 校验 | 微信客服、企微适配器、真实身份样本、发送协议和真实联调；跨进程重放保护 |
 | M4 试运行与交付 | 本地部署基线、文档、发布基础、账号开通材料和安全专项回归完成，生产交付未开始 | OpenAPI/前端类型契约已生成并校验；Docker Compose、环境模板、健康探针、数据字典、排障手册、发布/迁移/回滚运行手册、账号开通 SOP/验收/培训材料已补齐；迁移 CLI、本地隔离 schema 演练和日志/密钥/口令脱敏与权限回归已完成 | 生产部署权限、真实备份恢复、RPO/RTO、压测、正式发布和真实第三方培训交付 |
 
 当前验证基线：本轮部署基线已通过 Compose 配置解析、健康探针定向测试、Python 编译、OpenAPI/前端类型契约检查、渠道框架单测、Web PostgreSQL E2E、一次本地 PostgreSQL 备份恢复演练和 `git diff --check`；验证均为与变更直接相关的定向命令，不重复全量后端或浏览器测试。真实 ADP/M3/渠道联调仍不在本地验证范围内。
@@ -29,7 +29,7 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
-当前任务计数：`42 / 55` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。本轮已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；此前已完成 `M1-ADMIN-02` 的 Admin ADP Chat 迁移和真实浏览器验收，以及 `M3-FRAMEWORK-01`、`M3-WEB-E2E-01`、`M3-WECHAT-OA-01` 的本地框架和 Web/微信服务号适配器验证；`M3-CRED-01`、`M3-IDENTITY-01` 的专项回归、`M4-API-01` 的渠道身份契约补齐、`M4-PERF-01` 的本地并发基线和 `M4-DR-01` 的本地备份恢复演练已完成本地阶段；没有持续运行全量测试，验证均为一次性定向命令。
+当前任务计数：`43 / 56` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。本轮完成 Admin 的“ADP 应用绑定”配置入口：可选择企业并创建绑定，绑定保存后可直接在渠道管理中配置微信服务号；前端类型检查和生产构建通过。此前已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -234,10 +234,10 @@
   - 边界：本地 M3 Mock/受控 Provider 只能证明框架和链路，不代表微信服务号、微信客服或企微真实协议已接通；真实渠道的回调验签/解密、回复窗口和发送失败联调仍待外部条件。
 
 - [x] `M3-WECHAT-OA-01` 实现微信服务号适配器：回调验证、消息标准化、发送窗口和失败降级。
-  - 状态：`DONE`（2026-09-06，本地明文协议适配器框架完成）；依赖 `M0-CHANNEL-01` 的真实联调部分仍保留。
-  - 完成证据：新增 `server/integrations/channels/wechat_official_account.py`，支持 GET 验证回显、SHA-1 签名常量时间比较、时间窗和进程内重放保护、XML 大小/DTD/实体拒绝、文本和事件标准化、缺失 `MsgId` 的稳定消息 ID、48 小时回复窗口边界和未配置发送传输时的 `uncertain` 回执；`server/router/platform.py` 新增服务号 GET/POST 回调，读取已启用且唯一的加密凭据，只有已确认渠道身份才入 durable queue，未绑定身份在入队前拒绝。
-  - 验证命令与结果：`server/.venv/bin/pytest server/test/unit_test/test_channel_framework.py server/test/unit_test/test_web_channel.py server/test/unit_test/test_delivery.py server/test/unit_test/test_platform_worker_retry.py server/test/unit_test/test_wechat_official_account.py -q`（`27 passed`）；Python 编译、`make platform_api_check` 和 `git diff --check` 通过；测试产物：`output/tests/m3-wechat-oa-01-official-account.json`。
-  - 遗留风险：真实微信服务号账号、OpenID 样本和身份绑定、AES/EncodingAESKey 加密回调、真实发送 API、回复窗口、重试/断线/进程重启联调仍未完成；本地实现不能替代 `M0-CHANNEL-01`、`M3-VERIFY-01` 和 `M3-QA-01` 的真实协议验收。
+  - 状态：`DONE`（2026-09-07，本地明文与 AES 安全模式协议适配器完成）；依赖 `M0-CHANNEL-01` 的真实联调部分仍保留。
+  - 完成证据：`server/integrations/channels/wechat_official_account.py` 支持 GET 明文回显和安全模式 `echostr` 解密、SHA-1 `signature/msg_signature` 常量时间比较、时间窗和进程内重放保护、AES-256-CBC/微信 32 字节填充、解密后 AppID 校验、XML 大小/DTD/实体拒绝、文本和事件标准化、缺失 `MsgId` 的稳定消息 ID、48 小时回复窗口边界和未配置发送传输时的 `uncertain` 回执；`server/router/platform.py` 支持 `encrypt_type=aes` 的 GET/POST，读取结构化 `token/appId/appSecret/encodingAesKey` 凭据，只有已确认渠道身份才入 durable queue。
+  - 验证命令与结果：`server/.venv/bin/pytest server/test/unit_test/test_wechat_official_account.py -q`（`10 passed`）；Python 编译和 `git diff --check` 通过。测试覆盖明文回归、加密 GET、加密 POST、错误 AppID、错误签名、填充/长度边界。
+  - 遗留风险：真实微信服务号账号、OpenID 样本和身份绑定、真实发送 API、回复窗口、重试/断线/进程重启联调仍未完成；本地实现不能替代 `M0-CHANNEL-01`、`M3-VERIFY-01` 和 `M3-QA-01` 的真实协议验收。
 
 ### 未处理 TODO
 
@@ -261,7 +261,7 @@
   - 测试产物：`output/tests/m3-cred-01-channel-credentials.json`。
   - 边界：本地完成加密存储和管理边界；真实微信/企微凭据、渠道验签协议和第三方联调仍由 `M3-VERIFY-01`、`M3-QA-01` 负责，不能以本地测试代替。
 - [ ] `M3-VERIFY-01` 实现各渠道验签、解密、时间窗和重放保护。
-  - 状态：`TODO`；依赖各渠道真实协议样本。
+  - 状态：`IN PROGRESS`（2026-09-07；微信服务号明文/AES 本地协议已覆盖，其它渠道和真实样本仍待接入）；依赖各渠道真实协议样本。
 - [x] `M3-IDENTITY-01` 实现渠道身份绑定、确认、解绑、过期和停用后的即时撤销。
   - 状态：`DONE`（2026-09-06，本地实现和专项回归）。
   - 完成证据：新增 `PlatformChannelIdentity` 表和 migration revision 9；`server/core/channel_identity.py` 生成高熵一次性 state、只保存 SHA-256 摘要、校验渠道/实例/原始发送者身份、过期即失效、确认后立即消费 state，并支持用户/管理员解绑、账号/企业范围撤销和 active 身份解析。`server/router/platform.py` 新增用户绑定/查询/撤销、管理员查询/撤销和仅接受 `X-Channel-Service-Token` 的内部确认 API；密码重置、停用、角色或企业范围变更会批量撤销渠道身份；审计只记录渠道身份 fingerprint，不记录 state、凭据或原始身份值。

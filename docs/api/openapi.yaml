@@ -244,6 +244,86 @@ paths:
               schema: { type: string, enum: [success] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channels/wechat-official-account/callback:
+    get:
+      tags: [Portal]
+      operationId: verifyWechatOfficialAccountFixedCallback
+      summary: Verify the single-instance WeChat Official Account callback endpoint
+      description: The fixed endpoint is enabled only when exactly one active official-account instance exists.
+      security: []
+      parameters:
+        - name: signature
+          in: query
+          required: false
+          schema: { type: string, maxLength: 40 }
+        - name: msg_signature
+          in: query
+          required: false
+          schema: { type: string, maxLength: 40 }
+        - name: timestamp
+          in: query
+          required: true
+          schema: { type: string }
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: echostr
+          in: query
+          required: true
+          schema: { type: string, maxLength: 524288 }
+        - name: encrypt_type
+          in: query
+          required: false
+          schema: { type: string, enum: [aes] }
+      responses:
+        '200':
+          description: Echo challenge
+          content:
+            text/plain:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Portal]
+      operationId: receiveWechatOfficialAccountFixedCallback
+      summary: Receive a signed callback through the single-instance endpoint
+      description: The fixed endpoint is enabled only when exactly one active official-account instance exists.
+      security: []
+      parameters:
+        - name: signature
+          in: query
+          required: false
+          schema: { type: string, maxLength: 40 }
+        - name: msg_signature
+          in: query
+          required: false
+          schema: { type: string, maxLength: 40 }
+        - name: timestamp
+          in: query
+          required: true
+          schema: { type: string }
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: encrypt_type
+          in: query
+          required: false
+          schema: { type: string, enum: [aes] }
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema: { type: string }
+      responses:
+        '200':
+          description: Callback accepted
+          content:
+            text/plain:
+              schema: { type: string, enum: [success] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/channel-identities:
     get:
       tags: [Portal]
