@@ -27,6 +27,8 @@
 
 部署进展（2026-09-07）：已将当前提交部署到火山引擎 `xdimspace-01:/opt/tencent-adp-gateway`；Compose 的 PostgreSQL、API、Worker 和反向代理均已启动，`/healthz` 与 `/readyz` 返回 200（schema revision 9）。已停止该服务器上的全部 `aifrelo-*` 容器，并删除 `dk_wordpress-wordpress-1`、`dk_wordpress-db-1` 及其绑定目录；WordPress 数据不可恢复。Nginx 已新增 `adp.xdimspace.cn` 的 HTTP 反代，HTTPS 证书和 DNS 切换仍待公网 IP/DNS 确认后处理。
 
+微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
+
 当前任务计数：`42 / 55` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。本轮已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；此前已完成 `M1-ADMIN-02` 的 Admin ADP Chat 迁移和真实浏览器验收，以及 `M3-FRAMEWORK-01`、`M3-WEB-E2E-01`、`M3-WECHAT-OA-01` 的本地框架和 Web/微信服务号适配器验证；`M3-CRED-01`、`M3-IDENTITY-01` 的专项回归、`M4-API-01` 的渠道身份契约补齐、`M4-PERF-01` 的本地并发基线和 `M4-DR-01` 的本地备份恢复演练已完成本地阶段；没有持续运行全量测试，验证均为一次性定向命令。
 
 ## M0：技术验证与风险收敛
