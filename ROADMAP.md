@@ -25,7 +25,7 @@
 
 当前验证基线：本轮部署基线已通过 Compose 配置解析、健康探针定向测试、Python 编译、OpenAPI/前端类型契约检查、渠道框架单测、Web PostgreSQL E2E、一次本地 PostgreSQL 备份恢复演练和 `git diff --check`；验证均为与变更直接相关的定向命令，不重复全量后端或浏览器测试。真实 ADP/M3/渠道联调仍不在本地验证范围内。
 
-部署进展（2026-09-07）：已将当前提交部署到火山引擎 `xdimspace-01:/opt/tencent-adp-gateway`；Compose 的 PostgreSQL、API、Worker 和反向代理均已启动，`/healthz` 与 `/readyz` 返回 200（schema revision 9）。已停止该服务器上的全部 `aifrelo-*` 容器，并删除 `dk_wordpress-wordpress-1`、`dk_wordpress-db-1` 及其绑定目录；WordPress 数据不可恢复。Nginx 已新增 `adp.xdimspace.cn` 的 HTTP 反代，HTTPS 证书和 DNS 切换仍待公网 IP/DNS 确认后处理。
+部署进展（2026-09-07）：已将当前提交部署到火山引擎 `xdimspace-01:/opt/tencent-adp-gateway`；服务器重启后重新构建应用镜像并执行迁移到 schema revision 10，Compose 的 PostgreSQL、API、Worker 和反向代理均已健康运行。公网 `https://adp.xdimspace.cn/healthz` 与 `/readyz` 均返回 200，首页直接返回新版静态 HTML；Let’s Encrypt 证书的 SAN 为 `adp.xdimspace.cn`，有效期至 2026-12-06。服务器 `.env`、PostgreSQL 数据卷和证书均未覆盖。已停止该服务器上的全部 `aifrelo-*` 容器，并删除 `dk_wordpress-wordpress-1`、`dk_wordpress-db-1` 及其绑定目录；WordPress 数据不可恢复。
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
