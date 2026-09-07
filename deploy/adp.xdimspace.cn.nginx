@@ -33,6 +33,18 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    location /assets/ {
+        proxy_pass http://127.0.0.1:18080/static/app/assets/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /favicon.png {
+        proxy_pass http://127.0.0.1:18080/static/app/favicon.png;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:18080;
         proxy_http_version 1.1;
