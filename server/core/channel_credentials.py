@@ -18,15 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import tagentic_config
-from model.platform import (
-    EnterpriseExternalAccount,
-    EnterpriseStatus,
-    IntegrationConnection,
-    IntegrationConnectionStatus,
-    PlatformChannelCredential,
-    PlatformChannelCredentialStatus,
-    PlatformEnterprise,
-)
+from model.platform import PlatformChannelCredential, PlatformChannelCredentialStatus
 
 
 class ChannelCredentialError(RuntimeError):
@@ -128,8 +120,8 @@ def serialize_credential(row: PlatformChannelCredential) -> dict[str, Any]:
     """Return metadata only; ciphertext and plaintext are intentionally absent."""
     return {
         "id": str(row.Id),
-        "enterpriseId": str(row.EnterpriseId),
-        "connectionId": str(row.ConnectionId),
+        "enterpriseId": str(row.EnterpriseId) if row.EnterpriseId else None,
+        "connectionId": str(row.ConnectionId) if row.ConnectionId else None,
         "channel": row.Channel,
         "channelInstanceId": row.ChannelInstanceId,
         "credentialMask": CREDENTIAL_MASK,
@@ -147,38 +139,33 @@ def serialize_credential(row: PlatformChannelCredential) -> dict[str, Any]:
 async def load_active_credential(
     db: AsyncSession,
     *,
-    enterprise_id: str,
-    connection_id: str,
     channel: str,
     channel_instance_id: str,
+    enterprise_id: str | None = None,
+    connection_id: str | None = None,
 ) -> str:
-    """Load and decrypt one active credential after checking all ownership edges.
+    """Load one active platform credential.
 
-    This function is intended for Worker/adapter code. It verifies the active
-    enterprise, connection, and enterprise binding before decrypting anything.
+    The enterprise and connection arguments are retained for callers compiled
+    against the old API, but platform channel credentials are no longer gated
+    by either enterprise bindings or ADP connection rows.
     """
-    row = (
-        await db.execute(
-            select(PlatformChannelCredential)
-            .join(PlatformEnterprise, PlatformEnterprise.Id == PlatformChannelCredential.EnterpriseId)
-            .join(IntegrationConnection, IntegrationConnection.Id == PlatformChannelCredential.ConnectionId)
-            .join(
-                EnterpriseExternalAccount,
-                (EnterpriseExternalAccount.EnterpriseId == PlatformChannelCredential.EnterpriseId)
-                & (EnterpriseExternalAccount.ConnectionId == PlatformChannelCredential.ConnectionId),
-            )
-            .where(
-                PlatformChannelCredential.EnterpriseId == enterprise_id,
-                PlatformChannelCredential.ConnectionId == connection_id,
-                PlatformChannelCredential.Channel == channel,
-                PlatformChannelCredential.ChannelInstanceId == channel_instance_id,
-                PlatformChannelCredential.Status == PlatformChannelCredentialStatus.ACTIVE,
-                PlatformEnterprise.Status == EnterpriseStatus.ACTIVE,
-                IntegrationConnection.Status == IntegrationConnectionStatus.ACTIVE,
-                EnterpriseExternalAccount.Status == IntegrationConnectionStatus.ACTIVE,
-            )
+    statement = select(PlatformChannelCredential).where(
+        PlatformChannelCredential.Channel == channel,
+        PlatformChannelCredential.ChannelInstanceId == channel_instance_id,
+        PlatformChannelCredential.Status == PlatformChannelCredentialStatus.ACTIVE,
+    )
+    if enterprise_id:
+        statement = statement.where(
+            (PlatformChannelCredential.EnterpriseId == enterprise_id)
+            | PlatformChannelCredential.EnterpriseId.is_(None)
         )
-    ).scalar_one_or_none()
+    if connection_id:
+        statement = statement.where(
+            (PlatformChannelCredential.ConnectionId == connection_id)
+            | PlatformChannelCredential.ConnectionId.is_(None)
+        )
+    row = (await db.execute(statement)).scalar_one_or_none()
     if row is None:
         raise ChannelCredentialUnavailableError("active channel credential is unavailable")
     return decrypt_credential(row)
@@ -197,21 +184,10 @@ async def load_active_channel_instance_credential(
     closed instead of selecting an arbitrary tenant credential.
     """
     rows = list((await db.execute(
-        select(PlatformChannelCredential)
-        .join(PlatformEnterprise, PlatformEnterprise.Id == PlatformChannelCredential.EnterpriseId)
-        .join(IntegrationConnection, IntegrationConnection.Id == PlatformChannelCredential.ConnectionId)
-        .join(
-            EnterpriseExternalAccount,
-            (EnterpriseExternalAccount.EnterpriseId == PlatformChannelCredential.EnterpriseId)
-            & (EnterpriseExternalAccount.ConnectionId == PlatformChannelCredential.ConnectionId),
-        )
-        .where(
+        select(PlatformChannelCredential).where(
             PlatformChannelCredential.Channel == channel,
             PlatformChannelCredential.ChannelInstanceId == channel_instance_id,
             PlatformChannelCredential.Status == PlatformChannelCredentialStatus.ACTIVE,
-            PlatformEnterprise.Status == EnterpriseStatus.ACTIVE,
-            IntegrationConnection.Status == IntegrationConnectionStatus.ACTIVE,
-            EnterpriseExternalAccount.Status == IntegrationConnectionStatus.ACTIVE,
         )
     )).scalars().all())
     if len(rows) != 1:
@@ -228,20 +204,9 @@ async def load_active_channel_credentials(
     keeps routing decisions explicit and avoids silently selecting a tenant.
     """
     rows = list((await db.execute(
-        select(PlatformChannelCredential)
-        .join(PlatformEnterprise, PlatformEnterprise.Id == PlatformChannelCredential.EnterpriseId)
-        .join(IntegrationConnection, IntegrationConnection.Id == PlatformChannelCredential.ConnectionId)
-        .join(
-            EnterpriseExternalAccount,
-            (EnterpriseExternalAccount.EnterpriseId == PlatformChannelCredential.EnterpriseId)
-            & (EnterpriseExternalAccount.ConnectionId == PlatformChannelCredential.ConnectionId),
-        )
-        .where(
+        select(PlatformChannelCredential).where(
             PlatformChannelCredential.Channel == channel,
             PlatformChannelCredential.Status == PlatformChannelCredentialStatus.ACTIVE,
-            PlatformEnterprise.Status == EnterpriseStatus.ACTIVE,
-            IntegrationConnection.Status == IntegrationConnectionStatus.ACTIVE,
-            EnterpriseExternalAccount.Status == IntegrationConnectionStatus.ACTIVE,
         )
     )).scalars().all())
     return [(str(row.ChannelInstanceId), decrypt_credential(row)) for row in rows]

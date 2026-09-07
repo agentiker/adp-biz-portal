@@ -138,18 +138,70 @@ async def test_worker_scope_requires_active_credential():
         )
 
 
+@pytest.mark.asyncio
+async def test_worker_can_load_platform_credential_without_enterprise_or_connection():
+    row = _row(encrypt_credential("platform-secret"))
+    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: row)))
+
+    assert await load_active_credential(
+        db,
+        channel="webhook",
+        channel_instance_id="instance-1",
+    ) == "platform-secret"
+
+
 def test_admin_channel_credential_api_requires_manage_permission():
     import importlib
 
+    from sanic import Sanic
     from app_factory import create_app_with_configs
 
-    create_app_with_configs()
+    if not Sanic._app_registry:
+        create_app_with_configs()
     router = importlib.import_module("router.platform")
     request = SimpleNamespace(ctx=SimpleNamespace(platform=SimpleNamespace(permissions=frozenset())))
     with pytest.raises(router.PlatformForbidden):
         import asyncio
 
         asyncio.run(router.AdminChannelCredentialListApi.get.__wrapped__(router.AdminChannelCredentialListApi(), request))
+
+
+def test_adp_config_status_requires_single_complete_env_application(monkeypatch):
+    import importlib
+
+    router = importlib.import_module("router.platform")
+    previous = (
+        tagentic_config.APP_CONFIGS,
+        tagentic_config.TC_SECRET_APPID,
+        tagentic_config.TC_SECRET_ID,
+        tagentic_config.TC_SECRET_KEY,
+    )
+    try:
+        tagentic_config.APP_CONFIGS = [{"ApplicationId": "app-1", "Vendor": "ChinaTencentADP", "AppKey": "app-key"}]
+        tagentic_config.TC_SECRET_APPID = "appid"
+        tagentic_config.TC_SECRET_ID = "secret-id"
+        tagentic_config.TC_SECRET_KEY = "secret-key"
+        complete = router._adp_config_status()
+        assert complete["configured"] is True
+        serialized = json.dumps(complete, ensure_ascii=False)
+        assert "secret-id" not in serialized
+        assert "secret-key" not in serialized
+
+        tagentic_config.TC_SECRET_KEY = ""
+        assert router._adp_config_status()["configured"] is False
+        tagentic_config.TC_SECRET_KEY = "secret-key"
+        tagentic_config.APP_CONFIGS = [
+            {"ApplicationId": "app-1", "Vendor": "ChinaTencentADP", "AppKey": "app-key"},
+            {"ApplicationId": "app-2", "Vendor": "ChinaTencentADP", "AppKey": "app-key-2"},
+        ]
+        assert router._adp_config_status()["configured"] is False
+    finally:
+        (
+            tagentic_config.APP_CONFIGS,
+            tagentic_config.TC_SECRET_APPID,
+            tagentic_config.TC_SECRET_ID,
+            tagentic_config.TC_SECRET_KEY,
+        ) = previous
 
 
 def test_write_evidence():

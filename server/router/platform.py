@@ -1832,27 +1832,6 @@ def _required_channel_text(body: dict[str, Any], field: str, max_length: int) ->
     return value.strip()
 
 
-async def _load_active_credential_scope(request: Request, enterprise_id: str, connection_id: str) -> tuple[PlatformEnterprise, IntegrationConnection]:
-    enterprise = await request.ctx.db.get(PlatformEnterprise, enterprise_id)
-    connection = await request.ctx.db.get(IntegrationConnection, connection_id)
-    if enterprise is None or enterprise.Status != EnterpriseStatus.ACTIVE:
-        raise PlatformNotFound("企业不存在或未启用")
-    if connection is None or connection.Status != IntegrationConnectionStatus.ACTIVE:
-        raise PlatformNotFound("连接不存在或未启用")
-    binding = (
-        await request.ctx.db.execute(
-            select(EnterpriseExternalAccount).where(
-                EnterpriseExternalAccount.EnterpriseId == enterprise.Id,
-                EnterpriseExternalAccount.ConnectionId == connection.Id,
-                EnterpriseExternalAccount.Status == IntegrationConnectionStatus.ACTIVE,
-            )
-        )
-    ).scalar_one_or_none()
-    if binding is None:
-        raise PlatformNotFound("企业与连接的有效绑定不存在")
-    return enterprise, connection
-
-
 def _serialize_admin_credential(row: PlatformChannelCredential, enterprise: PlatformEnterprise | None = None, connection: IntegrationConnection | None = None) -> dict[str, Any]:
     payload = serialize_credential(row)
     if enterprise is not None:
@@ -1872,53 +1851,70 @@ def _encrypt_for_admin(value: Any):
         raise PlatformBadRequest("渠道凭据暂不可保存，请检查加密密钥配置") from exc
 
 
+def _adp_config_status() -> dict[str, Any]:
+    """Return a non-secret readiness view of the single platform ADP app."""
+    configs = list(tagentic_config.APP_CONFIGS or [])
+    app_config = configs[0] if len(configs) == 1 and isinstance(configs[0], dict) else {}
+    application_id = str(app_config.get("ApplicationId") or "").strip()
+    vendor = str(app_config.get("Vendor") or "").strip()
+    app_key = str(app_config.get("AppKey") or "").strip()
+    tc_secret_appid = str(tagentic_config.TC_SECRET_APPID or "").strip()
+    tc_secret_id = str(tagentic_config.TC_SECRET_ID or "").strip()
+    tc_secret_key = str(tagentic_config.TC_SECRET_KEY or "").strip()
+    return {
+        "configured": bool(
+            len(configs) == 1
+            and application_id
+            and app_key
+            and tc_secret_appid
+            and tc_secret_id
+            and tc_secret_key
+        ),
+        "applicationCount": len(configs),
+        "applicationId": application_id or None,
+        "vendor": vendor or None,
+        "appKeyConfigured": bool(app_key),
+        "tcSecretAppIdConfigured": bool(tc_secret_appid),
+        "tcSecretIdConfigured": bool(tc_secret_id),
+        "tcSecretKeyConfigured": bool(tc_secret_key),
+        "source": ".env",
+    }
+
+
 class AdminChannelCredentialListApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
         require_permission(_context(request), "platform.manage")
-        statement = (
-            select(PlatformChannelCredential, PlatformEnterprise, IntegrationConnection)
-            .join(PlatformEnterprise, PlatformEnterprise.Id == PlatformChannelCredential.EnterpriseId)
-            .join(IntegrationConnection, IntegrationConnection.Id == PlatformChannelCredential.ConnectionId)
-            .order_by(PlatformChannelCredential.UpdatedAt.desc())
-        )
-        enterprise_id = request.args.get("enterpriseId")
-        if enterprise_id:
-            try:
-                enterprise_id = str(uuid.UUID(enterprise_id))
-            except ValueError as exc:
-                raise PlatformBadRequest("enterpriseId格式不正确") from exc
-            statement = statement.where(PlatformChannelCredential.EnterpriseId == enterprise_id)
-        rows = (await request.ctx.db.execute(statement)).all()
-        return json([_serialize_admin_credential(row, enterprise, connection) for row, enterprise, connection in rows])
+        rows = (await request.ctx.db.execute(
+            select(PlatformChannelCredential).order_by(PlatformChannelCredential.UpdatedAt.desc())
+        )).scalars().all()
+        payload = []
+        for row in rows:
+            enterprise = await request.ctx.db.get(PlatformEnterprise, row.EnterpriseId) if row.EnterpriseId else None
+            connection = await request.ctx.db.get(IntegrationConnection, row.ConnectionId) if row.ConnectionId else None
+            payload.append(_serialize_admin_credential(row, enterprise, connection))
+        return json(payload)
 
     @platform_required
     async def post(self, request: Request):
         require_permission(_context(request), "platform.manage")
         body = _body(request)
-        enterprise_id = _required_uuid(body, "enterpriseId")
-        connection_id = _required_uuid(body, "connectionId")
         channel = _required_channel_text(body, "channel", 48)
         channel_instance_id = _required_channel_text(body, "channelInstanceId", 128)
         if "credential" not in body:
             raise PlatformBadRequest("credential为必填项")
-        enterprise, connection = await _load_active_credential_scope(request, enterprise_id, connection_id)
         existing = (
             await request.ctx.db.execute(
                 select(PlatformChannelCredential).where(
-                    PlatformChannelCredential.EnterpriseId == enterprise.Id,
-                    PlatformChannelCredential.ConnectionId == connection.Id,
                     PlatformChannelCredential.Channel == channel,
                     PlatformChannelCredential.ChannelInstanceId == channel_instance_id,
                 )
             )
         ).scalar_one_or_none()
         if existing is not None:
-            raise PlatformBadRequest("该企业连接的渠道凭据已存在，请使用轮换接口")
+            raise PlatformBadRequest("该平台渠道实例已存在，请使用轮换接口")
         encrypted = _encrypt_for_admin(body["credential"])
         row = PlatformChannelCredential(
-            EnterpriseId=enterprise.Id,
-            ConnectionId=connection.Id,
             Channel=channel,
             ChannelInstanceId=channel_instance_id,
             Ciphertext=encrypted.ciphertext,
@@ -1934,9 +1930,9 @@ class AdminChannelCredentialListApi(HTTPMethodView):
             action="channel.credential.create",
             target_type="platform_channel_credential",
             target_id=str(row.Id),
-            metadata={"enterpriseId": str(enterprise.Id), "connectionId": str(connection.Id), "channel": channel, "version": 1, "keyVersion": encrypted.key_version},
+            metadata={"channel": channel, "channelInstanceId": channel_instance_id, "version": 1, "keyVersion": encrypted.key_version},
         )
-        return json(_serialize_admin_credential(row, enterprise, connection), status=201)
+        return json(_serialize_admin_credential(row), status=201)
 
 
 class AdminChannelCredentialRotateApi(HTTPMethodView):
@@ -1951,7 +1947,6 @@ class AdminChannelCredentialRotateApi(HTTPMethodView):
         body = _body(request)
         if "credential" not in body:
             raise PlatformBadRequest("credential为必填项")
-        enterprise, connection = await _load_active_credential_scope(request, str(row.EnterpriseId), str(row.ConnectionId))
         credential_value = body["credential"]
         # Token-only rotation must not silently downgrade an encrypted WeChat
         # instance back to plaintext mode. Preserve the existing non-token
@@ -1978,9 +1973,9 @@ class AdminChannelCredentialRotateApi(HTTPMethodView):
             action="channel.credential.rotate",
             target_type="platform_channel_credential",
             target_id=str(row.Id),
-            metadata={"enterpriseId": str(row.EnterpriseId), "connectionId": str(row.ConnectionId), "channel": row.Channel, "version": row.Version, "keyVersion": row.KeyVersion},
+            metadata={"channel": row.Channel, "channelInstanceId": row.ChannelInstanceId, "version": row.Version, "keyVersion": row.KeyVersion},
         )
-        return json(_serialize_admin_credential(row, enterprise, connection))
+        return json(_serialize_admin_credential(row))
 
 
 class AdminChannelCredentialDisableApi(HTTPMethodView):
@@ -1997,7 +1992,7 @@ class AdminChannelCredentialDisableApi(HTTPMethodView):
             action="channel.credential.disable",
             target_type="platform_channel_credential",
             target_id=str(row.Id),
-            metadata={"enterpriseId": str(row.EnterpriseId), "connectionId": str(row.ConnectionId), "channel": row.Channel, "version": row.Version},
+            metadata={"channel": row.Channel, "channelInstanceId": row.ChannelInstanceId, "version": row.Version},
         )
         return json(_serialize_admin_credential(row))
 
@@ -2020,68 +2015,14 @@ class AdminBindingListApi(HTTPMethodView):
     async def post(self, request: Request):
         context = _context(request)
         require_permission(context, "platform.manage")
-        body = _body(request)
-        application_id = str(body.get("applicationId") or "").strip()
-        upstream_app_id = str(body.get("upstreamAppId") or "").strip()
-        enterprise_id = str(body.get("enterpriseId") or "").strip()
-        workspace_id = str(body.get("workspaceId") or "").strip()
-        external_account_id = str(body.get("externalAccountId") or "").strip()
-        if not application_id or not upstream_app_id or not enterprise_id or not workspace_id or not external_account_id:
-            raise PlatformBadRequest("applicationId、upstreamAppId、enterpriseId、workspaceId、externalAccountId 均为必填")
-        if application_id not in app.apps:
-            raise PlatformNotFound("应用不存在或未配置")
-        enterprise = await request.ctx.db.get(PlatformEnterprise, enterprise_id)
-        if enterprise is None or enterprise.Status != EnterpriseStatus.ACTIVE:
-            raise PlatformNotFound("企业不存在或未启用")
-        connection = (
-            await request.ctx.db.execute(
-                select(IntegrationConnection).where(IntegrationConnection.ApplicationId == application_id)
-            )
-        ).scalar_one_or_none()
-        if connection is None:
-            vendor = str(body.get("vendor") or getattr(app.apps[application_id], "config", {}).get("Vendor") or "unknown")[:64]
-            connection = IntegrationConnection(
-                ApplicationId=application_id,
-                UpstreamAppId=upstream_app_id,
-                Vendor=vendor,
-                Status=IntegrationConnectionStatus.ACTIVE,
-            )
-            request.ctx.db.add(connection)
-            await request.ctx.db.flush()
-        else:
-            connection.UpstreamAppId = upstream_app_id
-            connection.Status = IntegrationConnectionStatus.ACTIVE
-            request.ctx.db.add(connection)
+        raise PlatformBadRequest("ADP 应用是平台级单例，配置来自服务器 .env，不支持企业绑定")
 
-        external = (
-            await request.ctx.db.execute(
-                select(EnterpriseExternalAccount).where(
-                    EnterpriseExternalAccount.EnterpriseId == enterprise.Id,
-                    EnterpriseExternalAccount.ConnectionId == connection.Id,
-                )
-            )
-        ).scalar_one_or_none()
-        if external is None:
-            external = EnterpriseExternalAccount(
-                EnterpriseId=enterprise.Id,
-                ConnectionId=connection.Id,
-                ExternalAccountId=external_account_id,
-                WorkspaceId=workspace_id,
-                Status=IntegrationConnectionStatus.ACTIVE,
-            )
-        else:
-            external.ExternalAccountId = external_account_id
-            external.WorkspaceId = workspace_id
-            external.Status = IntegrationConnectionStatus.ACTIVE
-        request.ctx.db.add(external)
-        await _commit_audit(
-            request,
-            action="integration.binding.upsert",
-            target_type="enterprise_external_account",
-            target_id=str(external.Id),
-            metadata={"enterpriseId": str(enterprise.Id), "applicationId": application_id, "workspaceId": workspace_id},
-        )
-        return json(_serialize_binding(connection, external, enterprise), status=201)
+
+class AdminAdpConfigApi(HTTPMethodView):
+    @platform_required
+    async def get(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        return json(_adp_config_status())
 
 
 class AdminBindingDisableApi(HTTPMethodView):
@@ -2136,6 +2077,7 @@ app.add_route(AdminConfigApi.as_view(), "/api/v1/admin/config")
 app.add_route(AdminConfigDraftApi.as_view(), "/api/v1/admin/config/draft")
 app.add_route(AdminConfigPublishApi.as_view(), "/api/v1/admin/config/publish")
 app.add_route(AdminConfigRollbackApi.as_view(), "/api/v1/admin/config/rollback")
+app.add_route(AdminAdpConfigApi.as_view(), "/api/v1/admin/adp-config")
 app.add_route(AdminEnterpriseListApi.as_view(), "/api/v1/admin/enterprises")
 app.add_route(AdminUserListApi.as_view(), "/api/v1/admin/users")
 app.add_route(AdminUserResetPasswordApi.as_view(), "/api/v1/admin/users/<user_id:str>/reset-password")

@@ -499,6 +499,20 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/adp-config:
+    get:
+      tags: [Administration]
+      operationId: getAdminAdpConfig
+      summary: Read platform ADP configuration status
+      description: Returns only masked configuration status from the server environment; secret values are never exposed.
+      responses:
+        '200':
+          description: Platform ADP configuration status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdpConfigStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/admin/enterprises:
     get:
       tags: [Administration]
@@ -738,8 +752,6 @@ paths:
       operationId: listChannelCredentials
       summary: List masked channel credentials
       description: Returns credential metadata only; ciphertext and plaintext are never returned.
-      parameters:
-        - $ref: '#/components/parameters/EnterpriseIdQuery'
       responses:
         '200':
           description: Masked channel credential metadata
@@ -1421,13 +1433,19 @@ components:
         status: { type: string, enum: [active, disabled] }
     ChannelCredential:
       type: object
-      required: [id, enterpriseId, connectionId, channel, channelInstanceId, credentialMask, version, keyVersion, fingerprint, status, createdAt, updatedAt, rotatedAt, expiresAt]
+      required: [id, channel, channelInstanceId, credentialMask, version, keyVersion, fingerprint, status, createdAt, updatedAt, rotatedAt, expiresAt]
       properties:
         id: { type: string, format: uuid }
-        enterpriseId: { type: string, format: uuid }
+        enterpriseId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
         enterpriseName: { type: string }
         customerCode: { type: string }
-        connectionId: { type: string, format: uuid }
+        connectionId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
         applicationId: { type: string }
         vendor: { type: string }
         channel: { type: string, maxLength: 48 }
@@ -1455,13 +1473,30 @@ components:
       description: Secret value accepted by the server; never present in responses.
     CreateChannelCredentialRequest:
       type: object
-      required: [enterpriseId, connectionId, channel, channelInstanceId, credential]
+      required: [channel, channelInstanceId, credential]
       properties:
-        enterpriseId: { type: string, format: uuid }
-        connectionId: { type: string, format: uuid }
         channel: { type: string, minLength: 1, maxLength: 48 }
         channelInstanceId: { type: string, minLength: 1, maxLength: 128 }
         credential: { $ref: '#/components/schemas/ChannelCredentialValue' }
+    AdpConfigStatus:
+      type: object
+      required: [configured, applicationCount, applicationId, vendor, appKeyConfigured, tcSecretAppIdConfigured, tcSecretIdConfigured, tcSecretKeyConfigured, source]
+      properties:
+        configured: { type: boolean }
+        applicationCount: { type: integer, minimum: 0 }
+        applicationId:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        vendor:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        appKeyConfigured: { type: boolean }
+        tcSecretAppIdConfigured: { type: boolean }
+        tcSecretIdConfigured: { type: boolean }
+        tcSecretKeyConfigured: { type: boolean }
+        source: { type: string }
     RotateChannelCredentialRequest:
       type: object
       required: [credential]

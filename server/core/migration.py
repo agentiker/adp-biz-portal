@@ -73,7 +73,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 9
+    CURRENT_PLATFORM_SCHEMA_VERSION = 10
     REVISIONS = (
         MigrationRevision(
             1,
@@ -146,6 +146,11 @@ class Migration:
             9,
             "platform_channel_identity_binding_schema",
             (PlatformChannelIdentity.__tablename__,),
+        ),
+        MigrationRevision(
+            10,
+            "platform_channel_scope_schema",
+            (),
         ),
     )
 
@@ -313,6 +318,90 @@ class Migration:
             )
 
     @classmethod
+    async def _apply_revision_10(cls, db: AsyncSession) -> None:
+        """Make channel credentials platform-owned without losing old data silently.
+
+        Revision 8 allowed the same channel instance to be repeated per enterprise.
+        A platform-owned instance cannot represent that ambiguity, so migration
+        stops with an actionable error instead of choosing a credential. Existing
+        ownership metadata is cleared only after the duplicate check succeeds.
+        """
+        table = PlatformChannelCredential.__tablename__
+        await db.execute(text(f'ALTER TABLE "{table}" ALTER COLUMN "EnterpriseId" DROP NOT NULL'))
+        await db.execute(text(f'ALTER TABLE "{table}" ALTER COLUMN "ConnectionId" DROP NOT NULL'))
+
+        duplicates = (
+            await db.execute(
+                text(
+                    f'SELECT "Channel", "ChannelInstanceId", COUNT(*) AS "count" '
+                    f'FROM "{table}" '
+                    f'GROUP BY "Channel", "ChannelInstanceId" '
+                    f'HAVING COUNT(*) > 1 '
+                    f'ORDER BY "Channel", "ChannelInstanceId"'
+                )
+            )
+        ).all()
+        if duplicates:
+            sample = ", ".join(
+                f"{channel}/{instance} ({count} rows)"
+                for channel, instance, count in duplicates[:5]
+            )
+            suffix = "" if len(duplicates) <= 5 else f"; and {len(duplicates) - 5} more"
+            raise MigrationError(
+                "Cannot make channel credentials platform-owned because duplicate "
+                f"channel instances require manual merge: {sample}{suffix}"
+            )
+
+        # New routing never uses enterprise or connection ownership. Clearing
+        # these legacy references also prevents stale deletes from affecting a
+        # platform credential after the foreign keys are changed to SET NULL.
+        await db.execute(
+            text(
+                f'UPDATE "{table}" SET "EnterpriseId" = NULL, "ConnectionId" = NULL '
+                f'WHERE "EnterpriseId" IS NOT NULL OR "ConnectionId" IS NOT NULL'
+            )
+        )
+
+        foreign_keys = (
+            await db.execute(
+                text(
+                    "SELECT DISTINCT tc.constraint_name "
+                    "FROM information_schema.table_constraints tc "
+                    "JOIN information_schema.key_column_usage kcu "
+                    "  ON tc.constraint_schema = kcu.constraint_schema "
+                    " AND tc.constraint_name = kcu.constraint_name "
+                    "WHERE tc.table_schema = current_schema() "
+                    "  AND tc.table_name = :table_name "
+                    "  AND tc.constraint_type = 'FOREIGN KEY' "
+                    "  AND kcu.column_name IN ('EnterpriseId', 'ConnectionId')"
+                ),
+                {"table_name": table},
+            )
+        ).scalars().all()
+        for constraint_name in foreign_keys:
+            quoted_name = str(constraint_name).replace('"', '""')
+            await db.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{quoted_name}"'))
+
+        await db.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS "unique_platform_channel_credential"'))
+        await db.execute(text(f'DROP INDEX IF EXISTS "idx_platform_channel_credential_lookup"'))
+        await db.execute(text(
+            f'ALTER TABLE "{table}" ADD CONSTRAINT "unique_platform_channel_credential" '
+            f'UNIQUE ("Channel", "ChannelInstanceId")'
+        ))
+        await db.execute(text(
+            f'ALTER TABLE "{table}" ADD CONSTRAINT "fk_platform_channel_credential_enterprise" '
+            f'FOREIGN KEY ("EnterpriseId") REFERENCES "{PlatformEnterprise.__tablename__}" ("Id") ON DELETE SET NULL'
+        ))
+        await db.execute(text(
+            f'ALTER TABLE "{table}" ADD CONSTRAINT "fk_platform_channel_credential_connection" '
+            f'FOREIGN KEY ("ConnectionId") REFERENCES "{IntegrationConnection.__tablename__}" ("Id") ON DELETE SET NULL'
+        ))
+        await db.execute(text(
+            f'CREATE INDEX "idx_platform_channel_credential_lookup" '
+            f'ON "{table}" ("Channel", "ChannelInstanceId", "Status")'
+        ))
+
+    @classmethod
     async def _drop_revision_tables(
         cls,
         db: AsyncSession,
@@ -373,6 +462,8 @@ class Migration:
                 if revision.version <= current or revision.version > target:
                     continue
                 await cls._create_revision_tables(db, revision)
+                if revision.version == 10:
+                    await cls._apply_revision_10(db)
                 record = records.get(revision.version)
                 if record is None:
                     record = PlatformMigration(

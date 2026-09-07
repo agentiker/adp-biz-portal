@@ -29,7 +29,7 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
-当前任务计数：`43 / 56` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。本轮完成 Admin 的“ADP 应用绑定”配置入口：可选择企业并创建绑定，绑定保存后可直接在渠道管理中配置微信服务号；前端类型检查和生产构建通过。此前已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`44 / 57` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。此前已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -250,13 +250,20 @@
   - 遗留边界：微信服务号真实账号/回调、AES/EncodingAESKey、真实客服消息发送和多实例持久化重放保护仍未完成；微信客服与企微适配器仍为待接入，不能把本地管理页或凭据保存视为真实渠道已上线。
   - 设计：`docs/plans/2026-09-06-admin-channel-management-design.md`。
 
+- [x] `M3-PLATFORM-SCOPE-01` 将 ADP 应用和渠道实例纠正为平台级配置，移除配置阶段的企业绑定依赖。
+  - 状态：`DONE`（2026-09-07）；修正此前 `M3-ADMIN-01` 中“先选择企业应用绑定再创建渠道”的错误范围。
+  - 目标：一期只从服务器 `.env` 的 `TC_SECRET_APPID`、`TC_SECRET_ID`、`TC_SECRET_KEY`、`APP_CONFIGS` 读取唯一 ADP 应用；平台管理员创建渠道实例时只配置渠道、实例 ID 和渠道凭据，不选择企业或 ADP 连接。
+  - 鉴权边界：第三方消息先由平台级渠道凭据验签和标准化，再解析渠道身份，并校验平台用户、企业访问范围和业务权限，最后由平台转发到唯一 ADP 应用；渠道配置本身不授予任何企业数据权限。
+  - 完成证据：`server/model/platform.py`、`server/core/channel_credentials.py`、`server/core/migration.py`、`server/router/platform.py` 将渠道凭据归属改为平台级；revision 10 对重复 `Channel + ChannelInstanceId` 停止迁移并提示人工合并，重建 `ON DELETE SET NULL` 外键；Admin 导航与配置页展示平台唯一 ADP 应用，`docs/api/openapi.yaml` 和生成类型移除新建渠道的企业/连接必填字段并新增脱敏 ADP 状态接口；`server/test/unit_test/test_channel_credentials.py` 覆盖无企业/连接读取、全量密钥完整性、多应用拒绝和密钥不回显。
+  - 验收：数据库迁移保留 `IntegrationConnection`、`EnterpriseExternalAccount` 和旧 binding 路由兼容性，但新渠道凭据不依赖企业/连接；Admin、服务端 API、OpenAPI 和生成类型一致；全局实例唯一、无绑定读取和 ADP 配置脱敏状态测试通过。验证结果：`server/.venv/bin/pytest server/test/unit_test/test_wechat_official_account.py server/test/unit_test/test_channel_credentials.py server/test/unit_test/test_platform_migration.py -q`（23 passed）、`npm run type-check`、`npm run build-only`、OpenAPI 校验、生成类型 `--check`、Python 编译和 `git diff --check` 均通过。
+
 - [ ] `M3-WECHAT-CS-01` 实现微信客服适配器：通知接收、同步游标、消息去重和客服回复协议。
   - 状态：`TODO`；依赖 `M0-CHANNEL-01`。
 - [ ] `M3-WECOM-01` 实现企业微信智能机器人适配器，选择并实现长连接或 HTTPS 回调模式。
   - 状态：`TODO`；依赖 `M0-CHANNEL-01`。
 - [x] `M3-CRED-01` 实现渠道凭据加密存储、轮换、最小权限读取和脱敏展示。
   - 状态：`DONE`（2026-09-06，本地实现和专项回归）
-  - 完成证据：新增 `platform_channel_credential` 表和 revision 8；`server/core/channel_credentials.py` 使用 Fernet 认证加密、当前密钥写入、旧密钥只读轮换、指纹校验和缺失/非法密钥 fail closed；`GET/POST /api/v1/admin/channel-credentials`、`POST .../<id>/rotate`、`POST .../<id>/disable` 均要求 `platform.manage`，响应只返回掩码和元数据；企业、连接、有效绑定和渠道实例由服务端同时校验；创建/轮换/停用写入不含凭据内容的审计事件。
+  - 完成证据：新增 `platform_channel_credential` 表和 revision 8；`server/core/channel_credentials.py` 使用 Fernet 认证加密、当前密钥写入、旧密钥只读轮换、指纹校验和缺失/非法密钥 fail closed；`GET/POST /api/v1/admin/channel-credentials`、`POST .../<id>/rotate`、`POST .../<id>/disable` 均要求 `platform.manage`，响应只返回掩码和元数据；新平台路径只校验渠道实例唯一性，旧企业/连接字段和 binding 表仅保留兼容序列化与 legacy 路由；创建/轮换/停用写入不含凭据内容的审计事件。
   - 验证命令与结果：`server/.venv/bin/pytest server/test/unit_test/test_channel_credentials.py -q`，`7 passed`；`server/.venv/bin/python -m py_compile server/core/channel_credentials.py server/router/platform.py`、`git diff --check` 通过。
   - 测试产物：`output/tests/m3-cred-01-channel-credentials.json`。
   - 边界：本地完成加密存储和管理边界；真实微信/企微凭据、渠道验签协议和第三方联调仍由 `M3-VERIFY-01`、`M3-QA-01` 负责，不能以本地测试代替。
