@@ -2053,10 +2053,11 @@ app.add_route(
     WechatOfficialAccountCallbackApi.as_view(),
     "/api/v1/channels/wechat-official-account/<channel_instance_id:str>/callback",
 )
-app.add_route(WechatOfficialAccountFixedCallbackApi.as_view(), "/wechat/callback")
+app.add_route(WechatOfficialAccountFixedCallbackApi.as_view(), "/wechat/callback", name="wechat_fixed_callback")
 app.add_route(
     WechatOfficialAccountFixedCallbackApi.as_view(),
     "/api/v1/channels/wechat-official-account/callback",
+    name="wechat_official_account_fixed_callback",
 )
 app.add_route(ChannelIdentityBindApi.as_view(), "/api/v1/channel-identities")
 app.add_route(ChannelIdentityRevokeApi.as_view(), "/api/v1/channel-identities/<identity_id:str>/revoke")
