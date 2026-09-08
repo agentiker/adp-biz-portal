@@ -102,6 +102,17 @@ class TCADPConfig(BaseSettings):
         default="",
     )
 
+    PLATFORM_PUBLIC_BASE_URL: str = Field(
+        description=(
+            "Public HTTPS origin of the customer portal, used to build links a "
+            "channel message can open (for example a WeChat rich card). Leave "
+            "empty to disable link-bearing messages instead of emitting a "
+            "localhost URL a customer cannot open."
+        ),
+        default="",
+        max_length=255,
+    )
+
     PLATFORM_CHANNEL_SERVICE_TOKEN: str = Field(
         description=(
             "High-entropy service token required by trusted channel adapters to confirm "

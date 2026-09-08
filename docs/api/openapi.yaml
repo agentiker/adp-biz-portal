@@ -949,10 +949,17 @@ components:
         updatedAt: { type: string, format: date-time }
     StartChannelIdentityBindingRequest:
       type: object
-      required: [channel, channelInstanceId]
+      required: [channel]
       properties:
         channel: { type: string, minLength: 1, maxLength: 48 }
-        channelInstanceId: { type: string, minLength: 1, maxLength: 128 }
+        channelInstanceId:
+          description: >-
+            Optional. Omit it when the channel has exactly one active instance;
+            the server resolves it so a customer never has to invent an instance
+            ID. Ambiguity fails closed and asks for an explicit instance.
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 128 }
+            - { type: 'null' }
         externalIdentityId:
           description: >-
             Optional. Omit it when the page cannot learn the sender's own

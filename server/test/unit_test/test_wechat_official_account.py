@@ -202,7 +202,10 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
         body=_xml(msg_id="route-message", create_time=now),
     )
     response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route")
-    assert response.body == b"success"
+    # The callback answers inside the provider's synchronous window so the
+    # sender sees feedback; the answer itself streams in afterwards.
+    assert response.status == 200
+    assert "正在为你查询" in response.body.decode()
     assert captured["message"].external_message_id == "route-message"
     assert captured["payload"]["platformUserId"] == "user-id"
     assert captured["payload"]["enterpriseId"] is None
@@ -291,7 +294,10 @@ async def test_public_callback_accepts_encrypted_xml(monkeypatch):
         body=(f"<xml><Encrypt><![CDATA[{encrypted}]]></Encrypt></xml>").encode(),
     )
     response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-aes")
-    assert response.body == b"success"
+    body = response.body.decode()
+    assert response.status == 200
+    # An encrypted callback must be acknowledged with an encrypted reply.
+    assert "<Encrypt>" in body and "<MsgSignature>" in body
     assert captured["message"].external_message_id == "route-aes-message"
     assert captured["payload"]["enterpriseId"] is None
     request.ctx.db.commit.assert_awaited_once()

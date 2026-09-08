@@ -16,8 +16,18 @@ import {
   ErrorCircleIcon,
 } from 'tdesign-icons-vue-next'
 import PlatformShell from '@/components/PlatformShell.vue'
-import { getPortalOverview, getPortalSession, getPortalSessions, getWebInboundStatus, lookupShipment, submitWebInbound } from '@/platform/platformService'
-import type { PortalOverview, PortalSession, ShipmentResult } from '@/platform/types'
+import {
+  getPortalOverview,
+  getPortalSession,
+  getPortalSessions,
+  getWebInboundStatus,
+  listMyChannelIdentities,
+  lookupShipment,
+  revokeMyChannelIdentity,
+  startChannelIdentityBinding,
+  submitWebInbound,
+} from '@/platform/platformService'
+import type { ChannelIdentity, PortalOverview, PortalSession, ShipmentResult } from '@/platform/types'
 import { logout } from '@/service/login'
 import { useUserStore } from '@/stores/user'
 
@@ -35,6 +45,68 @@ const queryError = ref('')
 const lookupNotice = ref('')
 const activeConversationId = ref<string | null>(null)
 const selectedEnterpriseId = ref<string>('')
+
+// Channel binding. The one-time code is shown once and must be sent from the
+// customer's own channel account; the server never reveals it again.
+const BINDABLE_CHANNELS: Array<{ channel: string; label: string; hint: string }> = [
+  { channel: 'wechat_official_account', label: '微信服务号', hint: '在微信中把绑定码发给服务号即可完成' },
+]
+const identities = ref<ChannelIdentity[]>([])
+const identitiesLoading = ref(false)
+const bindingChannel = ref('')
+const bindingCode = ref('')
+const bindingCodeChannel = ref('')
+const bindingExpiresAt = ref('')
+const bindingError = ref('')
+const revokingId = ref('')
+
+const activeIdentities = computed(() => identities.value.filter((item) => item.status === 'active'))
+const channelLabel = (channel: string) =>
+  BINDABLE_CHANNELS.find((item) => item.channel === channel)?.label || channel
+const identityStatusLabel = (status: string) =>
+  ({ active: '已绑定', pending: '待确认', revoked: '已解绑', expired: '已过期' }[status] || status)
+
+const loadIdentities = async () => {
+  identitiesLoading.value = true
+  try {
+    identities.value = await listMyChannelIdentities()
+  } catch {
+    bindingError.value = '暂时无法读取绑定状态，请稍后重试。'
+  } finally {
+    identitiesLoading.value = false
+  }
+}
+
+const startBinding = async (channel: string) => {
+  bindingError.value = ''
+  bindingCode.value = ''
+  bindingChannel.value = channel
+  try {
+    const result = await startChannelIdentityBinding(channel)
+    bindingCode.value = result.state
+    bindingCodeChannel.value = channel
+    bindingExpiresAt.value = result.identity.stateExpiresAt || ''
+    await loadIdentities()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    bindingError.value = message || '发起绑定失败，请稍后重试。'
+  } finally {
+    bindingChannel.value = ''
+  }
+}
+
+const revokeBinding = async (identity: ChannelIdentity) => {
+  bindingError.value = ''
+  revokingId.value = identity.id
+  try {
+    await revokeMyChannelIdentity(identity.id)
+    await loadIdentities()
+  } catch {
+    bindingError.value = '解绑失败，请稍后重试。'
+  } finally {
+    revokingId.value = ''
+  }
+}
 
 const view = computed(() => {
   if (route.name === 'portal-lookup') return 'lookup'
@@ -66,6 +138,9 @@ onMounted(async () => {
     const conversationId = typeof route.query.conversationId === 'string' ? route.query.conversationId : ''
     if (route.name === 'portal-lookup' && conversationId) {
       await restoreSession(conversationId)
+    }
+    if (route.name === 'portal-settings') {
+      await loadIdentities()
     }
   } catch {
     loadError.value = '暂时无法加载工作区，请稍后重试。'
@@ -262,7 +337,49 @@ const resultStatusClass = (status: ShipmentResult['status']) => `result-status--
 
     <template v-else>
       <section class="page-heading"><div><p class="eyebrow">客户业务门户 / 访问控制</p><h1>账号与绑定</h1><p>查看当前账号的身份状态和渠道绑定。修改权限请联系销售或平台管理员。</p></div></section>
-      <section class="settings-grid"><article class="settings-card"><div class="settings-card-heading"><span class="settings-symbol"><LockOnIcon /></span><div><span class="section-kicker">平台身份</span><h2>账号状态</h2></div><span class="account-status">{{ overview?.user.status === 'disabled' ? '已停用' : '正常' }}</span></div><dl><div><dt>登录手机号</dt><dd>{{ overview?.user.phone || '—' }}</dd></div><div><dt>账号角色</dt><dd>{{ overview?.user.roleLabel || '—' }}</dd></div><div><dt>所属企业</dt><dd>{{ enterpriseName }}</dd></div></dl></article><article class="settings-card"><div class="settings-card-heading"><span class="settings-symbol"><LinkIcon /></span><div><span class="section-kicker">渠道身份</span><h2>已绑定入口</h2></div><span class="account-status">未接入</span></div><div class="binding-row"><span class="binding-logo">—</span><span><strong>渠道绑定信息</strong><small>后端尚未提供绑定记录</small></span><span class="binding-state binding-state--muted">尚未接入</span></div><div class="binding-help">需要接入微信服务号或企业微信？请联系你的客户经理完成身份绑定。</div></article></section>
+      <section class="settings-grid"><article class="settings-card"><div class="settings-card-heading"><span class="settings-symbol"><LockOnIcon /></span><div><span class="section-kicker">平台身份</span><h2>账号状态</h2></div><span class="account-status">{{ overview?.user.status === 'disabled' ? '已停用' : '正常' }}</span></div><dl><div><dt>登录手机号</dt><dd>{{ overview?.user.phone || '—' }}</dd></div><div><dt>账号角色</dt><dd>{{ overview?.user.roleLabel || '—' }}</dd></div><div><dt>所属企业</dt><dd>{{ enterpriseName }}</dd></div></dl></article><article class="settings-card">
+        <div class="settings-card-heading">
+          <span class="settings-symbol"><LinkIcon /></span>
+          <div><span class="section-kicker">渠道身份</span><h2>已绑定入口</h2></div>
+          <span class="account-status">{{ activeIdentities.length ? `${activeIdentities.length} 个已绑定` : '未绑定' }}</span>
+        </div>
+
+        <div v-if="bindingError" class="inline-alert inline-alert--warning" role="alert"><ErrorCircleIcon />{{ bindingError }}</div>
+
+        <div v-if="identitiesLoading && !identities.length" class="binding-help">正在读取绑定状态…</div>
+        <div v-for="item in identities" :key="item.id" class="binding-row">
+          <span class="binding-logo">{{ channelLabel(item.channel).slice(0, 1) }}</span>
+          <span>
+            <strong>{{ channelLabel(item.channel) }}</strong>
+            <small>{{ item.channelInstanceId }} · {{ identityStatusLabel(item.status) }}</small>
+          </span>
+          <button
+            v-if="item.status === 'active' || item.status === 'pending'"
+            class="binding-revoke"
+            :disabled="revokingId === item.id"
+            @click="revokeBinding(item)"
+          >{{ revokingId === item.id ? '解绑中…' : '解绑' }}</button>
+          <span v-else class="binding-state binding-state--muted">{{ identityStatusLabel(item.status) }}</span>
+        </div>
+
+        <div v-for="option in BINDABLE_CHANNELS" :key="option.channel" class="binding-action">
+          <span><strong>{{ option.label }}</strong><small>{{ option.hint }}</small></span>
+          <button :disabled="bindingChannel === option.channel" @click="startBinding(option.channel)">
+            {{ bindingChannel === option.channel ? '生成中…' : '获取绑定码' }}
+          </button>
+        </div>
+
+        <div v-if="bindingCode" class="binding-code">
+          <span class="binding-code-label">把下面这串绑定码发送给{{ channelLabel(bindingCodeChannel) }}</span>
+          <code>{{ bindingCode }}</code>
+          <span class="binding-code-note">
+            一次性使用，10 分钟内有效{{ bindingExpiresAt ? `（${new Date(bindingExpiresAt).toLocaleTimeString()} 前）` : '' }}。
+            必须由你本人的{{ channelLabel(bindingCodeChannel) }}账号发送；平台只凭发送者身份确认绑定，不会把这串码当成聊天内容处理。
+          </span>
+        </div>
+
+        <div class="binding-help">绑定只表示平台知道这个渠道身份对应哪个账号，可查询的业务范围仍按你当前的企业授权和权限实时判定。</div>
+      </article></section>
     </template>
   </PlatformShell>
 </template>
@@ -349,7 +466,7 @@ h1 { margin: 0; font-size: 31px; line-height: 1.18; font-weight: 740; color: #14
 .lookup-workspace { border: 1px solid #e0e7e5; background: #f6faf8; padding: 24px; }.lookup-form--large { max-width: 100%; background: white; }.query-examples { display: flex; gap: 9px; align-items: center; margin-top: 12px; color: #7c8d89; font-size: 10px; }.query-examples button { min-height: 44px; border: 0; background: transparent; color: #317c70; font-size: 10px; cursor: pointer; padding: 0 4px; }.field-error { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; color: #a24e4e; font-size: 11px; }.field-error :deep(svg) { width: 14px; }
 .result-section { margin-top: 20px; border: 1px solid #dfe8e4; background: #fff; }.result-header { display: flex; justify-content: space-between; gap: 20px; padding: 22px 24px 18px; border-bottom: 1px solid #edf1f0; }.result-header p { margin: 7px 0 0; color: #778985; font-size: 12px; }.result-status { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 9px; font-size: 10px; white-space: nowrap; }.result-status--found { color: #2e7f6a; background: #e7f5ef; }.result-status--not_found { color: #97632f; background: #fff5e6; }.result-status--needs_clarification { color: #7a6298; background: #f3eef9; }.result-status--upstream_error { color: #a24e4e; background: #fff0f0; }.result-status :deep(svg) { width: 14px; }.evidence-table-head, .evidence-row { display: grid; grid-template-columns: 1fr 1.55fr 1.35fr; gap: 16px; align-items: center; }.evidence-table-head { padding: 11px 24px; background: #f7faf9; color: #849390; font-size: 10px; }.evidence-row { min-height: 60px; padding: 11px 24px; border-top: 1px solid #edf1f0; }.evidence-label { color: #667874; font-size: 11px; }.evidence-row strong { color: #27433e; font-size: 12px; }.evidence-row strong.unknown { color: #9aa7a3; font-weight: 500; }.evidence-source span, .evidence-source small { display: block; }.evidence-source span { color: #58746c; font-size: 10px; }.evidence-source small { color: #9aa6a3; font-size: 9px; margin-top: 3px; }.trace-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: #869692; font-size: 10px; padding: 13px 24px; background: #fbfcfb; }.trace-line :deep(svg) { width: 14px; color: #6d8e86; }.trace-line code { color: #547a72; background: #eff5f2; padding: 2px 4px; }.result-empty, .panel-empty { padding: 24px; color: #879792; font-size: 11px; text-align: center; }.lookup-notice { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; color: #7a684e; font-size: 11px; }.lookup-notice :deep(svg) { width: 14px; }.result-state { margin-top: 20px; min-height: 260px; border: 1px dashed #d4e3df; display: grid; place-items: center; align-content: center; color: #71827e; text-align: center; }.result-state strong { color: #35534d; font-size: 14px; margin-top: 12px; }.result-state p { margin: 5px 0 0; font-size: 11px; }.empty-icon { width: 42px; height: 42px; display: grid; place-items: center; background: #eef5f2; color: #689088; border-radius: 50%; }.empty-icon :deep(svg) { width: 20px; }.loading-ring { width: 28px; height: 28px; border: 2px solid #d8e9e4; border-top-color: #147d72; border-radius: 50%; animation: spin .8s linear infinite; }.result-state--loading strong { margin-top: 15px; }@keyframes spin { to { transform: rotate(360deg); } }
 .sessions-page { margin-top: 20px; }.list-toolbar { min-height: 52px; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; color: #788985; font-size: 11px; border-bottom: 1px solid #e8efec; }.list-toolbar button { display: flex; gap: 5px; align-items: center; border: 0; background: transparent; color: #648078; font-size: 10px; }.list-toolbar button :deep(svg) { width: 14px; }.session-list--full .session-row { min-height: 84px; padding: 16px 20px; }.session-list--full .session-meta { flex-direction: row; align-items: center; gap: 12px; }.session-list--full .session-meta > svg { width: 15px; color: #9aaba6; }
-.settings-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 21px; }.settings-card { border: 1px solid #e0e7e5; background: #fff; padding: 22px; }.settings-card-heading { display: flex; align-items: center; gap: 11px; padding-bottom: 18px; border-bottom: 1px solid #edf1f0; }.settings-symbol { display: grid; place-items: center; width: 34px; height: 34px; background: #e7f3ef; color: #397e70; border-radius: 6px; }.settings-symbol :deep(svg) { width: 18px; }.settings-card-heading h2 { font-size: 16px; }.account-status { margin-left: auto; color: #33816d; background: #e8f5ef; padding: 4px 7px; font-size: 10px; }.settings-card dl { margin: 0; }.settings-card dl div { display: flex; justify-content: space-between; gap: 15px; padding: 13px 0; border-bottom: 1px solid #f0f3f2; }.settings-card dl div:last-child { border-bottom: 0; }.settings-card dt { color: #8a9895; font-size: 11px; }.settings-card dd { margin: 0; color: #34514b; font-size: 11px; text-align: right; }.binding-row { display: flex; align-items: center; gap: 11px; padding: 21px 0 18px; }.binding-logo { width: 32px; height: 32px; display: grid; place-items: center; color: #fff; background: #1c4d46; border-radius: 7px; font-weight: 800; }.binding-row strong, .binding-row small { display: block; }.binding-row strong { color: #34514b; font-size: 12px; }.binding-row small { color: #899994; font-size: 10px; margin-top: 4px; }.binding-state { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: #35816d; font-size: 10px; }.binding-state :deep(svg) { width: 13px; }.binding-help { padding: 12px; background: #f4f8f6; color: #71827d; font-size: 10px; line-height: 1.6; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 21px; }.settings-card { border: 1px solid #e0e7e5; background: #fff; padding: 22px; }.settings-card-heading { display: flex; align-items: center; gap: 11px; padding-bottom: 18px; border-bottom: 1px solid #edf1f0; }.settings-symbol { display: grid; place-items: center; width: 34px; height: 34px; background: #e7f3ef; color: #397e70; border-radius: 6px; }.settings-symbol :deep(svg) { width: 18px; }.settings-card-heading h2 { font-size: 16px; }.account-status { margin-left: auto; color: #33816d; background: #e8f5ef; padding: 4px 7px; font-size: 10px; }.settings-card dl { margin: 0; }.settings-card dl div { display: flex; justify-content: space-between; gap: 15px; padding: 13px 0; border-bottom: 1px solid #f0f3f2; }.settings-card dl div:last-child { border-bottom: 0; }.settings-card dt { color: #8a9895; font-size: 11px; }.settings-card dd { margin: 0; color: #34514b; font-size: 11px; text-align: right; }.binding-row { display: flex; align-items: center; gap: 11px; padding: 21px 0 18px; }.binding-logo { width: 32px; height: 32px; display: grid; place-items: center; color: #fff; background: #1c4d46; border-radius: 7px; font-weight: 800; }.binding-row strong, .binding-row small { display: block; }.binding-row strong { color: #34514b; font-size: 12px; }.binding-row small { color: #899994; font-size: 10px; margin-top: 4px; }.binding-state { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: #35816d; font-size: 10px; }.binding-state :deep(svg) { width: 13px; }.binding-help { padding: 12px; background: #f4f8f6; color: #71827d; font-size: 10px; line-height: 1.6; }.binding-action { display: flex; align-items: center; gap: 11px; padding: 13px 0; border-top: 1px solid #f0f3f2; }.binding-action strong { display: block; color: #34514b; font-size: 12px; }.binding-action small { display: block; color: #899994; font-size: 10px; margin-top: 4px; }.binding-action button { margin-left: auto; min-height: 32px; border: 0; background: #147d72; color: #fff; padding: 0 13px; border-radius: 5px; font-size: 11px; font-weight: 650; cursor: pointer; }.binding-action button:disabled { background: #9dbdb7; cursor: default; }.binding-action button:focus-visible { outline: 2px solid #0f5b53; outline-offset: 2px; }.binding-revoke { margin-left: auto; min-height: 30px; border: 1px solid #e3c9c6; background: #fff; color: #a5483f; padding: 0 11px; border-radius: 5px; font-size: 10px; cursor: pointer; }.binding-revoke:disabled { color: #c09b96; cursor: default; }.binding-revoke:focus-visible { outline: 2px solid #a5483f; outline-offset: 2px; }.binding-code { margin-top: 13px; padding: 13px; background: #f0f7f4; border: 1px dashed #a9cdc3; }.binding-code-label { display: block; color: #33816d; font-size: 11px; font-weight: 650; }.binding-code code { display: block; margin: 9px 0; padding: 9px 11px; background: #fff; border: 1px solid #d5e5e0; color: #17312e; font-size: 12px; word-break: break-all; user-select: all; }.binding-code-note { display: block; color: #6d827c; font-size: 10px; line-height: 1.6; }
 @media (max-width: 800px) { .portal-columns, .settings-grid { grid-template-columns: minmax(0, 1fr); }.scope-strip { flex-wrap: wrap; }.scope-divider { display: none; }.scope-permissions { width: 100%; margin-left: 48px; justify-content: flex-start; }.metric-grid { gap: 9px; }.metric-card { padding: 14px; }.metric-card strong { font-size: 24px; } }
 @media (max-width: 560px) { .portal-intro, .page-heading { display: block; }.portal-intro .subtle-button, .page-heading .subtle-button { margin-top: 16px; }.portal-intro h1, h1 { font-size: 26px; }.scope-strip { align-items: flex-start; }.scope-strip strong { max-width: 240px; }.lookup-hero { padding: 21px 16px 17px; }.lookup-form { height: 46px; }.lookup-form button { padding: 0 11px; }.lookup-form button { font-size: 0; }.lookup-form button :deep(svg) { width: 17px; }.metric-grid { grid-template-columns: 1fr; }.metric-card { min-height: 88px; }.metric-card strong { display: inline-block; margin-right: 8px; }.portal-columns { gap: 14px; }.session-row { padding: 11px 13px; gap: 8px; }.session-meta > span:first-child { display: none; }.result-header { display: block; padding: 19px 16px 16px; }.result-status { margin-top: 13px; }.evidence-table-head, .evidence-row { grid-template-columns: 1fr 1.35fr; gap: 8px; padding-left: 16px; padding-right: 16px; }.evidence-table-head span:last-child, .evidence-row .evidence-source { display: none; }.lookup-workspace { padding: 16px; }.query-examples { flex-wrap: wrap; }.settings-card { padding: 17px; } }
 .result-state { padding: 24px 16px; }

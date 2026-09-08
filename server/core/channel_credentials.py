@@ -195,6 +195,26 @@ async def load_active_channel_instance_credential(
     return decrypt_credential(rows[0])
 
 
+async def list_active_channel_instances(db: AsyncSession, *, channel: str) -> list[str]:
+    """Return active instance IDs for one channel without decrypting anything.
+
+    A customer starting a binding must not have to invent an instance ID, and
+    the browser has no business holding credential material, so only the
+    non-secret instance identifiers are read here.
+    """
+    rows = (
+        await db.execute(
+            select(PlatformChannelCredential.ChannelInstanceId)
+            .where(
+                PlatformChannelCredential.Channel == channel,
+                PlatformChannelCredential.Status == PlatformChannelCredentialStatus.ACTIVE,
+            )
+            .order_by(PlatformChannelCredential.ChannelInstanceId)
+        )
+    ).scalars().all()
+    return [str(item) for item in rows]
+
+
 async def load_active_channel_credentials(
     db: AsyncSession, *, channel: str
 ) -> list[tuple[str, str]]:

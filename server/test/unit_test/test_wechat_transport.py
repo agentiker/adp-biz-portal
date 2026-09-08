@@ -138,11 +138,13 @@ class _FakeResponse:
 
 
 class _FakeSession:
-    """Minimal aiohttp.ClientSession stand-in for one POST."""
+    """Minimal aiohttp.ClientSession stand-in that records the request."""
 
     def __init__(self, *, response=None, post_error=None):
         self._response = response
         self._post_error = post_error
+        self.sent_kwargs = None
+        self.sent_url = None
 
     async def __aenter__(self):
         return self
@@ -150,7 +152,9 @@ class _FakeSession:
     async def __aexit__(self, *_):
         return False
 
-    def post(self, _url, **_kwargs):
+    def post(self, url, **kwargs):
+        self.sent_url = url
+        self.sent_kwargs = kwargs
         if self._post_error is not None:
             raise self._post_error
         return self._response
@@ -200,6 +204,32 @@ async def test_successful_provider_response_is_delivered(monkeypatch):
     receipt = await transport.send_text(open_id=OPEN_ID, content="result")
     assert receipt.status == "delivered"
     assert receipt.provider_message_id == "77"
+
+
+@pytest.mark.asyncio
+async def test_chinese_content_is_sent_as_raw_utf8_not_escaped_ascii(monkeypatch):
+    """WeChat forwards \\uXXXX escapes to the reader literally.
+
+    ``json.dumps`` defaults to ``ensure_ascii=True`` and aiohttp's ``json=``
+    argument inherits that default, which made a Chinese reply arrive in WeChat
+    as ``\\u4f60\\u597d``. The body must carry raw UTF-8 bytes.
+    """
+    transport = _transport()
+    session = _FakeSession(response=_FakeResponse(body={"errcode": 0}))
+    _patch_session(monkeypatch, session)
+
+    await transport.send_text(open_id=OPEN_ID, content="你好，提单已到港")
+
+    body = session.sent_kwargs["data"]
+    assert isinstance(body, bytes)
+    assert "你好，提单已到港".encode("utf-8") in body
+    assert b"\\u" not in body
+    # The provider needs the charset stated explicitly.
+    assert "charset=utf-8" in session.sent_kwargs["headers"]["Content-Type"]
+    # Round-trips back to the same text.
+    import json as _json
+
+    assert _json.loads(body.decode("utf-8"))["text"]["content"] == "你好，提单已到港"
 
 
 @pytest.mark.asyncio
@@ -348,3 +378,49 @@ async def test_sender_checks_the_reply_window_before_calling_the_provider():
     )
     assert receipt.status == "failed"
     assert (receipt.metadata or {})["reason"] == "reply_window_expired"
+
+
+@pytest.mark.asyncio
+async def test_news_card_payload_shape(monkeypatch):
+    """A text message cannot render structure; the card carries it instead."""
+    transport = _transport()
+    session = _FakeSession(response=_FakeResponse(body={"errcode": 0, "msgid": "5"}))
+    _patch_session(monkeypatch, session)
+
+    receipt = await transport.send_news(
+        open_id=OPEN_ID,
+        title="业务查询结果",
+        description="提单 BL-001 已到港，共 4 条证据。",
+        url="https://adp.example.cn/#/portal/lookup?conversationId=abc",
+    )
+
+    assert receipt.status == "delivered"
+    import json as _json
+
+    body = _json.loads(session.sent_kwargs["data"].decode("utf-8"))
+    assert body["msgtype"] == "news"
+    article = body["news"]["articles"][0]
+    assert article["title"] == "业务查询结果"
+    assert article["description"] == "提单 BL-001 已到港，共 4 条证据。"
+    assert article["url"].startswith("https://")
+    # Raw UTF-8, same rule as text messages.
+    assert b"\\u" not in session.sent_kwargs["data"]
+
+
+def test_card_fields_are_bounded_and_single_line():
+    from integrations.channels.wechat_transport import _card_text
+
+    assert _card_text("标题\n第二行", limit=64, field="t") == "标题 第二行"
+    assert len(_card_text("长" * 200, limit=64, field="t")) == 64
+    with pytest.raises(WechatSendError):
+        _card_text("   ", limit=64, field="t")
+
+
+def test_card_url_must_be_absolute():
+    from integrations.channels.wechat_transport import _card_url
+
+    assert _card_url("https://x/y") == "https://x/y"
+    with pytest.raises(WechatSendError):
+        _card_url("/portal/lookup")
+    with pytest.raises(WechatSendError):
+        _card_url("")
