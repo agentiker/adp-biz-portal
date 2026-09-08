@@ -583,3 +583,62 @@ async def test_load_execution_context_rejects_replayed_tool_request():
         )
 
     assert session.execute.await_count == 8
+
+
+@pytest.mark.asyncio
+async def test_channel_execution_context_needs_no_browser_session():
+    """A bound channel sender can ask a question without a web login."""
+    token, context, user, account, enterprise, _auth_session, membership, definition = (
+        execution_context_fixtures()
+    )
+    context.PlatformSessionId = None
+    context.Channel = "wechat_official_account"
+    # No auth session row is offered to the fake session at all: a
+    # channel-issued context must not look one up.
+    session = session_with(context, user, account, enterprise, membership, definition, None)
+
+    execution = await load_execution_context(
+        session,
+        token=token,
+        tool_name="shipment.lookup",
+        request_id="request-channel",
+    )
+
+    assert execution.session is None
+    assert execution.enterprise is enterprise
+    assert session.execute.await_count == 7
+
+
+@pytest.mark.asyncio
+async def test_session_bound_execution_context_still_dies_with_its_session():
+    token, context, user, account, enterprise, auth_session, membership, definition = (
+        execution_context_fixtures()
+    )
+    auth_session.RevokedAt = utc_now() - timedelta(seconds=1)
+    session = session_with(context, user, account, enterprise, auth_session, membership, definition, None)
+
+    with pytest.raises(AccountUnauthorized, match="执行上下文已失效"):
+        await load_execution_context(
+            session,
+            token=token,
+            tool_name="shipment.lookup",
+            request_id="request-revoked-session",
+        )
+
+
+@pytest.mark.asyncio
+async def test_channel_execution_context_is_still_bound_to_current_permissions():
+    """Dropping the session requirement must not drop scope re-validation."""
+    token, context, user, account, enterprise, _auth_session, membership, definition = (
+        execution_context_fixtures(permission_version="user-role:customer|membership-role:staff")
+    )
+    context.PlatformSessionId = None
+    session = session_with(context, user, account, enterprise, membership, definition, None)
+
+    with pytest.raises(AccountUnauthorized, match="执行上下文已失效"):
+        await load_execution_context(
+            session,
+            token=token,
+            tool_name="shipment.lookup",
+            request_id="request-channel-narrowed",
+        )

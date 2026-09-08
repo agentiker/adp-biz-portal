@@ -80,7 +80,9 @@ DEFAULT_PLATFORM_CONFIG: dict[str, Any] = {
 class PlatformContext:
     user: PlatformUser
     account: Account
-    session: PlatformAuthSession
+    # Null for channel-originated executions, which are authorized by a
+    # confirmed channel identity instead of a browser login session.
+    session: PlatformAuthSession | None
     permissions: frozenset[str]
 
 
@@ -92,7 +94,7 @@ class PlatformExecution:
     user: PlatformUser
     account: Account
     enterprise: PlatformEnterprise
-    session: PlatformAuthSession
+    session: PlatformAuthSession | None
     permissions: frozenset[str]
 
 
@@ -759,6 +761,10 @@ def create_admin_adp_context_token(
     ttl_seconds: int = ADMIN_ADP_CONTEXT_TTL_SECONDS,
 ) -> tuple[str, datetime]:
     """Create a short-lived legacy-compatible token for the Admin ADP debugger."""
+    if platform_context.session is None:
+        # This debugger token stands in for a browser session; a
+        # channel-originated context must never be able to mint one.
+        raise PlatformForbidden("需要平台登录会话")
     lifetime = max(30, min(int(ttl_seconds), 900))
     expires_at = utc_now() + timedelta(seconds=lifetime)
     payload = {
@@ -789,6 +795,32 @@ async def get_enterprises_for_user(db: AsyncSession, user: PlatformUser) -> list
 async def get_enterprise_for_user(db: AsyncSession, user: PlatformUser) -> PlatformEnterprise | None:
     enterprises = await get_enterprises_for_user(db, user)
     return enterprises[0] if enterprises else None
+
+
+async def resolve_enterprise_scope(
+    db: AsyncSession,
+    user: PlatformUser,
+    *,
+    enterprise_id: str | None = None,
+) -> PlatformEnterprise:
+    """Resolve the one enterprise a message is allowed to execute against.
+
+    An explicit identifier must match a currently active membership. Without
+    one, a single active enterprise is selected automatically and anything
+    ambiguous is rejected: silently picking one of several enterprises would
+    answer a business question with the wrong tenant's data.
+    """
+    enterprises = await get_enterprises_for_user(db, user)
+    if enterprise_id is not None:
+        selected = next((item for item in enterprises if str(item.Id) == str(enterprise_id)), None)
+        if selected is None:
+            raise PlatformForbidden("当前账号没有可访问的企业范围")
+        return selected
+    if not enterprises:
+        raise PlatformForbidden("当前账号没有可访问的企业范围")
+    if len(enterprises) > 1:
+        raise PlatformForbidden("需要明确企业范围")
+    return enterprises[0]
 
 
 async def _membership_for_user(
@@ -837,7 +869,9 @@ async def issue_execution_context(
             db, user_id=str(platform_context.user.Id), enterprise_id=str(selected_enterprise.Id)
         )
     else:
-        selected_enterprise = await get_enterprise_for_user(db, platform_context.user)
+        # An omitted scope must stay unambiguous: issuing a context for one of
+        # several enterprises would hand the agent the wrong tenant's data.
+        selected_enterprise = await resolve_enterprise_scope(db, platform_context.user)
         membership = (
             await _membership_for_user(
                 db,
@@ -879,7 +913,7 @@ async def issue_execution_context(
         UserId=platform_context.user.Id,
         AccountId=platform_context.account.Id,
         EnterpriseId=selected_enterprise.Id,
-        PlatformSessionId=platform_context.session.Id,
+        PlatformSessionId=platform_context.session.Id if platform_context.session is not None else None,
         ConversationId=selected_conversation_id,
         AgentId=agent,
         Channel=channel_name,
@@ -920,24 +954,32 @@ async def load_execution_context(
     enterprise = (
         await db.execute(select(PlatformEnterprise).where(PlatformEnterprise.Id == context.EnterpriseId))
     ).scalar_one_or_none()
-    session = (
-        await db.execute(select(PlatformAuthSession).where(PlatformAuthSession.Id == context.PlatformSessionId))
-    ).scalar_one_or_none()
+    session = None
+    if context.PlatformSessionId is not None:
+        session = (
+            await db.execute(select(PlatformAuthSession).where(PlatformAuthSession.Id == context.PlatformSessionId))
+        ).scalar_one_or_none()
     membership = await _membership_for_user(
         db, user_id=str(context.UserId), enterprise_id=str(context.EnterpriseId)
+    )
+    # A browser-issued context stays tied to its login session. A
+    # channel-issued context has none, so it relies on the identity, enterprise
+    # and permission-version checks below plus account-wide revocation.
+    session_invalid = context.PlatformSessionId is not None and (
+        session is None
+        or session.RevokedAt is not None
+        or session.ExpiresAt <= now
+        or str(session.AccountId) != str(context.AccountId)
     )
     if (
         user is None
         or account is None
         or enterprise is None
-        or session is None
+        or session_invalid
         or membership is None
         or user.Status != PlatformStatus.ACTIVE
         or account.Status in {AccountStatus.BANNED, AccountStatus.PENDING}
         or enterprise.Status != EnterpriseStatus.ACTIVE
-        or session.RevokedAt is not None
-        or session.ExpiresAt <= now
-        or str(session.AccountId) != str(context.AccountId)
         or _permission_version(user, membership) != context.PermissionVersion
     ):
         raise AccountUnauthorized("执行上下文已失效")

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import tagentic_config
@@ -346,29 +347,20 @@ async def process_platform_inbound_task(
                 raise PlatformForbidden("需要明确企业范围")
             enterprise = memberships[0][1]
 
+        # A browser message carries the login session that produced it. A
+        # channel message is authorized by its confirmed channel identity plus
+        # the memberships resolved above, so it has no session to validate; a
+        # stale browser session must never be borrowed to authorize it.
         session = None
         if platform_session_id is not None:
             session = await db.get(PlatformAuthSession, platform_session_id)
-        else:
-            session = (
-                await db.execute(
-                    select(PlatformAuthSession)
-                    .where(
-                        PlatformAuthSession.AccountId == account.Id,
-                        PlatformAuthSession.RevokedAt.is_(None),
-                        PlatformAuthSession.ExpiresAt > utc_now(),
-                    )
-                    .order_by(desc(PlatformAuthSession.CreatedAt))
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-        if (
-            session is None
-            or str(session.AccountId) != str(account.Id)
-            or session.RevokedAt is not None
-            or session.ExpiresAt <= utc_now()
-        ):
-            raise AccountUnauthorized("平台登录态已失效")
+            if (
+                session is None
+                or str(session.AccountId) != str(account.Id)
+                or session.RevokedAt is not None
+                or session.ExpiresAt <= utc_now()
+            ):
+                raise AccountUnauthorized("平台登录态已失效")
 
         context = PlatformContext(
             user=user,
@@ -664,7 +656,7 @@ async def process_platform_inbound_task(
             "inboundMessageId": inbound_id,
             "accountId": account_id,
             "platformUserId": platform_user_id,
-            "platformSessionId": str(session.Id),
+            "platformSessionId": str(session.Id) if session is not None else None,
             "enterpriseId": str(enterprise.Id),
             "conversationId": conversation_id_value,
             "runId": run_id,
@@ -672,6 +664,13 @@ async def process_platform_inbound_task(
             "channelInstanceId": inbound.ChannelInstanceId,
             "externalConversationId": inbound.ExternalConversationId,
             "externalMessageId": inbound.ExternalMessageId,
+            # Carried from ingest so the sender can refuse a reply the channel
+            # protocol would no longer accept instead of guessing at send time.
+            "replyWindowExpiresAt": (
+                final_inbound.ReplyWindowExpiresAt.isoformat()
+                if final_inbound.ReplyWindowExpiresAt is not None
+                else None
+            ),
             "traceId": trace_id,
             "status": result.get("status"),
             "title": result.get("title"),
@@ -724,6 +723,121 @@ async def process_platform_inbound_task(
     })
 
 
+def _reply_window_expired(value: Any, *, now: datetime) -> bool:
+    """Return True when a recorded reply deadline has already passed."""
+    if value is None:
+        return False
+    if isinstance(value, datetime):
+        deadline = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            deadline = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            # An unreadable deadline is treated as expired: sending into a
+            # window that cannot be verified would risk a provider rejection
+            # that the platform reports as success.
+            return True
+    else:
+        return True
+    if deadline.tzinfo is not None:
+        deadline = deadline.astimezone(UTC).replace(tzinfo=None)
+    return deadline <= now
+
+
+async def _reply_authorization_error(
+    db: AsyncSession,
+    *,
+    inbound_id: str,
+    account_id: str,
+    platform_user_id: str,
+    platform_session_id: str | None,
+    enterprise_id: str,
+    reply_window_expires_at: Any = None,
+) -> str | None:
+    """Re-check one queued reply against current identity, scope and window."""
+    inbound = await db.get(PlatformInboundMessage, inbound_id)
+    user = await db.get(PlatformUser, platform_user_id)
+    account = await db.get(Account, account_id)
+    enterprise = await db.get(PlatformEnterprise, enterprise_id)
+    # A channel reply has no browser session; only a session-bound reply is
+    # invalidated by that session ending.
+    session = (
+        await db.get(PlatformAuthSession, platform_session_id)
+        if platform_session_id is not None
+        else None
+    )
+    membership = None
+    if user is not None and enterprise is not None:
+        membership = (
+            await db.execute(
+                select(PlatformMembership).where(
+                    PlatformMembership.UserId == user.Id,
+                    PlatformMembership.EnterpriseId == enterprise.Id,
+                    PlatformMembership.Active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+
+    if inbound is None or inbound.Status != "processed":
+        return "inbound_not_processed"
+    if (
+        user is None
+        or account is None
+        or str(user.AccountId) != str(account.Id)
+        or user.Status != PlatformStatus.ACTIVE
+        or account.Status in {AccountStatus.BANNED, AccountStatus.PENDING}
+    ):
+        return "authorization_revoked"
+    if platform_session_id is not None and (
+        session is None
+        or str(session.AccountId) != str(account.Id)
+        or session.RevokedAt is not None
+        or session.ExpiresAt <= utc_now()
+    ):
+        return "authorization_revoked"
+    if enterprise is None or enterprise.Status != EnterpriseStatus.ACTIVE or membership is None:
+        return "authorization_revoked"
+    if (
+        "shipment.read" not in permissions_for_role(user.Role)
+        or "shipment.read" not in permissions_for_role(membership.MembershipRole)
+    ):
+        return "authorization_revoked"
+    deadline = reply_window_expires_at
+    if deadline is None:
+        deadline = inbound.ReplyWindowExpiresAt
+    if _reply_window_expired(deadline, now=utc_now()):
+        return "reply_window_expired"
+    return None
+
+
+def _resolve_channel_sender(
+    sender: Any,
+    *,
+    channel: str,
+    channel_instance_id: str | None,
+) -> Any:
+    """Select the sender that owns one channel instance.
+
+    Each channel speaks its own send protocol, so a deployment with several
+    channels registers a mapping keyed by ``channel`` or ``channel:instance``
+    instead of one shared object. A single sender is accepted only when it does
+    not declare a different channel, so a WeChat reply can never be handed to a
+    企微 sender.
+    """
+    if sender is None:
+        return None
+    if isinstance(sender, Mapping):
+        if channel_instance_id is not None:
+            scoped = sender.get(f"{channel}:{channel_instance_id}")
+            if scoped is not None:
+                return scoped
+        return sender.get(channel)
+    declared = getattr(sender, "channel", None)
+    if isinstance(declared, str) and declared != channel:
+        return None
+    return sender
+
+
 async def process_platform_reply_task(
     sessionmaker: Callable[[], AsyncSession],
     task: PlatformDeliveryTask,
@@ -739,6 +853,7 @@ async def process_platform_reply_task(
     payload = _payload(task)
     inbound_id = _required_uuid(payload, "inboundMessageId")
     channel = _bounded_text(payload.get("channel"), limit=32, default="web") or "web"
+    channel_instance_id = _bounded_text(payload.get("channelInstanceId"), limit=128, default=None)
     trace_id = _bounded_text(payload.get("traceId"), limit=64, default="platform-reply") or "platform-reply"
     delivery_key = _bounded_text(
         payload.get("deliveryIdempotencyKey"),
@@ -746,86 +861,55 @@ async def process_platform_reply_task(
         default=f"platform-reply:{inbound_id}",
     ) or f"platform-reply:{inbound_id}"
 
-    # Every production reply payload is stamped with the identity and scope
-    # used for the original query. Re-load them immediately before delivery so
-    # an already queued reply cannot outlive a password reset, disable, or
-    # enterprise/role change. Minimal unit-test payloads without identity
-    # fields retain the sender-only behavior for backwards compatibility.
-    account_id = payload.get("accountId")
-    if account_id is not None:
-        account_id = _required_uuid(payload, "accountId")
-        platform_user_id = _required_uuid(payload, "platformUserId")
-        platform_session_id = _required_uuid(payload, "platformSessionId")
-        enterprise_id = _required_uuid(payload, "enterpriseId")
-        db = sessionmaker()
-        try:
-            inbound = await db.get(PlatformInboundMessage, inbound_id)
-            user = await db.get(PlatformUser, platform_user_id)
-            account = await db.get(Account, account_id)
-            session = await db.get(PlatformAuthSession, platform_session_id)
-            enterprise = await db.get(PlatformEnterprise, enterprise_id)
-            membership = None
-            if user is not None and enterprise is not None:
-                membership = (
-                    await db.execute(
-                        select(PlatformMembership).where(
-                            PlatformMembership.UserId == user.Id,
-                            PlatformMembership.EnterpriseId == enterprise.Id,
-                            PlatformMembership.Active.is_(True),
-                        )
-                    )
-                ).scalar_one_or_none()
-            authorization_error = None
-            if inbound is None or inbound.Status != "processed":
-                authorization_error = "inbound_not_processed"
-            elif (
-                user is None
-                or account is None
-                or str(user.AccountId) != str(account.Id)
-                or user.Status != PlatformStatus.ACTIVE
-                or account.Status in {AccountStatus.BANNED, AccountStatus.PENDING}
-            ):
-                authorization_error = "authorization_revoked"
-            elif (
-                session is None
-                or str(session.AccountId) != str(account.Id)
-                or session.RevokedAt is not None
-                or session.ExpiresAt <= utc_now()
-            ):
-                authorization_error = "authorization_revoked"
-            elif enterprise is None or enterprise.Status != EnterpriseStatus.ACTIVE or membership is None:
-                authorization_error = "authorization_revoked"
-            elif (
-                "shipment.read" not in permissions_for_role(user.Role)
-                or "shipment.read" not in permissions_for_role(membership.MembershipRole)
-            ):
-                authorization_error = "authorization_revoked"
-            if authorization_error is not None:
-                await create_audit(
-                    db,
-                    actor_account_id=account_id,
-                    action="platform.reply.reject",
-                    target_type="platform_inbound_message",
-                    target_id=inbound_id,
-                    trace_id=trace_id,
-                    outcome="rejected",
-                    metadata={"errorCode": authorization_error, "channel": channel},
-                )
-                await db.commit()
-                raise DeliveryRejectedError(authorization_error)
-        except DeliveryRejectedError:
-            raise
-        except Exception:
-            await db.rollback()
-            raise
-        finally:
-            await db.close()
-
-    if channel != "web" and sender is None:
-        raise DeliveryRejectedError("channel_sender_not_configured")
+    # Every reply payload is stamped with the identity and scope used for the
+    # original query, and it is re-validated immediately before delivery so an
+    # already queued reply cannot outlive a password reset, disable, or
+    # enterprise/role change.
+    account_id = _required_uuid(payload, "accountId")
+    platform_user_id = _required_uuid(payload, "platformUserId")
+    platform_session_id = _optional_uuid(payload, "platformSessionId")
+    enterprise_id = _required_uuid(payload, "enterpriseId")
+    db = sessionmaker()
+    try:
+        authorization_error = await _reply_authorization_error(
+            db,
+            inbound_id=inbound_id,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            platform_session_id=platform_session_id,
+            enterprise_id=enterprise_id,
+            reply_window_expires_at=payload.get("replyWindowExpiresAt"),
+        )
+        if authorization_error is not None:
+            await create_audit(
+                db,
+                actor_account_id=account_id,
+                action="platform.reply.reject",
+                target_type="platform_inbound_message",
+                target_id=inbound_id,
+                trace_id=trace_id,
+                outcome="rejected",
+                metadata={"errorCode": authorization_error, "channel": channel},
+            )
+            await db.commit()
+            raise DeliveryRejectedError(authorization_error)
+    except DeliveryRejectedError:
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
 
     if channel != "web":
-        send = getattr(sender, "send", None) if sender is not None else None
+        sender = _resolve_channel_sender(
+            sender,
+            channel=channel,
+            channel_instance_id=channel_instance_id,
+        )
+        if sender is None:
+            raise DeliveryRejectedError("channel_sender_not_configured")
+        send = getattr(sender, "send", None)
         if send is None and callable(sender):
             send = sender
         if send is None:
@@ -890,7 +974,12 @@ def build_platform_delivery_handlers(
     agent_provider_factory: Callable[[], AgentProvider] | AgentProvider | None = None,
     reply_sender_factory: Callable[[], Any] | Any = None,
 ) -> Mapping[str, DeliveryHandler]:
-    """Build handlers for a worker process without sharing request sessions."""
+    """Build handlers for a worker process without sharing request sessions.
+
+    ``reply_sender_factory`` may return a single sender or a mapping keyed by
+    ``channel`` or ``channel:instance``. Multi-channel deployments need the
+    mapping form: one sender per channel protocol, resolved per reply.
+    """
 
     async def inbound_handler(task: PlatformDeliveryTask) -> DeliveryOutcome:
         adapter = adapter_factory() if callable(adapter_factory) else adapter_factory

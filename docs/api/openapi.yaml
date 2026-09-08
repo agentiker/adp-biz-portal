@@ -660,7 +660,6 @@ paths:
       operationId: listChannelIdentities
       summary: List channel identities for administrators
       parameters:
-        - $ref: '#/components/parameters/EnterpriseIdQuery'
         - name: userId
           in: query
           required: false
@@ -861,11 +860,6 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
-    EnterpriseIdQuery:
-      name: enterpriseId
-      in: query
-      required: false
-      schema: { type: string, format: uuid }
   responses:
     BadRequest:
       description: Invalid request
@@ -921,15 +915,23 @@ components:
       enum: [pending, active, revoked, expired]
     ChannelIdentity:
       type: object
-      required: [id, userId, accountId, enterpriseId, channel, channelInstanceId, externalIdentityId, status, createdAt, updatedAt]
+      required: [id, userId, accountId, channel, channelInstanceId, externalIdentityId, status, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         userId: { type: string, format: uuid }
         accountId: { type: string, format: uuid }
-        enterpriseId: { type: string, format: uuid }
+        enterpriseId:
+          description: Legacy compatibility field; new platform-user bindings return null.
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
         channel: { type: string }
         channelInstanceId: { type: string }
-        externalIdentityId: { type: string }
+        externalIdentityId:
+          description: Null while a binding waits for the original channel sender to confirm it.
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
         status: { $ref: '#/components/schemas/ChannelIdentityStatus' }
         stateExpiresAt:
           oneOf:
@@ -947,12 +949,20 @@ components:
         updatedAt: { type: string, format: date-time }
     StartChannelIdentityBindingRequest:
       type: object
-      required: [enterpriseId, channel, channelInstanceId, externalIdentityId]
+      required: [channel, channelInstanceId]
       properties:
-        enterpriseId: { type: string, format: uuid }
         channel: { type: string, minLength: 1, maxLength: 48 }
         channelInstanceId: { type: string, minLength: 1, maxLength: 128 }
-        externalIdentityId: { type: string, minLength: 1, maxLength: 255 }
+        externalIdentityId:
+          description: >-
+            Optional. Omit it when the page cannot learn the sender's own
+            channel identity (a WeChat OpenID is not visible to the customer);
+            the trusted channel adapter then supplies it while confirming the
+            state. Provide it only when channel web authorization already
+            established the identity, in which case confirmation must match it.
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 255 }
+            - { type: 'null' }
     PlatformUser:
       type: object
       required: [id, name, phone, role, roleLabel]
@@ -982,14 +992,19 @@ components:
         password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
     PlatformLoginResult:
       type: object
-      required: [token, user, enterprise, permissions, mustReset]
+      required: [token, user, enterprise, enterprises, permissions, mustReset]
       properties:
         token: { type: string }
         user: { $ref: '#/components/schemas/PlatformUser' }
         enterprise:
+          description: The single accessible enterprise, or null when the user must choose a scope per request.
           oneOf:
             - { $ref: '#/components/schemas/EnterpriseScope' }
             - { type: 'null' }
+        enterprises:
+          description: Every enterprise the user may currently query.
+          type: array
+          items: { $ref: '#/components/schemas/EnterpriseScope' }
         permissions:
           type: array
           items: { type: string }
@@ -1015,13 +1030,18 @@ components:
         evidence: { type: boolean }
     PortalOverview:
       type: object
-      required: [user, enterprise, stats, services, sessions]
+      required: [user, enterprise, enterprises, stats, services, sessions]
       properties:
         user: { $ref: '#/components/schemas/PlatformUser' }
         enterprise:
+          description: The single accessible enterprise, or null when the user must choose a scope.
           oneOf:
             - { $ref: '#/components/schemas/EnterpriseScope' }
             - { type: 'null' }
+        enterprises:
+          description: Every enterprise the user may currently query.
+          type: array
+          items: { $ref: '#/components/schemas/EnterpriseScope' }
         stats:
           type: object
           required: [activeShipments, pendingMilestones, recentQueries]
@@ -1123,6 +1143,15 @@ components:
             - { type: string, format: uuid }
             - { type: 'null' }
         messageId: { type: string, maxLength: 255 }
+        enterpriseId:
+          description: >-
+            Required when the user has more than one active membership; it is
+            validated against current memberships. Omit it when exactly one
+            enterprise is accessible. The server never selects a scope on
+            behalf of an ambiguous request.
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
     WebInboundStatus:
       type: object
       required: [inboundMessageId, inboundStatus, taskStatus, replyStatus, conversationId]

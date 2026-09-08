@@ -15,6 +15,7 @@ from typing import Any
 
 from sanic import json, text
 from sanic.request.types import Request
+from sanic.response import HTTPResponse
 from sanic.views import HTTPMethodView
 from sqlalchemy import func, select
 
@@ -33,8 +34,8 @@ from core.platform import (
     create_enterprise,
     create_platform_user,
     generate_initial_password,
-    get_enterprise_for_user,
     get_enterprises_for_user,
+    resolve_enterprise_scope,
     get_platform_config_state,
     is_adp_service_token_valid,
     issue_execution_context,
@@ -65,13 +66,16 @@ from core.channel_credentials import (
 )
 from core.channel_identity import (
     begin_channel_identity_binding,
+    channel_identity_state_hash,
     confirm_channel_identity_binding,
     external_identity_fingerprint,
+    looks_like_channel_identity_state,
     revoke_channel_identity,
     revoke_account_channel_identities,
     serialize_channel_identity,
     resolve_active_channel_identity,
 )
+from core.channel_replay import claim_replay_key, prune_expired_replay_markers
 from core.platform_worker import PLATFORM_INBOUND_MAX_ATTEMPTS, PLATFORM_INBOUND_TASK_TYPE
 from integrations.m3.adapter import M3LookupAdapter, M3LookupResult
 from integrations.channels.registry import ChannelRegistryError, register_default_adapters
@@ -562,7 +566,8 @@ class PlatformLoginApi(HTTPMethodView):
             raise
 
         request.ctx.platform = context
-        enterprise = await get_enterprise_for_user(request.ctx.db, context.user)
+        enterprises = await get_enterprises_for_user(request.ctx.db, context.user)
+        enterprise = enterprises[0] if len(enterprises) == 1 else None
         await _commit_audit(
             request,
             action="auth.login",
@@ -574,6 +579,7 @@ class PlatformLoginApi(HTTPMethodView):
             "token": token,
             "user": serialize_user(context.user),
             "enterprise": serialize_enterprise(enterprise, context.permissions) if enterprise else None,
+            "enterprises": [serialize_enterprise(item, context.permissions) for item in enterprises],
             "permissions": sorted(context.permissions),
             "mustReset": bool((await request.ctx.db.execute(
                 select(PlatformCredential.MustReset).where(PlatformCredential.AccountId == context.account.Id)
@@ -608,7 +614,8 @@ class PlatformSessionApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
         context = _context(request)
-        enterprise = await get_enterprise_for_user(request.ctx.db, context.user)
+        enterprises = await get_enterprises_for_user(request.ctx.db, context.user)
+        enterprise = enterprises[0] if len(enterprises) == 1 else None
         must_reset = bool((await request.ctx.db.execute(
             select(PlatformCredential.MustReset).where(PlatformCredential.AccountId == context.account.Id)
         )).scalar_one_or_none())
@@ -616,6 +623,7 @@ class PlatformSessionApi(HTTPMethodView):
             "token": "",
             "user": serialize_user(context.user),
             "enterprise": serialize_enterprise(enterprise, context.permissions) if enterprise else None,
+            "enterprises": [serialize_enterprise(item, context.permissions) for item in enterprises],
             "permissions": sorted(context.permissions),
             "mustReset": must_reset,
         })
@@ -625,7 +633,11 @@ class PortalOverviewApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
         context = _context(request)
-        enterprise = await get_enterprise_for_user(request.ctx.db, context.user)
+        enterprises = await get_enterprises_for_user(request.ctx.db, context.user)
+        # ``enterprise`` stays for a single-scope portal. ``enterprises`` lets a
+        # user with several memberships state which scope a question is about;
+        # the server never picks one for them.
+        enterprise = enterprises[0] if len(enterprises) == 1 else None
         sessions = list((await request.ctx.db.execute(
             select(PlatformConversation).where(PlatformConversation.AccountId == context.account.Id).order_by(PlatformConversation.LastActiveAt.desc()).limit(20)
         )).scalars().all())
@@ -653,6 +665,7 @@ class PortalOverviewApi(HTTPMethodView):
         return json({
             "user": serialize_user(context.user),
             "enterprise": serialize_enterprise(enterprise, context.permissions) if enterprise else None,
+            "enterprises": [serialize_enterprise(item, context.permissions) for item in enterprises],
             "stats": {"activeShipments": 0, "pendingMilestones": 0, "recentQueries": int(total or 0)},
             "services": services,
             "sessions": [
@@ -786,10 +799,14 @@ class ShipmentLookupApi(HTTPMethodView):
     async def post(self, request: Request):
         context = _context(request)
         require_permission(context, "shipment.read")
-        enterprise = await get_enterprise_for_user(request.ctx.db, context.user)
-        if enterprise is None:
-            raise PlatformForbidden("当前账号没有可访问的企业范围")
         body = _body(request)
+        # Same rule as the asynchronous channel path: an ambiguous scope is
+        # rejected instead of answered with one of several tenants' data.
+        enterprise = await resolve_enterprise_scope(
+            request.ctx.db,
+            context.user,
+            enterprise_id=_optional_uuid(body, "enterpriseId"),
+        )
         query = body.get("query")
         if not isinstance(query, str) or not query.strip():
             raise PlatformBadRequest("请输入提单号或箱号")
@@ -878,11 +895,17 @@ class WebChannelInboundApi(HTTPMethodView):
     async def post(self, request: Request):
         context = _context(request)
         require_permission(context, "shipment.read")
-        enterprise = await get_enterprise_for_user(request.ctx.db, context.user)
-        if enterprise is None:
-            raise PlatformForbidden("当前账号没有可访问的企业范围")
-
         body = _body(request)
+        # A user who belongs to several enterprises must say which one the
+        # question is about. Picking one silently would answer with another
+        # tenant's data, so the browser sends an explicit scope that is checked
+        # against current memberships here.
+        enterprise = await resolve_enterprise_scope(
+            request.ctx.db,
+            context.user,
+            enterprise_id=_optional_uuid(body, "enterpriseId"),
+        )
+
         try:
             adapter = register_default_adapters().get("web", "web-portal")
         except ChannelRegistryError as exc:
@@ -1029,6 +1052,39 @@ async def _wechat_adapter(request: Request, channel_instance_id: str) -> WechatO
         raise PlatformBadRequest("微信服务号安全模式凭据格式不正确") from exc
 
 
+WECHAT_UNBOUND_REPLY = (
+    "您还没有绑定平台账号，暂时无法查询业务数据。"
+    "请登录官网平台完成渠道绑定，或联系您的销售/客服协助开通。"
+)
+WECHAT_BIND_SUCCESS_REPLY = "绑定成功，现在可以直接在这里查询您有权限的业务数据。"
+WECHAT_BIND_FAILED_REPLY = (
+    "绑定未成功：绑定码无效、已使用或已过期。请回到官网平台重新获取绑定码后再发送。"
+)
+
+
+def _wechat_reply(
+    adapter: WechatOfficialAccountAdapter,
+    *,
+    envelope: Any,
+    content: str,
+    encrypted: bool,
+) -> HTTPResponse:
+    """Answer a WeChat callback with a passive reply instead of an error status.
+
+    WeChat retries a non-2xx callback and then shows the sender a service
+    failure, so refusing an unbound or non-executable message with 4xx would
+    both hide the real reason and make the account look broken. A 200 with a
+    passive reply is the channel's own way to say "not now, do this instead".
+    """
+    body = adapter.build_reply(
+        to_open_id=envelope.open_id,
+        from_account=envelope.to_user,
+        content=content,
+        encrypted=encrypted,
+    )
+    return text(body, status=200, content_type="application/xml")
+
+
 class WechatOfficialAccountCallbackApi(HTTPMethodView):
     """Public WeChat callback; only durable enqueue work happens here."""
 
@@ -1052,7 +1108,7 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
         encrypted = request.args.get("encrypt_type", "").lower() == "aes" or bool(request.args.get("msg_signature"))
         if encrypted:
             encrypted_body = adapter.extract_encrypted(request.body)
-            adapter.verify_encrypted_callback(
+            replay_key = adapter.verify_encrypted_callback(
                 msg_signature=request.args.get("msg_signature", ""),
                 timestamp=request.args.get("timestamp", ""),
                 nonce=request.args.get("nonce", ""),
@@ -1060,13 +1116,34 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
             )
             body = adapter.decrypt_xml(encrypted_body)
         else:
-            adapter.verify_callback(
+            replay_key = adapter.verify_callback(
                 signature=request.args.get("signature", ""),
                 timestamp=request.args.get("timestamp", ""),
                 nonce=request.args.get("nonce", ""),
             )
             body = request.body
+        # The in-process guard above only covers this instance; the durable
+        # marker is what rejects a replay across API replicas and restarts.
+        await claim_replay_key(
+            request.ctx.db,
+            channel=adapter.channel,
+            channel_instance_id=adapter.channel_instance_id,
+            replay_key=replay_key,
+            ttl_seconds=adapter.replay_window_seconds,
+        )
+        await prune_expired_replay_markers(request.ctx.db)
         envelope = adapter.normalize_xml(body=body, trace_id=_trace_id(request))
+
+        if looks_like_channel_identity_state(envelope.message.text):
+            # A binding code is a one-time secret. It is consumed here and
+            # never recorded as message content or forwarded to the agent.
+            return await self._confirm_binding(
+                request,
+                adapter,
+                envelope=envelope,
+                encrypted=encrypted,
+            )
+
         identity = await resolve_active_channel_identity(
             request.ctx.db,
             channel=adapter.channel,
@@ -1074,11 +1151,34 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
             external_identity_id=envelope.open_id,
         )
         if identity is None:
-            raise PlatformForbidden("微信身份尚未绑定平台账号")
+            await create_audit(
+                request.ctx.db,
+                actor_account_id=None,
+                action="channel.inbound.reject",
+                target_type="platform_channel_identity",
+                target_id=None,
+                trace_id=envelope.message.trace_id,
+                outcome="rejected",
+                metadata={
+                    "channel": adapter.channel,
+                    "channelInstanceId": adapter.channel_instance_id,
+                    "externalIdentityFingerprint": external_identity_fingerprint(envelope.open_id),
+                    "reason": "channel_identity_not_bound",
+                },
+            )
+            await request.ctx.db.commit()
+            return _wechat_reply(
+                adapter,
+                envelope=envelope,
+                content=WECHAT_UNBOUND_REPLY,
+                encrypted=encrypted,
+            )
         task_payload = dict(envelope.task_payload)
         task_payload.update({
             "platformUserId": str(identity.UserId),
-            "enterpriseId": str(identity.EnterpriseId),
+            # Enterprise scope is selected by the worker from the platform
+            # user's active memberships. Channel identity is platform-level.
+            "enterpriseId": None,
             "accountId": str(identity.AccountId),
             "channel": adapter.channel,
             "traceId": envelope.message.trace_id,
@@ -1094,6 +1194,73 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
         # WeChat accepts the literal success body.  Detailed task IDs stay out
         # of the provider response and are available through platform storage.
         return text("success", status=200)
+
+    async def _confirm_binding(
+        self,
+        request: Request,
+        adapter: WechatOfficialAccountAdapter,
+        *,
+        envelope: Any,
+        encrypted: bool,
+    ) -> HTTPResponse:
+        """Complete a browser-started binding from the original channel sender."""
+        state = (envelope.message.text or "").strip()
+        try:
+            row = await confirm_channel_identity_binding(
+                request.ctx.db,
+                state=state,
+                channel=adapter.channel,
+                channel_instance_id=adapter.channel_instance_id,
+                external_identity_id=envelope.open_id,
+            )
+        except (PlatformBadRequest, PlatformForbidden, AccountUnauthorized) as exc:
+            # Do not roll back: a rejected confirmation deliberately burns the
+            # one-time state (expired, or replayed by a different sender), and
+            # that revocation must be committed together with the audit.
+            await create_audit(
+                request.ctx.db,
+                actor_account_id=None,
+                action="channel.identity.confirm",
+                target_type="platform_channel_identity",
+                target_id=None,
+                trace_id=envelope.message.trace_id,
+                outcome="rejected",
+                metadata={
+                    "channel": adapter.channel,
+                    "channelInstanceId": adapter.channel_instance_id,
+                    "externalIdentityFingerprint": external_identity_fingerprint(envelope.open_id),
+                    "reason": exc.__class__.__name__,
+                    "source": "channel_message",
+                },
+            )
+            await request.ctx.db.commit()
+            return _wechat_reply(
+                adapter,
+                envelope=envelope,
+                content=WECHAT_BIND_FAILED_REPLY,
+                encrypted=encrypted,
+            )
+        await create_audit(
+            request.ctx.db,
+            actor_account_id=str(row.AccountId),
+            action="channel.identity.confirm",
+            target_type="platform_channel_identity",
+            target_id=str(row.Id),
+            trace_id=envelope.message.trace_id,
+            metadata={
+                "channel": row.Channel,
+                "channelInstanceId": row.ChannelInstanceId,
+                "externalIdentityFingerprint": external_identity_fingerprint(row.ExternalIdentityId),
+                "source": "channel_message",
+            },
+        )
+        await request.ctx.db.commit()
+        return _wechat_reply(
+            adapter,
+            envelope=envelope,
+            content=WECHAT_BIND_SUCCESS_REPLY,
+            encrypted=encrypted,
+        )
 
 
 async def _default_wechat_instance_id(request: Request) -> str:
@@ -1343,15 +1510,22 @@ class ChannelIdentityBindApi(HTTPMethodView):
     async def post(self, request: Request):
         context = _context(request)
         body = _body(request)
-        enterprise_id = _required_uuid(body, "enterpriseId")
         channel = _required_channel_text(body, "channel", 48)
         channel_instance_id = _required_channel_text(body, "channelInstanceId", 128)
-        external_identity_id = _required_channel_text(body, "externalIdentityId", 255)
+        # Optional: a customer normally cannot supply their own channel
+        # identity (a WeChat OpenID is not visible to them), so the binding is
+        # confirmed by the channel adapter that receives the state. Pages that
+        # already know the identity through channel web authorization may pin
+        # it up front.
+        external_identity_id = (
+            _required_channel_text(body, "externalIdentityId", 255)
+            if body.get("externalIdentityId") not in (None, "")
+            else None
+        )
         row, state = await begin_channel_identity_binding(
             request.ctx.db,
             user_id=str(context.user.Id),
             account_id=str(context.account.Id),
-            enterprise_id=enterprise_id,
             channel=channel,
             channel_instance_id=channel_instance_id,
             external_identity_id=external_identity_id,
@@ -1362,7 +1536,7 @@ class ChannelIdentityBindApi(HTTPMethodView):
             target_type="platform_channel_identity",
             target_id=str(row.Id),
             metadata={
-                "enterpriseId": str(row.EnterpriseId),
+                "enterpriseId": None,
                 "channel": row.Channel,
                 "channelInstanceId": row.ChannelInstanceId,
                 "externalIdentityFingerprint": external_identity_fingerprint(row.ExternalIdentityId),
@@ -1405,7 +1579,6 @@ class ChannelIdentityConfirmApi(HTTPMethodView):
         channel = _required_channel_text(body, "channel", 48)
         channel_instance_id = _required_channel_text(body, "channelInstanceId", 128)
         external_identity_id = _required_channel_text(body, "externalIdentityId", 255)
-        from core.channel_identity import channel_identity_state_hash
 
         pending = (
             await request.ctx.db.execute(
@@ -1683,7 +1856,6 @@ class AdminUserAccessApi(HTTPMethodView):
             enterprise_ids=body.get("enterpriseIds") if "enterpriseIds" in body else None,
         )
         reply_tasks_revoked = await revoke_account_delivery_tasks(request.ctx.db, str(user.AccountId))
-        channel_identities_revoked = await revoke_account_channel_identities(request.ctx.db, str(user.AccountId))
         enterprises = await get_enterprises_for_user(request.ctx.db, user)
         await _commit_audit(
             request,
@@ -1695,7 +1867,6 @@ class AdminUserAccessApi(HTTPMethodView):
                 "enterpriseIds": [str(item.Id) for item in enterprises],
                 "executionContextsRevoked": True,
                 "replyTasksRevoked": reply_tasks_revoked,
-                "channelIdentitiesRevoked": channel_identities_revoked,
             },
         )
         return json({
@@ -1756,13 +1927,6 @@ class AdminChannelIdentityListApi(HTTPMethodView):
     async def get(self, request: Request):
         require_permission(_context(request), "platform.manage")
         statement = select(PlatformChannelIdentity).order_by(PlatformChannelIdentity.CreatedAt.desc())
-        enterprise_id = request.args.get("enterpriseId")
-        if enterprise_id:
-            try:
-                enterprise_id = str(uuid.UUID(enterprise_id))
-            except ValueError as exc:
-                raise PlatformBadRequest("enterpriseId格式不正确") from exc
-            statement = statement.where(PlatformChannelIdentity.EnterpriseId == enterprise_id)
         user_id = request.args.get("userId")
         if user_id:
             try:
@@ -1823,6 +1987,14 @@ def _required_uuid(body: dict[str, Any], field: str) -> str:
         return str(uuid.UUID(value.strip()))
     except ValueError as exc:
         raise PlatformBadRequest(f"{field}格式不正确") from exc
+
+
+def _optional_uuid(body: dict[str, Any], field: str) -> str | None:
+    """Validate an optional UUID field without inventing a default scope."""
+    value = body.get(field)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _required_uuid(body, field)
 
 
 def _required_channel_text(body: dict[str, Any], field: str, max_length: int) -> str:

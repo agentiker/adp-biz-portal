@@ -9,7 +9,7 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from config import tagentic_config
-from app_factory import create_app
+from test.app_bootstrap import ensure_app
 from core.account import CoreAccount
 from core.session import SessionToken
 from model.account import AccountRole, AccountThirdParty
@@ -24,8 +24,7 @@ from model.platform import (
 
 @pytest.fixture(scope="session")
 def app():
-    app = create_app()
-    return app
+    return ensure_app()
 
 
 @pytest.fixture(scope="session")

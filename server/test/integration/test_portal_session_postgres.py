@@ -182,9 +182,9 @@ async def test_portal_persists_history_and_keeps_same_enterprise_users_isolated(
     portal_sessionmaker,
     monkeypatch,
 ):
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    create_app_with_configs()
+    ensure_app()
     import router.platform as platform_router
 
     contexts, enterprise_id = await _seed_accounts(portal_sessionmaker)

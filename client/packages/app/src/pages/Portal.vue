@@ -34,6 +34,7 @@ const loadError = ref('')
 const queryError = ref('')
 const lookupNotice = ref('')
 const activeConversationId = ref<string | null>(null)
+const selectedEnterpriseId = ref<string>('')
 
 const view = computed(() => {
   if (route.name === 'portal-lookup') return 'lookup'
@@ -44,10 +45,18 @@ const view = computed(() => {
 
 const pageTitle = computed(() => ({ overview: '概览', lookup: '业务查询', sessions: '我的会话', settings: '账号与绑定' })[view.value])
 const displayName = computed(() => overview.value?.user.name || userStore.name)
-const enterpriseName = computed(() => overview.value?.enterprise?.name || '暂无授权企业范围')
-const customerCode = computed(() => overview.value?.enterprise?.customerCode || '—')
-const permissions = computed(() => overview.value?.enterprise?.permissions || [])
-const hasEnterprise = computed(() => Boolean(overview.value?.enterprise))
+const enterprises = computed(() => overview.value?.enterprises || [])
+// A user with several memberships must state which enterprise a question is
+// about; the server refuses to guess, so the scope comes from this selection.
+const needsEnterpriseChoice = computed(() => enterprises.value.length > 1)
+const activeEnterprise = computed(() => {
+  if (overview.value?.enterprise) return overview.value.enterprise
+  return enterprises.value.find((item) => item.id === selectedEnterpriseId.value) || null
+})
+const enterpriseName = computed(() => activeEnterprise.value?.name || '暂无授权企业范围')
+const customerCode = computed(() => activeEnterprise.value?.customerCode || '—')
+const permissions = computed(() => activeEnterprise.value?.permissions || [])
+const hasEnterprise = computed(() => Boolean(activeEnterprise.value))
 
 onMounted(async () => {
   try {
@@ -90,7 +99,9 @@ const submitLookup = async () => {
     return
   }
   if (!hasEnterprise.value) {
-    queryError.value = '当前账号没有授权企业范围，请联系平台管理员。'
+    queryError.value = needsEnterpriseChoice.value
+      ? '请先选择本次查询的企业范围。'
+      : '当前账号没有授权企业范围，请联系平台管理员。'
     return
   }
   loading.value = true
@@ -100,7 +111,12 @@ const submitLookup = async () => {
     if (import.meta.env.VITE_PLATFORM_USE_MOCK === 'true') {
       result.value = await lookupShipment(query.value, activeConversationId.value)
     } else {
-      const receipt = await submitWebInbound(query.value, activeConversationId.value)
+      const receipt = await submitWebInbound(
+        query.value,
+        activeConversationId.value,
+        undefined,
+        activeEnterprise.value?.id,
+      )
       let status = await getWebInboundStatus(receipt.inboundMessageId)
       for (let attempt = 0; attempt < 40 && !status.conversationId; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 250))
@@ -192,12 +208,19 @@ const resultStatusClass = (status: ShipmentResult['status']) => `result-status--
 
       <section class="lookup-hero">
         <div class="lookup-hero-copy"><span class="section-kicker">从这里开始</span><h2>查一票货物</h2><p>输入提单号或箱号，获取当前企业授权范围内的最新信息。</p></div>
+        <label v-if="needsEnterpriseChoice" class="scope-picker">
+          <span>本次查询的企业范围</span>
+          <select v-model="selectedEnterpriseId" aria-label="选择企业范围">
+            <option value="">请选择企业</option>
+            <option v-for="item in enterprises" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+        </label>
         <form class="lookup-form" @submit.prevent="openLookup(query)">
           <SearchIcon class="lookup-form-icon" />
           <input v-model="query" aria-label="提单号或箱号" placeholder="例如：EGLV123456789" :disabled="!hasEnterprise" />
           <button type="submit" :class="{ 'is-loading': loading }" :disabled="loading || !hasEnterprise">{{ loading ? '查询中…' : hasEnterprise ? '开始查询' : '暂无授权' }}<ArrowRightIcon /></button>
         </form>
-        <span class="form-hint"><CloudIcon />{{ hasEnterprise ? '数据来自 M3 只读查询网关 · 不保存平台外的业务数据' : '当前账号没有可查询的企业范围，请联系平台管理员' }}</span>
+        <span class="form-hint"><CloudIcon />{{ hasEnterprise ? '数据来自 M3 只读查询网关 · 不保存平台外的业务数据' : needsEnterpriseChoice ? '您可访问多个企业，请先选择本次查询的企业范围' : '当前账号没有可查询的企业范围，请联系平台管理员' }}</span>
       </section>
 
       <section class="metric-grid">
@@ -267,6 +290,10 @@ h1 { margin: 0; font-size: 31px; line-height: 1.18; font-weight: 740; color: #14
 .lookup-hero h2, .panel-heading h2, .result-header h2, .settings-card h2 { margin: 0; font-size: 20px; color: #17312e; }
 .lookup-hero p { margin: 6px 0 18px; color: #5d7972; font-size: 12px; }
 .lookup-form { height: 48px; display: flex; align-items: center; border: 1px solid #bdd8d0; background: #fff; border-radius: 6px; padding-left: 14px; max-width: 740px; }
+.scope-picker { display: flex; flex-direction: column; gap: 6px; max-width: 320px; margin-bottom: 12px; }
+.scope-picker span { color: #4a635e; font-size: 12px; font-weight: 600; }
+.scope-picker select { height: 38px; border: 1px solid #bdd8d0; border-radius: 6px; background: #fff; padding: 0 10px; color: #17312e; font: inherit; font-size: 13px; }
+.scope-picker select:focus-visible { outline: 2px solid #147d72; outline-offset: 1px; }
 .lookup-form:focus-within { border-color: #147d72; box-shadow: 0 0 0 3px rgba(20,125,114,.12); }
 .lookup-form-icon { width: 18px; color: #8a9f9a; flex: 0 0 auto; }
 .lookup-form input { min-width: 0; flex: 1; height: 100%; border: 0; outline: 0; background: transparent; padding: 0 12px; color: #17312e; font: inherit; font-size: 13px; }

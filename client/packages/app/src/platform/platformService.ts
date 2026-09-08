@@ -125,6 +125,7 @@ const demoSessions: PortalSession[] = [
 const overview: PortalOverview = {
   user: demoUser,
   enterprise: demoEnterprise,
+  enterprises: [demoEnterprise],
   stats: { activeShipments: 18, pendingMilestones: 3, recentQueries: 26 },
   services: [
     { name: 'M3 业务数据', detail: '只读查询网关', status: 'healthy', updatedAt: '刚刚同步' },
@@ -200,6 +201,7 @@ export async function loginPlatform(phone: string, password: string): Promise<Pl
     token: `platform-demo-${Date.now()}`,
     user: { ...demoUser, phone: phone.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2') || demoUser.phone },
     enterprise: demoEnterprise,
+    enterprises: [demoEnterprise],
     permissions: ['shipment.read'],
     mustReset: false,
   }
@@ -211,6 +213,7 @@ export async function getPlatformSession(): Promise<PlatformLoginResult> {
     token: '',
     user: demoUser,
     enterprise: demoEnterprise,
+    enterprises: [demoEnterprise],
     permissions: ['shipment.read'],
     mustReset: false,
   })
@@ -250,11 +253,14 @@ export async function getPortalSession(conversationId: string): Promise<PortalSe
   return httpService.get<PortalSessionDetail>(`/api/v1/portal/sessions/${encodeURIComponent(conversationId)}`)
 }
 
-export async function submitWebInbound(text: string, conversationId?: string | null, messageId?: string): Promise<InboundReceipt> {
+export async function submitWebInbound(text: string, conversationId?: string | null, messageId?: string, enterpriseId?: string | null): Promise<InboundReceipt> {
   return httpService.post<InboundReceipt>('/api/v1/channels/web/inbound', {
     text,
     ...(conversationId ? { conversationId } : {}),
     ...(messageId ? { messageId } : {}),
+    // Only the enterprise scope is accepted from the browser, and the server
+    // still checks it against current memberships.
+    ...(enterpriseId ? { enterpriseId } : {}),
   })
 }
 

@@ -142,10 +142,10 @@ export interface ChannelIdentity {
   id: string
   userId: string
   accountId: string
-  enterpriseId: string
+  enterpriseId?: string | null
   channel: string
   channelInstanceId: string
-  externalIdentityId: string
+  externalIdentityId: string | null
   status: ChannelIdentityStatus
   stateExpiresAt?: string | null
   confirmedAt?: string | null
@@ -272,6 +272,7 @@ export interface PlatformLoginResult {
   token: string
   user: PlatformUser
   enterprise: EnterpriseScope | null
+  enterprises: Array<EnterpriseScope>
   permissions: Array<string>
   mustReset: boolean
 }
@@ -319,6 +320,7 @@ export interface PortalMessage {
 export interface PortalOverview {
   user: PlatformUser
   enterprise: EnterpriseScope | null
+  enterprises: Array<EnterpriseScope>
   stats: {
     activeShipments: number | null
     pendingMilestones: number | null
@@ -380,10 +382,9 @@ export interface ShipmentResult {
 }
 
 export interface StartChannelIdentityBindingRequest {
-  enterpriseId: string
   channel: string
   channelInstanceId: string
-  externalIdentityId: string
+  externalIdentityId?: string | null
 }
 
 export interface SuccessResponse {
@@ -408,6 +409,7 @@ export interface WebInboundRequest {
   text: string
   conversationId?: string | null
   messageId?: string
+  enterpriseId?: string | null
 }
 
 export interface WebInboundStatus {

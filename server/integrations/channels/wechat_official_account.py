@@ -11,12 +11,13 @@ import base64
 import binascii
 import hashlib
 import hmac
+import secrets
 import struct
 import time
 import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -29,13 +30,39 @@ from integrations.channels.base import ChannelCapabilities, DeliveryReceipt, Out
 WECHAT_OFFICIAL_ACCOUNT = "wechat_official_account"
 DEFAULT_REPLAY_WINDOW_SECONDS = 300
 MAX_XML_BYTES = 256 * 1024
+MAX_REPLY_CHARS = 2000
 
 
 class WechatProtocolError(PlatformBadRequest):
     """Malformed or unauthenticated provider callback."""
 
 
+def _cdata(value: Any, *, field: str, max_length: int = 255) -> str:
+    """Return text that is safe to embed in a CDATA section.
+
+    ``]]>`` would end the section early and let content forge XML structure, so
+    it is rejected together with control characters instead of being escaped
+    into something the provider may render differently.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise WechatProtocolError(f"微信{field}格式不正确")
+    normalized = value.strip()
+    if len(normalized) > max_length:
+        raise WechatProtocolError(f"微信{field}长度超限")
+    if "]]>" in normalized or any(ord(char) < 0x20 and char not in "\r\n\t" for char in normalized):
+        raise WechatProtocolError(f"微信{field}包含不支持的字符")
+    return normalized
+
+
 class _ReplayGuard:
+    """Process-local replay cache used as a fast path.
+
+    A single process cannot see what another API instance already accepted, so
+    this only short-circuits obvious repeats. Durable, cross-instance rejection
+    comes from ``core.channel_replay``, which the callback route consults before
+    handing the body to the adapter.
+    """
+
     def __init__(self, *, max_entries: int = 20_000) -> None:
         self._entries: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -108,6 +135,7 @@ class WechatInboundEnvelope:
     task_payload: Mapping[str, Any]
     open_id: str
     created_at: int
+    to_user: str
 
 
 class WechatOfficialAccountAdapter:
@@ -161,7 +189,8 @@ class WechatOfficialAccountAdapter:
             raise ValueError("encoding_aes_key must decode to 32 bytes")
         return key
 
-    def verify_callback(self, *, signature: str, timestamp: str, nonce: str, now: float | None = None) -> None:
+    def verify_callback(self, *, signature: str, timestamp: str, nonce: str, now: float | None = None) -> str:
+        """Verify a plaintext callback and return its durable replay key."""
         current = time.time() if now is None else now
         parsed = _timestamp(timestamp, now=current, window_seconds=self.replay_window_seconds)
         if not verify_signature(token=self.token, timestamp=str(parsed), nonce=nonce, signature=signature):
@@ -169,6 +198,7 @@ class WechatOfficialAccountAdapter:
         replay_key = hashlib.sha256(f"{self.channel_instance_id}:{parsed}:{nonce}:{signature}".encode()).hexdigest()
         if not _replay_guard.check_and_mark(replay_key, now=current, ttl=self.replay_window_seconds):
             raise WechatProtocolError("微信回调重复提交")
+        return replay_key
 
     def verify_encrypted_callback(
         self,
@@ -178,7 +208,8 @@ class WechatOfficialAccountAdapter:
         nonce: str,
         encrypt: str,
         now: float | None = None,
-    ) -> None:
+    ) -> str:
+        """Verify an encrypted callback and return its durable replay key."""
         if self._aes_key is None:
             raise WechatProtocolError("微信安全模式未配置EncodingAESKey")
         current = time.time() if now is None else now
@@ -193,6 +224,7 @@ class WechatOfficialAccountAdapter:
         ).hexdigest()
         if not _replay_guard.check_and_mark(replay_key, now=current, ttl=self.replay_window_seconds):
             raise WechatProtocolError("微信回调重复提交")
+        return replay_key
 
     @staticmethod
     def extract_encrypted(body: bytes) -> str:
@@ -276,6 +308,7 @@ class WechatOfficialAccountAdapter:
             digest = hashlib.sha256(f"{to_user}|{open_id}|{created_at}|{msg_type}|{content}".encode()).hexdigest()
             msg_id = f"generated-{digest}"
         external_conversation_id = f"{self.channel_instance_id}:{open_id}"
+        received_at = datetime.fromtimestamp(created_at, tz=timezone.utc).replace(tzinfo=None)
         return WechatInboundEnvelope(
             message=InboundMessageInput(
                 channel_instance_id=self.channel_instance_id,
@@ -286,15 +319,101 @@ class WechatOfficialAccountAdapter:
                 trace_id=trace_id,
                 message_type=msg_type,
                 payload={"channel": self.channel, "toUserName": to_user, "protocol": "wechat.official-account.xml.v1"},
+                # The customer-service message window is measured from the
+                # user's message, not from when the platform finishes working.
+                reply_window_expires_at=(
+                    received_at + timedelta(seconds=self.capabilities.reply_window_seconds)
+                    if self.capabilities.reply_window_seconds
+                    else None
+                ),
             ),
             task_payload={"channel": self.channel, "traceId": trace_id, "externalIdentityId": open_id},
             open_id=open_id,
             created_at=created_at,
+            to_user=to_user,
         )
 
     def normalize(self, **kwargs: Any) -> WechatInboundEnvelope:
         """Registry-compatible normalization entry point."""
         return self.normalize_xml(**kwargs)
+
+    def build_text_reply(
+        self,
+        *,
+        to_open_id: str,
+        from_account: str,
+        content: str,
+        now: float | None = None,
+    ) -> str:
+        """Build the passive text reply returned in the callback response.
+
+        A passive reply is the only way to answer a sender the platform will
+        not process further (unbound identity, binding result). It keeps the
+        provider contract intact: the callback still answers 200 with a body
+        WeChat understands, so the account is not marked as failing.
+        """
+        created = int(time.time() if now is None else now)
+        return (
+            "<xml>"
+            f"<ToUserName><![CDATA[{_cdata(to_open_id, field='接收者')}]]></ToUserName>"
+            f"<FromUserName><![CDATA[{_cdata(from_account, field='发送者')}]]></FromUserName>"
+            f"<CreateTime>{created}</CreateTime>"
+            "<MsgType><![CDATA[text]]></MsgType>"
+            f"<Content><![CDATA[{_cdata(content, field='回复内容', max_length=MAX_REPLY_CHARS)}]]></Content>"
+            "</xml>"
+        )
+
+    def encrypt_reply(self, plain_xml: str, *, now: float | None = None, nonce: str | None = None) -> str:
+        """Wrap a passive reply in WeChat's 安全模式 envelope."""
+        if self._aes_key is None or not self.app_id:
+            raise WechatProtocolError("微信安全模式凭据不完整")
+        if not isinstance(plain_xml, str) or not plain_xml:
+            raise WechatProtocolError("微信回复内容无效")
+        body = plain_xml.encode("utf-8")
+        payload = (
+            secrets.token_bytes(16)
+            + struct.pack("!I", len(body))
+            + body
+            + self.app_id.encode("utf-8")
+        )
+        pad_length = 32 - (len(payload) % 32)
+        padded = payload + bytes([pad_length]) * pad_length
+        encryptor = Cipher(algorithms.AES(self._aes_key), modes.CBC(self._aes_key[:16])).encryptor()
+        encrypted = base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode("ascii")
+        timestamp = str(int(time.time() if now is None else now))
+        reply_nonce = nonce if isinstance(nonce, str) and nonce.strip() else secrets.token_hex(8)
+        signature = hashlib.sha1(
+            "".join(sorted((self.token, timestamp, reply_nonce, encrypted))).encode("utf-8")
+        ).hexdigest()
+        return (
+            "<xml>"
+            f"<Encrypt><![CDATA[{encrypted}]]></Encrypt>"
+            f"<MsgSignature><![CDATA[{signature}]]></MsgSignature>"
+            f"<TimeStamp>{timestamp}</TimeStamp>"
+            f"<Nonce><![CDATA[{reply_nonce}]]></Nonce>"
+            "</xml>"
+        )
+
+    def build_reply(
+        self,
+        *,
+        to_open_id: str,
+        from_account: str,
+        content: str,
+        encrypted: bool = False,
+        now: float | None = None,
+        nonce: str | None = None,
+    ) -> str:
+        """Build a passive reply, encrypting it when the callback was encrypted."""
+        plain = self.build_text_reply(
+            to_open_id=to_open_id,
+            from_account=from_account,
+            content=content,
+            now=now,
+        )
+        if not encrypted:
+            return plain
+        return self.encrypt_reply(plain, now=now, nonce=nonce)
 
 
 class WechatOfficialAccountSender:

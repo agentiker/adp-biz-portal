@@ -10,7 +10,7 @@
 server/.venv/bin/python server/migrate.py upgrade --applied-by local-migration
 ```
 
-迁移命令可重复执行；当前本地 schema 为 revision `9`。需要回滚时必须明确确认会删除目标 revision 创建的表和数据：
+迁移命令可重复执行；当前代码要求 schema revision `11`。需要回滚时必须明确确认会删除目标 revision 创建的表和数据：
 
 ```bash
 server/.venv/bin/python server/migrate.py downgrade --target 3 --allow-data-loss --applied-by local-rollback

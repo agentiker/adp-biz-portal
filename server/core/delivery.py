@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable, Mapping
 
 from sqlalchemy import and_, exists, or_, select
@@ -65,6 +65,10 @@ class InboundMessageInput:
     trace_id: str
     message_type: str = "text"
     payload: Mapping[str, Any] | None = None
+    # Latest moment the source channel still accepts a reply for this message.
+    # Adapters derive it from their protocol window; the portal leaves it unset
+    # because the browser reads the answer back instead of being pushed to.
+    reply_window_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,17 @@ def _payload(value: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise DeliveryTaskError("任务载荷格式不正确")
     return dict(value)
+
+
+def _reply_deadline(value: Any) -> datetime | None:
+    """Normalize a channel reply deadline to a naive UTC timestamp."""
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise DeliveryTaskError("回复截止时间格式不正确")
+    if value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
 
 
 def _max_attempts(value: int) -> int:
@@ -210,6 +225,7 @@ async def record_inbound_message(
         Payload=_payload(message.payload),
         TraceId=trace_id,
         Status="accepted",
+        ReplyWindowExpiresAt=_reply_deadline(message.reply_window_expires_at),
     )
     try:
         async with db.begin_nested():

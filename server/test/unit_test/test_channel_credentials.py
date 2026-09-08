@@ -153,11 +153,9 @@ async def test_worker_can_load_platform_credential_without_enterprise_or_connect
 def test_admin_channel_credential_api_requires_manage_permission():
     import importlib
 
-    from sanic import Sanic
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    if not Sanic._app_registry:
-        create_app_with_configs()
+    ensure_app()
     router = importlib.import_module("router.platform")
     request = SimpleNamespace(ctx=SimpleNamespace(platform=SimpleNamespace(permissions=frozenset())))
     with pytest.raises(router.PlatformForbidden):
