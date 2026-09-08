@@ -1,9 +1,9 @@
 import pytest
 
-from app_factory import create_app
+from test.app_bootstrap import ensure_app
 
 # Importing the middleware registers listeners against the current Sanic app.
-create_app()
+ensure_app()
 import middleware.application as application_module
 
 

@@ -11,9 +11,9 @@ import pytest
 
 @pytest.fixture(scope="module")
 def platform_router():
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    create_app_with_configs()
+    ensure_app()
     return importlib.import_module("router.platform")
 
 

@@ -118,12 +118,37 @@ async def platform_sessionmaker():
         await cleanup_engine.dispose()
 
 
-async def _seed_inbound(factory, *, account_status: str = AccountStatus.ACTIVE):
+async def _seed_inbound(
+    factory,
+    *,
+    account_status: str = AccountStatus.ACTIVE,
+    include_enterprise_id: bool = True,
+    additional_active_membership: bool = False,
+    include_session: bool = True,
+    channel: str = "web",
+    channel_instance_id: str = "web-local",
+    revoke_sessions: bool = False,
+):
     account_id = uuid.uuid4()
     user_id = uuid.uuid4()
     enterprise_id = uuid.uuid4()
     session_id = uuid.uuid4()
     async with factory() as db:
+        enterprise_rows = [
+            PlatformEnterprise(
+                Id=enterprise_id,
+                Name="Worker Enterprise",
+                CustomerCode="CUST-WORKER",
+            )
+        ]
+        if additional_active_membership:
+            enterprise_rows.append(
+                PlatformEnterprise(
+                    Id=uuid.uuid4(),
+                    Name="Worker Enterprise Secondary",
+                    CustomerCode="CUST-WORKER-SECONDARY",
+                )
+            )
         db.add_all([
             Account(
                 Id=account_id,
@@ -131,11 +156,7 @@ async def _seed_inbound(factory, *, account_status: str = AccountStatus.ACTIVE):
                 Role=AccountRole.NORMAL,
                 Status=account_status,
             ),
-            PlatformEnterprise(
-                Id=enterprise_id,
-                Name="Worker Enterprise",
-                CustomerCode="CUST-WORKER",
-            ),
+            *enterprise_rows,
             PlatformToolDefinition(
                 Name="shipment.lookup",
                 Version="1.0",
@@ -160,19 +181,31 @@ async def _seed_inbound(factory, *, account_status: str = AccountStatus.ACTIVE):
                 AccountId=account_id,
                 TokenId=uuid.uuid4().hex,
                 ExpiresAt=utc_now() + timedelta(hours=1),
+                RevokedAt=utc_now() - timedelta(minutes=1) if revoke_sessions else None,
             ),
         ])
         await db.flush()
-        db.add(PlatformMembership(
-            UserId=user_id,
-            EnterpriseId=enterprise_id,
-            MembershipRole=PlatformRole.CUSTOMER,
-            Active=True,
-        ))
+        db.add_all([
+            PlatformMembership(
+                UserId=user_id,
+                EnterpriseId=enterprise.Id,
+                MembershipRole=PlatformRole.CUSTOMER,
+                Active=True,
+            )
+            for enterprise in enterprise_rows
+        ])
+        task_payload = {
+            "platformUserId": str(user_id),
+            "channel": channel,
+        }
+        if include_session:
+            task_payload["platformSessionId"] = str(session_id)
+        if include_enterprise_id:
+            task_payload["enterpriseId"] = str(enterprise_id)
         inbound, task, created = await record_inbound_message(
             db,
             message=InboundMessageInput(
-                channel_instance_id="web-local",
+                channel_instance_id=channel_instance_id,
                 external_message_id=uuid.uuid4().hex,
                 external_conversation_id=uuid.uuid4().hex,
                 sender_identity_id=str(user_id),
@@ -180,17 +213,226 @@ async def _seed_inbound(factory, *, account_status: str = AccountStatus.ACTIVE):
                 trace_id=uuid.uuid4().hex,
             ),
             task_type=PLATFORM_INBOUND_TASK_TYPE,
-            task_payload={
-                "platformUserId": str(user_id),
-                "platformSessionId": str(session_id),
-                "enterpriseId": str(enterprise_id),
-                "channel": "web",
-            },
+            task_payload=task_payload,
         )
         assert created is True
         assert task is not None
         await db.commit()
         return inbound.Id, task.Id
+
+
+@pytest.mark.asyncio
+async def test_channel_message_runs_without_any_browser_session(platform_sessionmaker):
+    """A bound channel sender does not need to be logged into the website.
+
+    The binding plus current memberships are the authorization; requiring a
+    live browser session would make every WeChat question fail whenever the
+    customer had not recently used the portal.
+    """
+    inbound_id, task_id = await _seed_inbound(
+        platform_sessionmaker,
+        include_enterprise_id=False,
+        include_session=False,
+        channel="wechat_official_account",
+        channel_instance_id="oa-local",
+        # Even a revoked browser session must not be borrowed to authorize it.
+        revoke_sessions=True,
+    )
+    worker = DeliveryWorker(
+        sessionmaker=platform_sessionmaker,
+        handlers=build_platform_delivery_handlers(
+            platform_sessionmaker,
+            adapter_factory=M3LookupAdapter(use_mock=True),
+        ),
+        worker_id="platform-worker-channel-sessionless",
+    )
+
+    assert await worker.run_once() is True
+
+    async with platform_sessionmaker() as db:
+        inbound = await db.get(PlatformInboundMessage, inbound_id)
+        task = await db.get(PlatformDeliveryTask, task_id)
+        enterprise = (
+            await db.execute(
+                select(PlatformEnterprise).where(PlatformEnterprise.CustomerCode == "CUST-WORKER")
+            )
+        ).scalar_one()
+        context = (await db.execute(select(PlatformExecutionContext))).scalar_one()
+        reply = (
+            await db.execute(
+                select(PlatformDeliveryTask).where(
+                    PlatformDeliveryTask.TaskType == PLATFORM_REPLY_TASK_TYPE
+                )
+            )
+        ).scalar_one()
+
+        assert inbound.Status == "processed"
+        assert task.Status == "succeeded"
+        assert context.PlatformSessionId is None
+        assert context.Channel == "wechat_official_account"
+        assert str(context.EnterpriseId) == str(enterprise.Id)
+        assert reply.Payload["platformSessionId"] is None
+        assert reply.Payload["enterpriseId"] == str(enterprise.Id)
+
+    artifact = Path(__file__).resolve().parents[3] / "output" / "tests" / "m3-identity-01-channel-sessionless-execution.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "task": "M3-IDENTITY-01",
+                "database": "isolated PostgreSQL schema",
+                "channel": "wechat_official_account",
+                "browserSessionPresent": False,
+                "revokedBrowserSessionBorrowed": False,
+                "enterpriseResolvedFromMembership": True,
+                "executionContextSessionId": None,
+                "inboundStatus": "processed",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_channel_message_still_requires_an_unambiguous_enterprise(platform_sessionmaker):
+    inbound_id, task_id = await _seed_inbound(
+        platform_sessionmaker,
+        include_enterprise_id=False,
+        include_session=False,
+        channel="wechat_official_account",
+        channel_instance_id="oa-local-ambiguous",
+        additional_active_membership=True,
+    )
+    worker = DeliveryWorker(
+        sessionmaker=platform_sessionmaker,
+        handlers=build_platform_delivery_handlers(
+            platform_sessionmaker,
+            adapter_factory=M3LookupAdapter(use_mock=True),
+        ),
+        worker_id="platform-worker-channel-ambiguous",
+    )
+
+    assert await worker.run_once() is True
+
+    async with platform_sessionmaker() as db:
+        inbound = await db.get(PlatformInboundMessage, inbound_id)
+        task = await db.get(PlatformDeliveryTask, task_id)
+        # Dropping the session requirement must not let a multi-enterprise
+        # message pick a tenant on its own.
+        assert inbound.Status == "rejected"
+        assert task.Status == "failed"
+        assert (await db.execute(select(PlatformExecutionContext))).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_worker_resolves_single_membership_when_channel_payload_has_no_enterprise(platform_sessionmaker):
+    inbound_id, task_id = await _seed_inbound(
+        platform_sessionmaker,
+        include_enterprise_id=False,
+    )
+    worker = DeliveryWorker(
+        sessionmaker=platform_sessionmaker,
+        handlers=build_platform_delivery_handlers(
+            platform_sessionmaker,
+            adapter_factory=M3LookupAdapter(use_mock=True),
+        ),
+        worker_id="platform-worker-dynamic-enterprise",
+    )
+
+    assert await worker.run_once() is True
+
+    async with platform_sessionmaker() as db:
+        inbound = await db.get(PlatformInboundMessage, inbound_id)
+        task = await db.get(PlatformDeliveryTask, task_id)
+        enterprise = (
+            await db.execute(
+                select(PlatformEnterprise).where(PlatformEnterprise.CustomerCode == "CUST-WORKER")
+            )
+        ).scalar_one()
+        run = (await db.execute(select(PlatformExecutionRun))).scalar_one()
+        reply = (
+            await db.execute(
+                select(PlatformDeliveryTask).where(
+                    PlatformDeliveryTask.TaskType == PLATFORM_REPLY_TASK_TYPE
+                )
+            )
+        ).scalar_one()
+        assert inbound.Status == "processed"
+        assert task.Status == "succeeded"
+        assert str(run.EnterpriseId) == str(enterprise.Id)
+        assert reply.Payload["enterpriseId"] == str(enterprise.Id)
+
+    artifact = Path(__file__).resolve().parents[3] / "output" / "tests" / "m3-identity-01-worker-single-membership.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "task": "M3-IDENTITY-01",
+                "database": "isolated PostgreSQL schema",
+                "channelPayloadEnterpriseId": None,
+                "activeMembershipCount": 1,
+                "workerSelectedCurrentMembership": True,
+                "inboundStatus": "processed",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_ambiguous_memberships_when_channel_payload_has_no_enterprise(platform_sessionmaker):
+    inbound_id, task_id = await _seed_inbound(
+        platform_sessionmaker,
+        include_enterprise_id=False,
+        additional_active_membership=True,
+    )
+    worker = DeliveryWorker(
+        sessionmaker=platform_sessionmaker,
+        handlers=build_platform_delivery_handlers(
+            platform_sessionmaker,
+            adapter_factory=M3LookupAdapter(use_mock=True),
+        ),
+        worker_id="platform-worker-ambiguous-enterprise",
+    )
+
+    assert await worker.run_once() is True
+
+    async with platform_sessionmaker() as db:
+        inbound = await db.get(PlatformInboundMessage, inbound_id)
+        task = await db.get(PlatformDeliveryTask, task_id)
+        run_count = await db.scalar(select(func.count()).select_from(PlatformExecutionRun))
+        tool_call_count = await db.scalar(select(func.count()).select_from(PlatformToolCall))
+        assert inbound.Status == "rejected"
+        assert task.Status == "failed"
+        assert task.LastError == "forbidden"
+        assert run_count == 0
+        assert tool_call_count == 0
+
+    artifact = Path(__file__).resolve().parents[3] / "output" / "tests" / "m3-identity-01-worker-ambiguous-membership.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "task": "M3-IDENTITY-01",
+                "database": "isolated PostgreSQL schema",
+                "channelPayloadEnterpriseId": None,
+                "activeMembershipCount": 2,
+                "inboundStatus": "rejected",
+                "errorCode": "forbidden",
+                "providerOrToolCalled": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.asyncio
@@ -510,7 +752,12 @@ async def test_worker_passes_server_execution_scope_to_agent_provider(platform_s
     assert request.visitor_id.startswith("platform:")
     assert len(request.visitor_id.split(":")) == 3
     assert "Worker User" not in request.visitor_id
-    assert "138" not in request.visitor_id
+    # Assert the structure instead of a short digit prefix: "138" appears in
+    # random UUID hex often enough to fail for the wrong reason. Two opaque
+    # UUIDs prove no name, phone, or enterprise name is embedded.
+    _prefix, enterprise_part, account_part = request.visitor_id.split(":")
+    assert uuid.UUID(enterprise_part) and uuid.UUID(account_part)
+    assert "138****0000" not in request.visitor_id
 
     async with platform_sessionmaker() as db:
         reply = (

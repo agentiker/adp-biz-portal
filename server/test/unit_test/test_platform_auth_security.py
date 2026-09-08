@@ -42,13 +42,11 @@ _platform_router_module = None
 def _platform_router():
     global _platform_router_module
     if _platform_router_module is None:
-        from app_factory import create_app_with_configs
+        from test.app_bootstrap import ensure_app
 
-        # The full factory discovers router files under synthetic module names,
-        # which would register the route twice if we imported router.platform
-        # after it. A bare configured app is sufficient for this direct view
-        # test and leaves the module import under its canonical name.
-        create_app_with_configs()
+        # A single shared application keeps route registration idempotent no
+        # matter which test module runs first.
+        ensure_app()
         _platform_router_module = importlib.import_module("router.platform")
     return _platform_router_module
 

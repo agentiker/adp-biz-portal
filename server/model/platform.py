@@ -154,7 +154,8 @@ class PlatformChannelIdentity(Base):
 
     The one-time state is stored only as a digest. ``ExternalIdentityId`` is
     supplied by a trusted channel adapter during confirmation, never inferred
-    from a message body.
+    from a message body. Enterprise authorization is deliberately absent from
+    the binding and is resolved from current memberships for every execution.
     """
 
     __tablename__ = "platform_channel_identity"
@@ -162,15 +163,34 @@ class PlatformChannelIdentity(Base):
         Index("idx_platform_channel_identity_user", "UserId", "Status"),
         Index("idx_platform_channel_identity_external", "Channel", "ChannelInstanceId", "ExternalIdentityId", "Status"),
         Index("idx_platform_channel_identity_pending", "StateHash", "StateExpiresAt"),
+        # One external identity may map to at most one active platform user.
+        # The database enforces it so two concurrent confirmations cannot both
+        # win; application checks alone leave a race window.
+        Index(
+            "uq_platform_channel_identity_active",
+            "Channel",
+            "ChannelInstanceId",
+            "ExternalIdentityId",
+            unique=True,
+            postgresql_where=text(f"\"Status\" = '{PlatformChannelIdentityStatus.ACTIVE}'"),
+        ),
     )
 
     Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
     UserId = Column(UUID(), ForeignKey("platform_user.Id", ondelete="CASCADE"), nullable=False, index=True)
     AccountId = Column(UUID(), ForeignKey("account.Id", ondelete="CASCADE"), nullable=False, index=True)
-    EnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="CASCADE"), nullable=False, index=True)
+    # Channel identity is a platform-user binding. Enterprise scope is
+    # resolved at message execution time from the user's active memberships.
+    # Keep this nullable for backwards-compatible legacy rows; new bindings
+    # never populate it.
+    EnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="SET NULL"), nullable=True, index=True)
     Channel = Column(String(48), nullable=False)
     ChannelInstanceId = Column(String(128), nullable=False)
-    ExternalIdentityId = Column(String(255), nullable=False)
+    # Null while a binding waits for the original channel sender to confirm.
+    # The browser often cannot learn its own external identity (for example a
+    # WeChat OpenID without web authorization), so the trusted channel adapter
+    # supplies it at confirmation time. An active row always carries a value.
+    ExternalIdentityId = Column(String(255), nullable=True)
     Status = Column(String(16), nullable=False, server_default=PlatformChannelIdentityStatus.PENDING, index=True)
     StateHash = Column(String(64), nullable=True, unique=True)
     StateExpiresAt = Column(DateTime, nullable=True)
@@ -339,6 +359,38 @@ class PlatformInboundMessage(Base):
     TraceId = Column(String(64), nullable=False, index=True)
     Status = Column(String(24), nullable=False, server_default="accepted", index=True)
     ReceivedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), index=True)
+    # Latest moment this channel still accepts a reply for this message. Null
+    # when the channel has no protocol deadline (for example the web portal,
+    # which is read back by the browser instead of pushed).
+    ReplyWindowExpiresAt = Column(DateTime, nullable=True)
+
+
+class PlatformChannelReplayMarker(Base):
+    """Cross-instance replay markers for signed channel callbacks.
+
+    A signature that was already accepted must not be accepted again by any
+    API instance, so the marker is stored in the database instead of process
+    memory. Rows expire with the channel's replay window and are pruned
+    opportunistically; the unique constraint is what actually rejects a replay.
+    """
+
+    __tablename__ = "platform_channel_replay_marker"
+    __table_args__ = (
+        UniqueConstraint(
+            "Channel",
+            "ChannelInstanceId",
+            "ReplayKey",
+            name="unique_platform_channel_replay",
+        ),
+        Index("idx_platform_channel_replay_expires", "ExpiresAt"),
+    )
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    Channel = Column(String(48), nullable=False)
+    ChannelInstanceId = Column(String(128), nullable=False)
+    ReplayKey = Column(String(64), nullable=False)
+    ExpiresAt = Column(DateTime, nullable=False)
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
 
 class PlatformDeliveryTask(Base):
@@ -401,7 +453,12 @@ class PlatformExecutionContext(Base):
     UserId = Column(UUID(), ForeignKey("platform_user.Id", ondelete="CASCADE"), nullable=False, index=True)
     AccountId = Column(UUID(), ForeignKey("account.Id", ondelete="CASCADE"), nullable=False, index=True)
     EnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="CASCADE"), nullable=False, index=True)
-    PlatformSessionId = Column(UUID(), ForeignKey("platform_auth_session.Id", ondelete="CASCADE"), nullable=False, index=True)
+    # Null for channel-originated executions. A browser message authorizes
+    # through its login session, while a channel message authorizes through a
+    # confirmed channel identity plus the memberships resolved for that
+    # message. Account-wide revocation invalidates both (see
+    # ``revoke_account_execution_contexts``).
+    PlatformSessionId = Column(UUID(), ForeignKey("platform_auth_session.Id", ondelete="CASCADE"), nullable=True, index=True)
     ConversationId = Column(UUID(), ForeignKey("platform_conversation.Id", ondelete="CASCADE"), nullable=True, index=True)
     AgentId = Column(String(128), nullable=False)
     Channel = Column(String(32), nullable=False)

@@ -77,9 +77,9 @@ def test_web_adapter_rejects_invalid_message_and_conversation():
 
 @pytest.mark.asyncio
 async def test_web_channel_route_persists_normalized_callback_and_ignores_client_identity(monkeypatch):
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    create_app_with_configs()
+    ensure_app()
     import router.platform as platform_router
 
     context = _context()
@@ -90,8 +90,9 @@ async def test_web_channel_route_persists_normalized_callback_and_ignores_client
         assert token == "web-token"
         return context
 
-    async def fake_enterprise(_db, user):
+    async def fake_scope(_db, user, *, enterprise_id=None):
         assert user is context.user
+        assert enterprise_id == str(enterprise.Id)
         return enterprise
 
     async def fake_record(_db, *, message, task_type, task_payload, **_kwargs):
@@ -103,7 +104,7 @@ async def test_web_channel_route_persists_normalized_callback_and_ignores_client
         return inbound, task, True
 
     monkeypatch.setattr(platform_router, "load_platform_context", fake_load)
-    monkeypatch.setattr(platform_router, "get_enterprise_for_user", fake_enterprise)
+    monkeypatch.setattr(platform_router, "resolve_enterprise_scope", fake_scope)
     monkeypatch.setattr(platform_router, "record_inbound_message", fake_record)
 
     db = SimpleNamespace(commit=AsyncMock())
@@ -114,9 +115,11 @@ async def test_web_channel_route_persists_normalized_callback_and_ignores_client
         json={
             "text": "BL-004",
             "messageId": "web-message-4",
+            # Identity fields from the browser are ignored; only the enterprise
+            # scope is accepted, and only after a membership check.
             "platformUserId": str(uuid.uuid4()),
             "platformSessionId": str(uuid.uuid4()),
-            "enterpriseId": str(uuid.uuid4()),
+            "enterpriseId": str(enterprise.Id),
         },
     )
 
@@ -153,3 +156,55 @@ async def test_web_channel_route_persists_normalized_callback_and_ignores_client
         encoding="utf-8",
     )
     assert json.loads(artifact.read_text(encoding="utf-8"))["clientIdentityIgnored"] is True
+
+
+class _EnterpriseScopeDb:
+    """Fake session returning a fixed set of active enterprises for a user."""
+
+    def __init__(self, enterprises):
+        self.enterprises = enterprises
+
+    async def execute(self, _statement):
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: list(self.enterprises)))
+
+
+@pytest.mark.asyncio
+async def test_single_enterprise_is_selected_without_an_explicit_scope():
+    from core.platform import resolve_enterprise_scope
+
+    only = PlatformEnterprise(Id=uuid.uuid4(), Name="Only", CustomerCode="ONE")
+    resolved = await resolve_enterprise_scope(_EnterpriseScopeDb([only]), _context().user)
+    assert resolved is only
+
+
+@pytest.mark.asyncio
+async def test_multi_enterprise_user_must_state_the_scope():
+    """Silently choosing one of several tenants would answer with wrong data."""
+    from core.error.platform import PlatformForbidden
+    from core.platform import resolve_enterprise_scope
+
+    first = PlatformEnterprise(Id=uuid.uuid4(), Name="Alpha", CustomerCode="A")
+    second = PlatformEnterprise(Id=uuid.uuid4(), Name="Beta", CustomerCode="B")
+    db = _EnterpriseScopeDb([first, second])
+
+    with pytest.raises(PlatformForbidden, match="明确企业范围"):
+        await resolve_enterprise_scope(db, _context().user)
+
+    chosen = await resolve_enterprise_scope(
+        _EnterpriseScopeDb([first, second]),
+        _context().user,
+        enterprise_id=str(second.Id),
+    )
+    assert chosen is second
+
+
+@pytest.mark.asyncio
+async def test_requested_scope_must_match_an_active_membership():
+    from core.error.platform import PlatformForbidden
+    from core.platform import resolve_enterprise_scope
+
+    mine = PlatformEnterprise(Id=uuid.uuid4(), Name="Mine", CustomerCode="M")
+    db = _EnterpriseScopeDb([mine])
+
+    with pytest.raises(PlatformForbidden, match="没有可访问的企业范围"):
+        await resolve_enterprise_scope(db, _context().user, enterprise_id=str(uuid.uuid4()))

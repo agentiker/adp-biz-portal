@@ -15,21 +15,14 @@ import {
   disableChannelCredential,
   listAdminChannelIdentities,
   listChannelCredentials,
-  listEnterprises,
   listPlatformUsers,
   revokeAdminChannelIdentity,
   rotateChannelCredential,
 } from '@/platform/platformService'
-import type {
-  AdminEnterprise,
-  AdminUser,
-  ChannelCredential,
-  ChannelIdentity,
-} from '@/platform/types'
+import type { AdminUser, ChannelCredential, ChannelIdentity } from '@/platform/types'
 
 const credentials = ref<ChannelCredential[]>([])
 const identities = ref<ChannelIdentity[]>([])
-const enterprises = ref<AdminEnterprise[]>([])
 const users = ref<AdminUser[]>([])
 const loading = ref(false)
 const loadError = ref('')
@@ -80,7 +73,6 @@ const channelCards = computed(() => [
   },
 ])
 
-const enterpriseById = computed(() => new Map(enterprises.value.map((item) => [item.id, item])))
 const userById = computed(() => new Map(users.value.map((item) => [item.id, item])))
 
 const errorMessage = (error: unknown, fallback: string) => {
@@ -105,15 +97,13 @@ const loadData = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const [credentialRows, identityRows, enterpriseRows, userRows] = await Promise.all([
+    const [credentialRows, identityRows, userRows] = await Promise.all([
       listChannelCredentials(),
       listAdminChannelIdentities(),
-      listEnterprises(),
       listPlatformUsers(),
     ])
     credentials.value = credentialRows
     identities.value = identityRows
-    enterprises.value = enterpriseRows
     users.value = userRows
   } catch (error) {
     loadError.value = errorMessage(error, '暂时无法加载渠道数据，请稍后重试。')
@@ -271,7 +261,11 @@ const formatTime = (value?: string | null) => value ? new Date(value).toLocaleSt
 const channelLabel = (value: string) => ({ wechat_official_account: '微信服务号', web: 'Web 官网' } as Record<string, string>)[value] || value
 const credentialStatus = (item: ChannelCredential) => item.status === 'active' ? '已配置' : '已停用'
 const identityStatus = (value: ChannelIdentity['status']) => ({ active: '已确认', pending: '待确认', revoked: '已撤销', expired: '已过期' } as Record<string, string>)[value] || value
-const identityDisplay = (value: string) => value.length <= 10 ? '••••••' : `${value.slice(0, 4)}••••${value.slice(-4)}`
+// A binding awaiting channel confirmation has no external identity yet.
+const identityDisplay = (value: string | null) => {
+  if (!value) return '待渠道确认'
+  return value.length <= 10 ? '••••••' : `${value.slice(0, 4)}••••${value.slice(-4)}`
+}
 
 onMounted(() => {
   void loadData()
@@ -282,7 +276,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 </script>
 
 <template>
-  <div v-if="toast" class="channel-toast"><CheckCircleIcon />{{ toast }}</div>
+  <div v-if="toast" class="channel-toast" role="status" aria-live="polite"><CheckCircleIcon />{{ toast }}</div>
   <section class="channel-intro">
     <div>
       <p class="channel-eyebrow">运营控制台 / 消息入口</p>
@@ -332,17 +326,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 
   <section class="channel-panel">
     <header class="channel-panel-heading">
-      <div><p>CHANNEL IDENTITIES</p><h2>渠道身份</h2></div>
+      <div><p>平台用户映射</p><h2>渠道身份</h2></div>
       <span>{{ identities.length }} 条绑定</span>
     </header>
     <div v-if="loading && !identities.length" class="channel-empty">正在加载渠道身份…</div>
-    <div v-else-if="!identities.length" class="channel-empty"><UserIcon /><strong>暂无渠道身份</strong><p>用户发起并完成渠道身份确认后，将显示在这里。</p></div>
+    <div v-else-if="!identities.length" class="channel-empty"><UserIcon /><strong>暂无渠道身份</strong><p>身份只关联平台用户；企业范围将在每次消息执行时按当前权限解析。</p></div>
     <div v-else class="channel-table channel-identity-table">
-      <div class="channel-table-head"><span>渠道身份</span><span>用户</span><span>企业</span><span>状态</span><span>操作</span></div>
+      <div class="channel-table-head"><span>渠道身份</span><span>平台用户</span><span>状态</span><span>操作</span></div>
       <article v-for="item in identities" :key="item.id" class="channel-table-row">
         <div class="channel-table-primary"><strong>{{ channelLabel(item.channel) }}</strong><small>{{ item.channelInstanceId }} · {{ identityDisplay(item.externalIdentityId) }}</small></div>
         <div><strong>{{ userById.get(item.userId)?.name || '未知用户' }}</strong><small>{{ userById.get(item.userId)?.phone || item.userId }}</small></div>
-        <div><strong>{{ enterpriseById.get(item.enterpriseId)?.name || '未知企业' }}</strong><small>绑定于 {{ formatTime(item.confirmedAt || item.createdAt) }}</small></div>
         <span class="channel-status" :class="{ 'channel-status--off': item.status !== 'active' }"><i></i>{{ identityStatus(item.status) }}</span>
         <div class="channel-row-actions"><button class="channel-danger" :disabled="item.status !== 'active' || identityActionId === item.id" @click="revokeIdentity(item)">{{ identityActionId === item.id ? '撤销中…' : '撤销' }}</button></div>
       </article>
@@ -406,7 +399,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 .channel-toast { position: fixed; z-index: 120; top: 84px; right: 26px; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; color: #276c59; border: 1px solid #bcdaca; background: #eff9f4; box-shadow: 0 12px 34px rgba(31, 72, 61, .14); font-size: 11px; }
 .channel-toast :deep(svg) { width: 16px; }
 .channel-catalog { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
-.channel-card { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; align-content: start; padding: 16px; border: 1px solid #dce8e4; background: #fff; box-shadow: 0 6px 22px rgba(26, 56, 49, .035); }
+.channel-card { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; align-content: start; padding: 16px; border: 1px solid #dce8e4; background: #fff; }
 .channel-card-icon { width: 38px; height: 38px; display: grid; place-items: center; color: #247a6e; background: #edf7f3; }
 .channel-card-icon :deep(svg) { width: 19px; }
 .channel-card-main { min-width: 0; }
@@ -418,7 +411,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 .channel-badge--configured { color: #39776b; }.channel-badge--configured i { background: #4b9d83; }
 .channel-badge--pending { color: #92703b; }.channel-badge--pending i { background: #d09b4c; }
 .channel-text-button { grid-column: 1 / 3; min-height: 36px; justify-self: start; border: 0; padding: 0; color: #27786c; background: transparent; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer; }
-.channel-panel { margin-top: 18px; overflow: hidden; border: 1px solid #dce8e4; background: #fff; box-shadow: 0 6px 22px rgba(26, 56, 49, .035); }
+.channel-panel { margin-top: 18px; overflow: hidden; border: 1px solid #dce8e4; background: #fff; }
 .channel-panel-heading { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 20px; border-bottom: 1px solid #e8efec; }
 .channel-panel-heading p { margin-bottom: 4px; }
 .channel-panel-heading h2 { margin: 0; color: #284740; font-size: 15px; }
@@ -427,6 +420,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 .channel-empty :deep(svg) { width: 24px; color: #7fa297; }
 .channel-empty strong { color: #536f68; font-size: 12px; }.channel-empty p { margin: 0; }
 .channel-table-head, .channel-table-row { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(180px, 1.3fr) minmax(150px, 1fr) 80px minmax(225px, auto); column-gap: 14px; align-items: center; padding: 0 20px; }
+.channel-identity-table .channel-table-head, .channel-identity-table .channel-table-row { grid-template-columns: minmax(180px, 1.25fr) minmax(180px, 1.2fr) 90px minmax(180px, auto); }
 .channel-table-head { min-height: 42px; color: #82918d; background: #f7faf9; border-bottom: 1px solid #e8efec; font-size: 10px; font-weight: 700; }
 .channel-table-row { min-height: 76px; border-bottom: 1px solid #edf2f0; color: #46635c; }
 .channel-table-row:last-child { border-bottom: 0; }
@@ -460,7 +454,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 .channel-callback span { color: #6d827c; font-size: 10px; font-weight: 700; }.channel-callback code { overflow-wrap: anywhere; color: #2f5f55; font-size: 10px; line-height: 1.6; }
 .channel-callback .channel-button { justify-self: start; }
 .channel-guide ol { display: grid; gap: 9px; margin: 0; padding-left: 22px; color: #536f68; font-size: 11px; line-height: 1.55; }
-.channel-guide-warning { padding: 12px; border-left: 3px solid #d09b4c; background: #fff9ed; color: #795e3d; }
+.channel-guide-warning { padding: 12px; border: 1px solid #eadabf; background: #fff9ed; color: #795e3d; }
 .channel-guide-warning strong { font-size: 11px; }.channel-guide-warning p { margin: 5px 0 0; font-size: 10px; line-height: 1.55; }
 button:focus-visible { outline: 2px solid rgba(20, 125, 114, .34); outline-offset: 2px; }
 
@@ -468,13 +462,18 @@ button:focus-visible { outline: 2px solid rgba(20, 125, 114, .34); outline-offse
   .channel-catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .channel-table-head, .channel-table-row { grid-template-columns: minmax(140px, 1fr) minmax(160px, 1fr) 80px minmax(210px, auto); }
   .channel-table-head > :nth-child(3), .channel-table-row > :nth-child(3) { display: none; }
+  .channel-identity-table .channel-table-head, .channel-identity-table .channel-table-row { grid-template-columns: minmax(160px, 1.2fr) minmax(160px, 1fr) 90px minmax(120px, auto); }
+  .channel-identity-table .channel-table-head > :nth-child(3) { display: block; }
+  .channel-identity-table .channel-table-row > :nth-child(3) { display: inline-flex; }
 }
 @media (max-width: 760px) {
   .channel-intro { display: block; }.channel-intro-actions { margin-top: 16px; flex-wrap: wrap; }
   .channel-table-head { display: none; }
   .channel-table-row { grid-template-columns: minmax(0, 1fr) auto; gap: 9px 14px; min-height: 0; padding: 15px 16px; }
+  .channel-identity-table .channel-table-row { grid-template-columns: minmax(0, 1fr) auto; }
   .channel-table-row > :nth-child(2), .channel-table-row > :nth-child(3) { display: block; grid-column: 1 / 3; }
   .channel-table-row > .channel-status { grid-column: 2; grid-row: 1; }
+  .channel-identity-table .channel-table-row > .channel-status { display: inline-flex; grid-column: 2; grid-row: 1; }
   .channel-row-actions { grid-column: 1 / 3; justify-content: flex-start; flex-wrap: wrap; padding-top: 7px; border-top: 1px solid #edf2f0; }
 }
 @media (max-width: 520px) {

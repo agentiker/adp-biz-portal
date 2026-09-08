@@ -2,7 +2,7 @@
 
 > 关联方案：[docs/plans/2026-09-04-unified-business-platform-design.md](docs/plans/2026-09-04-unified-business-platform-design.md)
 
-更新时间：2026-09-07
+更新时间：2026-09-08
 总目标：完成统一业务接入平台方案落地，并完成前端 UI/UX 收尾。
 
 ## 状态规则
@@ -20,7 +20,7 @@
 | M0 技术验证与风险收敛 | 部分完成 | 风险边界和验证清单已整理 | M3/渠道/ADP 的真实文档、权限、样本和联调 |
 | M1 业务底座与后台 | 本地第一版和安全回归完成 | 企业、用户、角色、范围、登录、配置、ADP Chat 调试入口、后台浏览器验收和响应式收尾；旧路径安全回归和版本化迁移已完成 | 上游 Workspace 归属闭环、真实跨企业隔离证据、生产多实例限流存储 |
 | M2 官网 + M3 只读闭环 | 本地 Worker/Portal 编排和 ADP Provider 边界完成，真实第三方闭环未完成 | 执行上下文、服务端 Agent 映射、ADP SSE/证据边界、M3 受控 Provider、任务队列、可运行 Worker、API 接线、Portal 会话持久化、隔离验收、重试边界和撤权后的待发送任务失效 | 真实渠道接入、真实 ADP Agent 联调、真实 M3 |
-| M3 多渠道接入 | 本地统一框架与 Web 渠道 E2E 已完成，微信服务号明文/AES 协议边界已覆盖，真实渠道协议未联调 | 渠道契约/能力声明/注册表、标准入站出站边界、Web 异步入站状态查询、durable inbound -> Worker -> Agent/M3 Provider -> Portal 回复闭环、重复消息幂等和本地隔离验证；渠道凭据与身份绑定边界也已完成；微信服务号支持明文与安全模式回调验签/解密/AppID 校验 | 微信客服、企微适配器、真实身份样本、发送协议和真实联调；跨进程重放保护 |
+| M3 多渠道接入 | 本地统一框架与 Web 渠道 E2E 已完成，微信服务号明文/AES 协议边界已覆盖，真实渠道协议未联调 | 渠道契约/能力声明/注册表、标准入站出站边界、Web 异步入站状态查询、durable inbound -> Worker -> Agent/M3 Provider -> Portal 回复闭环、重复消息幂等和本地隔离验证；平台级渠道凭据边界已完成，渠道身份的平台用户级作用域正在纠偏；微信服务号支持明文与安全模式回调验签/解密/AppID 校验 | 微信客服、企微适配器、真实身份样本、发送协议和真实联调；跨进程重放保护 |
 | M4 试运行与交付 | 本地部署基线、文档、发布基础、账号开通材料和安全专项回归完成，生产交付未开始 | OpenAPI/前端类型契约已生成并校验；Docker Compose、环境模板、健康探针、数据字典、排障手册、发布/迁移/回滚运行手册、账号开通 SOP/验收/培训材料已补齐；迁移 CLI、本地隔离 schema 演练和日志/密钥/口令脱敏与权限回归已完成 | 生产部署权限、真实备份恢复、RPO/RTO、压测、正式发布和真实第三方培训交付 |
 
 当前验证基线：本轮部署基线已通过 Compose 配置解析、健康探针定向测试、Python 编译、OpenAPI/前端类型契约检查、渠道框架单测、Web PostgreSQL E2E、一次本地 PostgreSQL 备份恢复演练和 `git diff --check`；验证均为与变更直接相关的定向命令，不重复全量后端或浏览器测试。真实 ADP/M3/渠道联调仍不在本地验证范围内。
@@ -29,7 +29,7 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
-当前任务计数：`44 / 57` 项已完成，`13` 项未完成（其中 `7` 项 `BLOCKED`、`3` 项 `IN PROGRESS`、`3` 项 `TODO`）。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。此前已完成 `M3-ADMIN-01` Admin 渠道接入中心及桌面/移动端真实浏览器验收；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`45 / 59` 项已完成，`14` 项未完成（其中 `7` 项 `BLOCKED`、`4` 项 `IN PROGRESS`、`3` 项 `TODO`）。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -198,6 +198,24 @@
   - 验证命令与结果：`cd client/packages/app && npm run type-check`、`npm run build-only`、`git diff --check` 通过；Admin 企业/用户页在 `1280x900` 和 `390x844` 真实浏览器验收通过，`document.documentElement.scrollWidth === innerWidth`、`body.scrollWidth === innerWidth`，刷新后控制台 `0 errors / 0 warnings`。截图：`output/playwright/m2-ui-03-enterprises-1280.png`、`output/playwright/m2-ui-03-enterprises-390.png`。
   - 遗留问题：本地 UI/UX 告警已清零；真实第三方渠道、ADP 和生产交付仍按对应 ROADMAP 项阻塞或进行中。
 
+- [ ] `M2-CHANNEL-FIX-01` 纠正渠道投递与企业范围的实现偏差（渠道接入审查产出）。
+  - 状态：`DONE`（2026-09-08，本地实现与回归；真实渠道发送仍由 `M0-CHANNEL-01`、`M3-QA-01` 阻塞）
+  - 背景：多渠道接入设计/实现审查发现四处与方案 §6.2、§6.3、§7.2、§13.1 不一致的实现，均已在本项修复。
+  - 修复一（官网多企业静默选择）：`/api/v1/channels/web/inbound` 与 `/api/v1/portal/overview` 过去经 `get_enterprise_for_user()` 取按名称排序的第一个企业，多企业用户会被静默按错误企业作答，而微信路径同一情况是拒绝的。现新增 `core/platform.py::resolve_enterprise_scope()` 供两条渠道共用：显式 `enterpriseId` 必须命中当前有效 membership，缺失时只有单一有效企业才自动选择，多企业一律拒绝并要求明确范围。Portal overview 增加 `enterprises` 列表，Portal 页面在多企业时提供企业范围选择器并把选择随入站消息提交；浏览器仍不能提交身份字段。
+  - 修复二（回复截止时间没有生产方）：方案 §6.3 要求 InboundMessage 携带回复截止时间，但 `ChannelCapabilities.reply_window_seconds` 无消费者、`replyWindowExpiresAt` 无生产者，微信发送器里的窗口校验是死代码。现 `InboundMessageInput` 增加 `reply_window_expires_at`，微信适配器按客服消息窗口从发信时刻推导并落库到 `platform_inbound_message.ReplyWindowExpiresAt`，回复任务载荷携带该截止时间，发送前统一判定并以 `reply_window_expired` 拒绝。
+  - 修复三（回复前重新鉴权是条件性的）：`process_platform_reply_task()` 过去只在载荷含 `accountId` 时复核账号/会话/企业/membership/权限，注释说明是为兼容最小单测载荷，等于在生产授权路径里留了测试分支。现身份字段一律必填，校验抽出为 `_reply_authorization_error()`，`platformSessionId` 按渠道可空，单测载荷补齐为完整授权载荷。
+  - 修复四（单一发送器无法按渠道路由）：`build_platform_delivery_handlers()` 只接受一个 `reply_sender_factory`，多渠道无法各用自己的发送协议。现支持按 `channel` 或 `channel:instance` 的映射，声明了其它 `channel` 的发送器不会收到本渠道回复，未匹配时仍以 `channel_sender_not_configured` 明确失败而不伪报成功。
+  - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（165 passed）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q`（28 passed）；`make platform_api_check`、`npm run type-check`、`npm run build-only` 通过。
+  - 遗留风险：企业范围选择器仅完成本地实现与构建验证，真实浏览器桌面/移动端验收待人工执行；按渠道路由的发送器目前只有官网与微信服务号两种实现，微信客服/企微仍分别由 `M3-WECHAT-CS-01`、`M3-WECOM-01` 负责；真实发送回执仍未验证。
+
+- [ ] `M2-TEST-FIX-01` 修复测试基座缺陷：路由重复注册与顺序相关的收集失败。
+  - 状态：`DONE`（2026-09-08，本地回归）
+  - 背景：`server/.venv/bin/pytest test/unit_test` 整目录运行会在收集阶段中断（`Sanic app name "app_factory" already in use.`），此前只能按单文件运行，掩盖了跨模块相互影响。根因是 `util/module.py::autodiscover()` 用 `spec_from_file_location` 把每个 `router/**/*.py` 以合成模块名 `module` 重复执行，任何模块再按 `router.platform` 正常导入就会二次注册路由（`RouteExists`），同时使模块级 `__name__`（logger 名）不正确。
+  - 修复：`autodiscover()` 改为按规范点分模块名 `import_module()`，由模块缓存保证同一文件只执行一次；新增 `server/test/app_bootstrap.py::ensure_app()` 作为测试进程内唯一应用入口，各测试模块和 `conftest` 的 `app` fixture 统一改用它。
+  - 附带修复：`test_platform_worker_postgres.py` 中 `assert "138" not in request.visitor_id` 是随机失败断言（随机 UUID 十六进制会包含 `138`），改为断言 visitor_id 结构为 `platform:<uuid>:<uuid>`，等价且不再偶发失败。
+  - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q` 由“收集中断”变为 `165 passed`（需本地库先 `python migrate.py upgrade` 到 revision 12）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q` 为 `28 passed`。
+  - 边界：与 `.env` 无关的纯本地测试基座修复；不改变生产路由集合，legacy 兼容 API 回归（`test_legacy_route_security_api.py` 等）在迁移后的库上全部通过。
+
 - [ ] `M2-ORCH-01` 串入消息处理、Agent/ADP 执行、M3 查询、证据校验和回复发送。
   - 状态：`IN PROGRESS`（2026-09-06）
   - 验收：模型不能决定身份/权限；关键船名、航次、时间和状态均可映射到本轮证据。
@@ -268,12 +286,22 @@
   - 测试产物：`output/tests/m3-cred-01-channel-credentials.json`。
   - 边界：本地完成加密存储和管理边界；真实微信/企微凭据、渠道验签协议和第三方联调仍由 `M3-VERIFY-01`、`M3-QA-01` 负责，不能以本地测试代替。
 - [ ] `M3-VERIFY-01` 实现各渠道验签、解密、时间窗和重放保护。
-  - 状态：`IN PROGRESS`（2026-09-07；微信服务号明文/AES 本地协议已覆盖，其它渠道和真实样本仍待接入）；依赖各渠道真实协议样本。
-- [x] `M3-IDENTITY-01` 实现渠道身份绑定、确认、解绑、过期和停用后的即时撤销。
-  - 状态：`DONE`（2026-09-06，本地实现和专项回归）。
-  - 完成证据：新增 `PlatformChannelIdentity` 表和 migration revision 9；`server/core/channel_identity.py` 生成高熵一次性 state、只保存 SHA-256 摘要、校验渠道/实例/原始发送者身份、过期即失效、确认后立即消费 state，并支持用户/管理员解绑、账号/企业范围撤销和 active 身份解析。`server/router/platform.py` 新增用户绑定/查询/撤销、管理员查询/撤销和仅接受 `X-Channel-Service-Token` 的内部确认 API；密码重置、停用、角色或企业范围变更会批量撤销渠道身份；审计只记录渠道身份 fingerprint，不记录 state、凭据或原始身份值。
-  - 验证命令与结果：`server/.venv/bin/pytest server/test/unit_test/test_channel_identity.py server/test/unit_test/test_platform_migration.py -q`（`11 passed`）；`make platform_api_check`（34 个公开操作、47 个 schema，前端生成类型已同步）；`server/.venv/bin/python -m py_compile server/core/channel_identity.py server/model/platform.py server/core/migration.py server/router/platform.py server/test/unit_test/test_channel_identity.py`、`git diff --check` 通过；本地 `.venv/bin/python migrate.py upgrade` 已应用 revision 9。
-  - 遗留风险：本地测试只证明平台状态机、权限边界和迁移可运行；微信服务号、微信客服、企业微信的真实回调验签/解密、渠道发送协议、OAuth/身份样本和第三方联调仍由 `M0-CHANNEL-01`、`M3-VERIFY-01`、`M3-QA-01` 阻塞，不能以本地 API 或 Mock 代替。
+  - 状态：`IN PROGRESS`（2026-09-08；微信服务号明文/AES 本地协议与跨实例重放保护已覆盖，其它渠道和真实样本仍待接入）；依赖各渠道真实协议样本。
+  - 本轮补充：重放保护从进程内缓存改为数据库标记。`server/core/channel_replay.py` 以 `(Channel, ChannelInstanceId, ReplayKey)` 唯一约束拒绝已接受过的签名，适配器内的进程内缓存降级为快速路径；`platform_channel_replay_marker` 表由 revision 12 建立，过期行按批清理，拒绝行为由唯一约束而非清理进度决定。
+  - 验证：`server/.venv/bin/pytest test/unit_test/test_channel_replay.py -q`（5 passed）覆盖首次记录、重放拒绝、并发写入竞争失败、非法窗口/标识 fail closed 和有界清理。
+  - 遗留：仍未覆盖微信客服与企微的真实协议样本；`M1` 表格中记录的登录限流存储仍为进程内 `MemoryStorage`，与本项无关但同属多实例待办。
+- [ ] `M3-IDENTITY-01` 实现渠道身份绑定、确认、解绑、过期和停用后的即时撤销。
+  - 状态：`IN PROGRESS`（2026-09-08，平台用户级身份作用域纠偏 + 渠道执行授权纠偏）。
+  - 历史实现（2026-09-06）：新增 `PlatformChannelIdentity` 表和 migration revision 9；已完成一次性 state、确认、解绑、账号停用撤销、内部确认 API 和审计脱敏，并通过当时的定向测试。
+  - 已纠正偏差一（企业作用域）：历史模型把渠道身份固定关联企业。现新身份不写入企业，历史 `EnterpriseId` 由 revision 11 清空并改为 nullable `SET NULL`；账号停用仍撤销身份，企业停用或 membership 变化只影响执行授权。
+  - 已纠正偏差二（渠道执行依赖浏览器登录态）：Worker 过去对每条入站消息都要求有效 `PlatformAuthSession`，缺少时还会回退取该账号“最新活跃 web 会话”，导致已绑定但未登录官网的微信用户消息一律失败，也让渠道消息借用了无关的浏览器会话。现改为：`platform_execution_context.PlatformSessionId` 可空（revision 12），浏览器消息继续绑定其登录会话并随之失效，渠道消息改由“已确认渠道身份 + 执行时 membership/权限版本”授权；账号级 `revoke_account_execution_contexts` 仍同时作废两者。`server/core/platform_worker.py` 删除会话回退，`server/core/platform.py` 的 `load_execution_context` 只在上下文本身带会话时校验会话。
+  - 已纠正偏差三（绑定闭环缺入口）：绑定起点过去要求浏览器先提供 `externalIdentityId`，而客户看不到自己的 OpenID；微信回调对未绑定发送者直接返回 403，绑定口令没有任何拦截入口，方案 §7.2 的两条路径都无法走通。现 `externalIdentityId` 可省略，由可信适配器在确认时写入（`ExternalIdentityId` 改为 nullable）；微信回调在识别到 `pci_` 形态的一次性绑定码时交给身份流程消费，不落库为消息内容、不转发 ADP，并按结果回复被动文本。
+  - 已纠正偏差四（活跃身份唯一性只在应用层）：revision 12 在 `Status='active'` 上建立 `(Channel, ChannelInstanceId, ExternalIdentityId)` 部分唯一索引，并在确认路径捕获唯一冲突 fail closed；`resolve_active_channel_identity` 对历史重复行返回空而不是抛错拖垮整条渠道；迁移遇到已存在的重复活跃绑定会停止并要求人工撤销。
+  - 已纠正偏差五（未绑定发送者的 ack 语义）：微信对非 2xx 回调会重试并向用户显示“该公众号暂时无法提供服务”。现未绑定发送者收到 200 + 被动引导回复（提示登录官网绑定或联系销售/客服），加密模式下回复同样加密，回复内容拒绝 `]]>` 与控制字符以免伪造 XML 结构；拒绝事件写入脱敏审计。
+  - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（165 passed，需先 `python migrate.py upgrade` 使本地库到 revision 12）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q`（28 passed，隔离 schema）；`make platform_api_check` 通过（41 个公开操作、50 个 schema，生成类型已同步）；`cd client/packages/app && npm run type-check`、`npm run build-only` 通过。
+  - 测试产物：`output/tests/m3-identity-01-platform-user-scope.json`、`m3-identity-01-platform-scope-migration.json`、`m3-identity-01-worker-single-membership.json`、`m3-identity-01-channel-sessionless-execution.json`。
+  - 待验证（人工）：真实浏览器桌面与移动端的绑定页与企业范围选择器，以及部署后 schema revision/API/UI。
+  - 遗留风险：本地测试只能证明平台状态机、权限边界和迁移行为；微信服务号、微信客服、企业微信的真实回调验签/解密、渠道发送协议、OAuth/身份样本和第三方联调仍由 `M0-CHANNEL-01`、`M3-VERIFY-01`、`M3-QA-01` 阻塞，不能以本地 API 或 Mock 代替。被动引导回复已按协议构造并可自解密验证，但未经真实服务号回执确认。
 - [ ] `M3-QA-01` 完成重复消息、断线重连、进程重启、回复窗口、超时和发送失败的真实联调记录。
   - 状态：`BLOCKED`；依赖至少一个可用渠道账号和 `M2-WORKER-01`。
 

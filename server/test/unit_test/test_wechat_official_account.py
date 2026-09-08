@@ -6,6 +6,7 @@ import base64
 import json
 import struct
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,6 +20,19 @@ from integrations.channels.wechat_official_account import (
     WechatProtocolError,
 )
 from integrations.channels.base import OutboundMessage
+
+
+def _stub_callback_side_effects(monkeypatch, platform_router, *, claimed=None):
+    """Neutralize durable side effects the route performs around verification."""
+    claims = claimed if claimed is not None else []
+
+    async def fake_claim(_db, *, channel, channel_instance_id, replay_key, ttl_seconds):
+        claims.append((channel, channel_instance_id, replay_key, ttl_seconds))
+
+    monkeypatch.setattr(platform_router, "claim_replay_key", fake_claim)
+    monkeypatch.setattr(platform_router, "prune_expired_replay_markers", AsyncMock(return_value=0))
+    monkeypatch.setattr(platform_router, "create_audit", AsyncMock())
+    return claims
 
 
 def _signature(token: str, timestamp: str, nonce: str) -> str:
@@ -155,18 +169,16 @@ async def test_sender_fails_closed_for_window_and_unknown_transport():
 
 @pytest.mark.asyncio
 async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
-    from sanic import Sanic
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    if not Sanic._app_registry:
-        create_app_with_configs()
+    ensure_app()
     import router.platform as platform_router
 
     now = int(time.time())
     token = "token-route"
     nonce = "nonce-route-1"
     captured = {}
-    identity = SimpleNamespace(UserId="user-id", AccountId="account-id", EnterpriseId="enterprise-id")
+    identity = SimpleNamespace(UserId="user-id", AccountId="account-id", EnterpriseId=None)
 
     async def fake_credential(_db, *, channel, channel_instance_id):
         assert channel == "wechat_official_account"
@@ -181,6 +193,7 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
     monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=identity))
     monkeypatch.setattr(platform_router, "record_inbound_message", fake_record)
+    claims = _stub_callback_side_effects(monkeypatch, platform_router)
 
     request = SimpleNamespace(
         ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock())),
@@ -192,6 +205,11 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
     assert response.body == b"success"
     assert captured["message"].external_message_id == "route-message"
     assert captured["payload"]["platformUserId"] == "user-id"
+    assert captured["payload"]["enterpriseId"] is None
+    # The reply deadline travels with the envelope so the sender can refuse a
+    # reply the channel would no longer accept.
+    assert captured["message"].reply_window_expires_at is not None
+    assert len(claims) == 1 and claims[0][0] == "wechat_official_account"
     request.ctx.db.commit.assert_awaited_once()
 
     artifact = Path(__file__).resolve().parents[3] / "output" / "tests" / "m3-wechat-oa-01-official-account.json"
@@ -208,6 +226,7 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
                     "signature": True,
                     "xmlNormalized": True,
                     "identityBound": True,
+                    "enterpriseScopeDeferredToWorker": True,
                     "unboundIdentityRejectedBeforeEnqueue": True,
                     "enqueued": True,
                     "unknownTransportMarkedUncertain": True,
@@ -222,7 +241,6 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
                 ],
                 "notCovered": [
                     "real WeChat account and OpenID sample",
-                    "AES/EncodingAESKey encrypted callbacks",
                     "real provider send API and reply-window behavior",
                     "cross-process replay protection and third-party retry/restart drills",
                 ],
@@ -235,11 +253,9 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_public_callback_accepts_encrypted_xml(monkeypatch):
-    from sanic import Sanic
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    if not Sanic._app_registry:
-        create_app_with_configs()
+    ensure_app()
     import router.platform as platform_router
 
     now = int(time.time())
@@ -252,7 +268,7 @@ async def test_public_callback_accepts_encrypted_xml(monkeypatch):
     encrypted = _encrypted_payload(xml=message_body, app_id=app_id, key=key)
     msg_signature = hashlib.sha1("".join(sorted((token, str(now), nonce, encrypted))).encode()).hexdigest()
     captured = {}
-    identity = SimpleNamespace(UserId="user-aes", AccountId="account-aes", EnterpriseId="enterprise-aes")
+    identity = SimpleNamespace(UserId="user-aes", AccountId="account-aes", EnterpriseId=None)
 
     async def fake_credential(_db, *, channel, channel_instance_id):
         assert channel == "wechat_official_account"
@@ -261,11 +277,13 @@ async def test_public_callback_accepts_encrypted_xml(monkeypatch):
 
     async def fake_record(_db, *, message, task_type, task_payload, **_kwargs):
         captured["message"] = message
+        captured["payload"] = task_payload
         return SimpleNamespace(Id="inbound-aes", Status="queued"), SimpleNamespace(Id="task-aes"), True
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
     monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=identity))
     monkeypatch.setattr(platform_router, "record_inbound_message", fake_record)
+    _stub_callback_side_effects(monkeypatch, platform_router)
     request = SimpleNamespace(
         ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock())),
         args={"msg_signature": msg_signature, "timestamp": str(now), "nonce": nonce, "encrypt_type": "aes"},
@@ -275,16 +293,15 @@ async def test_public_callback_accepts_encrypted_xml(monkeypatch):
     response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-aes")
     assert response.body == b"success"
     assert captured["message"].external_message_id == "route-aes-message"
+    assert captured["payload"]["enterpriseId"] is None
     request.ctx.db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_public_callback_rejects_unbound_identity_before_enqueue(monkeypatch):
-    from sanic import Sanic
-    from app_factory import create_app_with_configs
+    from test.app_bootstrap import ensure_app
 
-    if not Sanic._app_registry:
-        create_app_with_configs()
+    ensure_app()
     import router.platform as platform_router
 
     now = int(time.time())
@@ -300,6 +317,7 @@ async def test_public_callback_rejects_unbound_identity_before_enqueue(monkeypat
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
     monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=None))
     monkeypatch.setattr(platform_router, "record_inbound_message", record_inbound)
+    _stub_callback_side_effects(monkeypatch, platform_router)
 
     request = SimpleNamespace(
         ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock())),
@@ -307,7 +325,172 @@ async def test_public_callback_rejects_unbound_identity_before_enqueue(monkeypat
         headers={"X-Request-Id": "trace-route-unbound"},
         body=_xml(msg_id="route-unbound-message", create_time=now),
     )
-    with pytest.raises(platform_router.PlatformForbidden, match="尚未绑定"):
-        await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-unbound")
+    response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-unbound")
+    # WeChat retries a non-2xx callback and then shows the sender a service
+    # failure, so an unbound sender is answered with guidance instead.
+    assert response.status == 200
+    body = response.body.decode()
+    assert "<ToUserName><![CDATA[openid_test]]></ToUserName>" in body
+    assert "<FromUserName><![CDATA[gh_test]]></FromUserName>" in body
+    assert "绑定" in body
     record_inbound.assert_not_awaited()
-    request.ctx.db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_binding_code_is_confirmed_and_never_reaches_the_agent(monkeypatch):
+    """A binding code must be consumed by the identity flow, not forwarded."""
+    from test.app_bootstrap import ensure_app
+
+    ensure_app()
+    import router.platform as platform_router
+
+    now = int(time.time())
+    token = "token-route-bind"
+    nonce = "nonce-route-bind-1"
+    state = "pci_" + "b" * 43
+    record_inbound = AsyncMock()
+    confirmed = SimpleNamespace(
+        Id="identity-id",
+        AccountId="account-bind",
+        Channel="wechat_official_account",
+        ChannelInstanceId="oa-route-bind",
+        ExternalIdentityId="openid_test",
+    )
+    confirm = AsyncMock(return_value=confirmed)
+
+    async def fake_credential(_db, *, channel, channel_instance_id):
+        return token
+
+    monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
+    monkeypatch.setattr(platform_router, "record_inbound_message", record_inbound)
+    monkeypatch.setattr(platform_router, "confirm_channel_identity_binding", confirm)
+    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=None))
+    _stub_callback_side_effects(monkeypatch, platform_router)
+
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())),
+        args={"signature": _signature(token, str(now), nonce), "timestamp": str(now), "nonce": nonce},
+        headers={"X-Request-Id": "trace-route-bind"},
+        body=_xml(msg_id="route-bind-message", content=state, create_time=now),
+    )
+    response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-bind")
+
+    assert response.status == 200
+    assert "绑定成功" in response.body.decode()
+    confirm.assert_awaited_once()
+    assert confirm.await_args.kwargs["state"] == state
+    assert confirm.await_args.kwargs["external_identity_id"] == "openid_test"
+    # The one-time secret is never stored as message content or queued for ADP.
+    record_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_binding_code_reports_failure_without_enqueue(monkeypatch):
+    from test.app_bootstrap import ensure_app
+
+    ensure_app()
+    import router.platform as platform_router
+
+    now = int(time.time())
+    token = "token-route-bind-bad"
+    nonce = "nonce-route-bind-bad-1"
+    state = "pci_" + "c" * 43
+    record_inbound = AsyncMock()
+
+    async def fake_credential(_db, *, channel, channel_instance_id):
+        return token
+
+    monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
+    monkeypatch.setattr(platform_router, "record_inbound_message", record_inbound)
+    monkeypatch.setattr(
+        platform_router,
+        "confirm_channel_identity_binding",
+        AsyncMock(side_effect=platform_router.PlatformBadRequest("绑定状态无效、已使用或已失效")),
+    )
+    _stub_callback_side_effects(monkeypatch, platform_router)
+
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())),
+        args={"signature": _signature(token, str(now), nonce), "timestamp": str(now), "nonce": nonce},
+        headers={"X-Request-Id": "trace-route-bind-bad"},
+        body=_xml(msg_id="route-bind-bad-message", content=state, create_time=now),
+    )
+    response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-bind-bad")
+
+    assert response.status == 200
+    assert "绑定未成功" in response.body.decode()
+    record_inbound.assert_not_awaited()
+    # A rejected confirmation burns the one-time state; rolling that back would
+    # let a replayed or transferred code stay usable.
+    request.ctx.db.rollback.assert_not_awaited()
+    request.ctx.db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unbound_reply_is_encrypted_when_the_callback_is_encrypted(monkeypatch):
+    from test.app_bootstrap import ensure_app
+
+    ensure_app()
+    import router.platform as platform_router
+
+    now = int(time.time())
+    token = "token-route-aes-unbound"
+    app_id = "wx-route-aes-unbound"
+    key = b"route-aes-key-012345678901234567"
+    aes_key = base64.b64encode(key).decode().rstrip("=")
+    nonce = "nonce-route-aes-unbound-1"
+    encrypted = _encrypted_payload(xml=_xml(msg_id="aes-unbound", create_time=now), app_id=app_id, key=key)
+    msg_signature = hashlib.sha1("".join(sorted((token, str(now), nonce, encrypted))).encode()).hexdigest()
+
+    async def fake_credential(_db, *, channel, channel_instance_id):
+        return json.dumps({"token": token, "appId": app_id, "encodingAesKey": aes_key})
+
+    monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
+    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr(platform_router, "record_inbound_message", AsyncMock())
+    _stub_callback_side_effects(monkeypatch, platform_router)
+
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock())),
+        args={"msg_signature": msg_signature, "timestamp": str(now), "nonce": nonce, "encrypt_type": "aes"},
+        headers={"X-Request-Id": "trace-route-aes-unbound"},
+        body=(f"<xml><Encrypt><![CDATA[{encrypted}]]></Encrypt></xml>").encode(),
+    )
+    response = await platform_router.WechatOfficialAccountCallbackApi().post(request, "oa-route-aes-unbound")
+
+    body = response.body.decode()
+    assert response.status == 200
+    # An encrypted callback must not be answered with cleartext guidance.
+    assert "<Encrypt>" in body and "<MsgSignature>" in body
+    assert "绑定" not in body
+
+    # The platform can decrypt its own reply, proving the envelope is valid.
+    adapter = WechatOfficialAccountAdapter(
+        channel_instance_id="oa-route-aes-unbound",
+        token=token,
+        app_id=app_id,
+        encoding_aes_key=aes_key,
+    )
+    payload = adapter.decrypt_xml(body.split("<![CDATA[", 1)[1].split("]]>", 1)[0]).decode()
+    assert "绑定" in payload
+
+
+def test_reply_builder_rejects_cdata_injection():
+    adapter = WechatOfficialAccountAdapter(channel_instance_id="oa-cdata", token="token-cdata")
+    with pytest.raises(WechatProtocolError):
+        adapter.build_text_reply(
+            to_open_id="openid",
+            from_account="gh_test",
+            content="bad]]><xml>forged</xml>",
+        )
+
+
+def test_normalized_reply_window_matches_customer_service_message_window():
+    adapter = WechatOfficialAccountAdapter(channel_instance_id="oa-window", token="token-window")
+    now = int(time.time())
+    envelope = adapter.normalize_xml(body=_xml(msg_id="window-1", create_time=now), trace_id="trace", now=now)
+    deadline = envelope.message.reply_window_expires_at
+    assert deadline is not None
+    # Measured from the sender's message, not from when processing finishes.
+    expected = datetime.fromtimestamp(now, tz=timezone.utc).replace(tzinfo=None)
+    assert abs((deadline - expected).total_seconds() - 48 * 60 * 60) < 2

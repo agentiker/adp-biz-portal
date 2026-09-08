@@ -24,6 +24,8 @@ from model.platform import (
     PlatformAuthSession,
     PlatformChannelCredential,
     PlatformChannelIdentity,
+    PlatformChannelIdentityStatus,
+    PlatformChannelReplayMarker,
     PlatformConfigVersion,
     PlatformConversation,
     PlatformCredential,
@@ -73,7 +75,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 10
+    CURRENT_PLATFORM_SCHEMA_VERSION = 12
     REVISIONS = (
         MigrationRevision(
             1,
@@ -152,6 +154,12 @@ class Migration:
             "platform_channel_scope_schema",
             (),
         ),
+        MigrationRevision(11, "platform_channel_identity_scope_schema", ()),
+        MigrationRevision(
+            12,
+            "platform_channel_execution_scope_schema",
+            (PlatformChannelReplayMarker.__tablename__,),
+        ),
     )
 
     @classmethod
@@ -169,6 +177,7 @@ class Migration:
             EnterpriseExternalAccount,
             PlatformChannelCredential,
             PlatformChannelIdentity,
+            PlatformChannelReplayMarker,
             PlatformUser,
             PlatformMembership,
             PlatformCredential,
@@ -402,6 +411,102 @@ class Migration:
         ))
 
     @classmethod
+    async def _apply_revision_11(cls, db: AsyncSession) -> None:
+        """Make channel identities platform-user scoped.
+
+        Existing enterprise scope is legacy metadata only. Clear it so a
+        channel identity cannot retain stale authorization after membership
+        changes; the worker resolves enterprise scope at execution time.
+        """
+        table = PlatformChannelIdentity.__tablename__
+        await db.execute(text(f'ALTER TABLE "{table}" ALTER COLUMN "EnterpriseId" DROP NOT NULL'))
+        await db.execute(
+            text(f'UPDATE "{table}" SET "EnterpriseId" = NULL WHERE "EnterpriseId" IS NOT NULL')
+        )
+        foreign_keys = (
+            await db.execute(
+                text(
+                    "SELECT DISTINCT tc.constraint_name "
+                    "FROM information_schema.table_constraints tc "
+                    "JOIN information_schema.key_column_usage kcu "
+                    "  ON tc.constraint_schema = kcu.constraint_schema "
+                    " AND tc.constraint_name = kcu.constraint_name "
+                    "WHERE tc.table_schema = current_schema() "
+                    "  AND tc.table_name = :table_name "
+                    "  AND tc.constraint_type = 'FOREIGN KEY' "
+                    "  AND kcu.column_name = 'EnterpriseId'"
+                ),
+                {"table_name": table},
+            )
+        ).scalars().all()
+        for constraint_name in foreign_keys:
+            quoted_name = str(constraint_name).replace('"', '""')
+            await db.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{quoted_name}"'))
+        await db.execute(text(
+            f'ALTER TABLE "{table}" ADD CONSTRAINT "fk_platform_channel_identity_enterprise" '
+            f'FOREIGN KEY ("EnterpriseId") REFERENCES "{PlatformEnterprise.__tablename__}" ("Id") ON DELETE SET NULL'
+        ))
+
+    @classmethod
+    async def _apply_revision_12(cls, db: AsyncSession) -> None:
+        """Separate channel authorization from browser sessions and close races.
+
+        A channel message is authorized by a confirmed channel identity plus the
+        memberships resolved for that message, so its execution context has no
+        browser session. Account-wide revocation still invalidates it. The
+        partial unique index makes "one active platform user per external
+        identity" a database invariant instead of an application-only check.
+        """
+        execution_table = PlatformExecutionContext.__tablename__
+        await db.execute(
+            text(f'ALTER TABLE "{execution_table}" ALTER COLUMN "PlatformSessionId" DROP NOT NULL')
+        )
+
+        identity_table = PlatformChannelIdentity.__tablename__
+        await db.execute(
+            text(f'ALTER TABLE "{identity_table}" ALTER COLUMN "ExternalIdentityId" DROP NOT NULL')
+        )
+
+        inbound_table = PlatformInboundMessage.__tablename__
+        await db.execute(
+            text(f'ALTER TABLE "{inbound_table}" ADD COLUMN IF NOT EXISTS "ReplyWindowExpiresAt" TIMESTAMP')
+        )
+
+        active = str(PlatformChannelIdentityStatus.ACTIVE)
+        duplicates = (
+            await db.execute(
+                text(
+                    f'SELECT "Channel", "ChannelInstanceId", COUNT(*) AS "count" '
+                    f'FROM "{identity_table}" '
+                    f'WHERE "Status" = :active AND "ExternalIdentityId" IS NOT NULL '
+                    f'GROUP BY "Channel", "ChannelInstanceId", "ExternalIdentityId" '
+                    f'HAVING COUNT(*) > 1 '
+                    f'ORDER BY "Channel", "ChannelInstanceId"'
+                ),
+                {"active": active},
+            )
+        ).all()
+        if duplicates:
+            # The external identity itself is deliberately not reported; the
+            # channel instance is enough to locate the rows for a manual merge.
+            sample = ", ".join(
+                f"{channel}/{instance} ({count} rows)"
+                for channel, instance, count in duplicates[:5]
+            )
+            suffix = "" if len(duplicates) <= 5 else f"; and {len(duplicates) - 5} more"
+            raise MigrationError(
+                "Cannot enforce a single active platform user per channel identity "
+                f"because duplicate active bindings require manual revocation: {sample}{suffix}"
+            )
+        await db.execute(
+            text(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_platform_channel_identity_active" '
+                f'ON "{identity_table}" ("Channel", "ChannelInstanceId", "ExternalIdentityId") '
+                f"WHERE \"Status\" = '{active}'"
+            )
+        )
+
+    @classmethod
     async def _drop_revision_tables(
         cls,
         db: AsyncSession,
@@ -464,6 +569,10 @@ class Migration:
                 await cls._create_revision_tables(db, revision)
                 if revision.version == 10:
                     await cls._apply_revision_10(db)
+                elif revision.version == 11:
+                    await cls._apply_revision_11(db)
+                elif revision.version == 12:
+                    await cls._apply_revision_12(db)
                 record = records.get(revision.version)
                 if record is None:
                     record = PlatformMigration(

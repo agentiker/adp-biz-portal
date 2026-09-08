@@ -41,7 +41,7 @@ git diff --check
 
 - 发布版本、执行人、变更窗口和预计回退窗口；
 - 数据库名称、schema、备份文件/对象存储位置和备份校验值；
-- 当前数据库 revision、目标 revision（当前代码目标为 `9`）；
+- 当前数据库 revision、目标 revision（当前代码目标为 `12`）；
 - Web、Worker、PostgreSQL 和上游 ADP/M3 的健康检查地址；
 - 本次发布是否包含不可逆数据变更。
 
@@ -140,13 +140,13 @@ PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1
   make release_drill
 ```
 
-命令会验证 Compose 配置、迁移 CLI 帮助和 `1..9 -> 3 -> 9` 的隔离迁移流程，并将日志和汇总写入 `output/tests/m4-release-01/`。证据中的 `productionStatus` 固定为 `not_executed`，不能当作生产发布、应用回滚或 RPO/RTO 记录。
+命令会验证 Compose 配置、迁移 CLI 帮助和 `1..11 -> 3 -> 11` 的隔离迁移流程，并将日志和汇总写入 `output/tests/m4-release-01/`。证据中的 `productionStatus` 固定为 `not_executed`，不能当作生产发布、应用回滚或 RPO/RTO 记录。
 
-截至 2026-09-06，仓库已在隔离 PostgreSQL schema 中验证 revision `1..9` 可重复升级、审计、降级到 `3` 并再次升级到 `9`，并通过启动版本校验。定向命令为：
+截至 2026-09-08，仓库已在隔离 PostgreSQL schema 中验证 revision `1..11` 可重复升级、审计、降级到 `3` 并再次升级到 `11`，并通过启动版本校验；同时覆盖 revision 10 到 11 的渠道身份作用域升级：历史 `EnterpriseId` 被清空、列改为 nullable，外键删除行为改为 `SET NULL`。定向命令为：
 
 ```bash
 PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1:5432/adp_chat_client_local' \
   server/.venv/bin/pytest server/test/integration/test_platform_migration_postgres.py -q -s
 ```
 
-结果为 `1 passed in 0.96s`；证据见 `output/tests/m1-mig-01-migration.json`、`server/test/integration/test_platform_migration_postgres.py` 和渠道身份定向回归。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。
+结果为 `2 passed in 1.73s`；证据见 `output/tests/m1-mig-01-migration.json`、`output/tests/m3-identity-01-platform-scope-migration.json` 和 `server/test/integration/test_platform_migration_postgres.py`。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。

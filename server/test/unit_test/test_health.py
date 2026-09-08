@@ -3,11 +3,11 @@ import json
 
 import pytest
 
-from app_factory import create_app
+from test.app_bootstrap import ensure_app
 
 
 # Importing the route after app creation registers it on a Sanic application.
-create_app()
+ensure_app()
 from router.health import healthz, readyz  # noqa: E402
 import router.health as health_module  # noqa: E402
 

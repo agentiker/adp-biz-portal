@@ -1,5 +1,5 @@
 from glob import glob
-from importlib import import_module, util
+from importlib import import_module
 from inspect import getmembers
 from pathlib import Path
 from types import ModuleType
@@ -8,9 +8,19 @@ import logging
 from sanic.blueprints import Blueprint
 
 
+def _dotted_name(package: ModuleType, path: Path) -> str:
+    """Return the canonical dotted module name for a file inside a package."""
+    relative = path.relative_to(Path(package.__file__).parent)
+    parts = list(relative.parts)
+    if parts[-1] == "__init__.py":
+        parts = parts[:-1]
+    else:
+        parts[-1] = parts[-1][: -len(".py")]
+    return ".".join([package.__name__, *parts]) if parts else package.__name__
+
+
 def autodiscover(app, module_names: list[ModuleType], recursive: bool = False):
     blueprints = set()
-    _imported = set()
 
     def _find_bps(module):
         nonlocal blueprints
@@ -24,16 +34,13 @@ def autodiscover(app, module_names: list[ModuleType], recursive: bool = False):
 
         if recursive:
             base = Path(module.__file__).parent
-            for path in glob(f"{base}/**/*.py", recursive=True):
-                if path not in _imported:
-                    name = "module"
-                    if "__init__" in path:
-                        *_, name, __ = path.split("/")
-                    spec = util.spec_from_file_location(name, path)
-                    specmod = util.module_from_spec(spec)
-                    _imported.add(path)
-                    spec.loader.exec_module(specmod)
-                    _find_bps(specmod)
+            for path in sorted(glob(f"{base}/**/*.py", recursive=True)):
+                # Import under the canonical dotted name so the module cache
+                # keeps one instance. Loading the same file under a synthetic
+                # name would execute route registration twice as soon as
+                # anything imports it normally, and would leave ``__name__``
+                # wrong for module-level loggers.
+                _find_bps(import_module(_dotted_name(module, Path(path))))
 
     for bp in blueprints:
         print(f'[autodiscover] registering blueprint {bp}')
