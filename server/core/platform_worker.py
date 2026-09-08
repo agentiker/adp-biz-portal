@@ -810,7 +810,7 @@ async def _reply_authorization_error(
     return None
 
 
-def _resolve_channel_sender(
+async def _resolve_channel_sender(
     sender: Any,
     *,
     channel: str,
@@ -819,13 +819,15 @@ def _resolve_channel_sender(
     """Select the sender that owns one channel instance.
 
     Each channel speaks its own send protocol, so a deployment with several
-    channels registers a mapping keyed by ``channel`` or ``channel:instance``
-    instead of one shared object. A single sender is accepted only when it does
-    not declare a different channel, so a WeChat reply can never be handed to a
-    企微 sender.
+    channels registers a mapping keyed by ``channel`` or ``channel:instance``,
+    or a resolver that loads senders from stored credentials on demand. A single
+    sender is accepted only when it does not declare a different channel, so a
+    WeChat reply can never be handed to a 企微 sender.
     """
     if sender is None:
         return None
+    if getattr(sender, "is_channel_sender_resolver", False):
+        return await sender.resolve(channel=channel, channel_instance_id=channel_instance_id)
     if isinstance(sender, Mapping):
         if channel_instance_id is not None:
             scoped = sender.get(f"{channel}:{channel_instance_id}")
@@ -902,7 +904,7 @@ async def process_platform_reply_task(
         await db.close()
 
     if channel != "web":
-        sender = _resolve_channel_sender(
+        sender = await _resolve_channel_sender(
             sender,
             channel=channel,
             channel_instance_id=channel_instance_id,

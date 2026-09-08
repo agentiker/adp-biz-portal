@@ -29,7 +29,7 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
-当前任务计数：`45 / 60` 项已完成，`15` 项未完成（其中 `7` 项 `BLOCKED`、`4` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`46 / 61` 项已完成，`15` 项未完成（其中 `7` 项 `BLOCKED`、`4` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -278,6 +278,15 @@
   - 鉴权边界：第三方消息先由平台级渠道凭据验签和标准化，再解析渠道身份，并校验平台用户、企业访问范围和业务权限，最后由平台转发到唯一 ADP 应用；渠道配置本身不授予任何企业数据权限。
   - 完成证据：`server/model/platform.py`、`server/core/channel_credentials.py`、`server/core/migration.py`、`server/router/platform.py` 将渠道凭据归属改为平台级；revision 10 对重复 `Channel + ChannelInstanceId` 停止迁移并提示人工合并，重建 `ON DELETE SET NULL` 外键；Admin 导航与配置页展示平台唯一 ADP 应用，`docs/api/openapi.yaml` 和生成类型移除新建渠道的企业/连接必填字段并新增脱敏 ADP 状态接口；`server/test/unit_test/test_channel_credentials.py` 覆盖无企业/连接读取、全量密钥完整性、多应用拒绝和密钥不回显。
   - 验收：数据库迁移保留 `IntegrationConnection`、`EnterpriseExternalAccount` 和旧 binding 路由兼容性，但新渠道凭据不依赖企业/连接；Admin、服务端 API、OpenAPI 和生成类型一致；全局实例唯一、无绑定读取和 ADP 配置脱敏状态测试通过。验证结果：`server/.venv/bin/pytest server/test/unit_test/test_wechat_official_account.py server/test/unit_test/test_channel_credentials.py server/test/unit_test/test_platform_migration.py -q`（23 passed）、`npm run type-check`、`npm run build-only`、OpenAPI 校验、生成类型 `--check`、Python 编译和 `git diff --check` 均通过。
+
+- [x] `M3-WECHAT-OA-02` 实现微信服务号客服消息出站发送：access_token 管理、发送分类与失败语义。
+  - 状态：`DONE`（2026-09-08，本地实现与定向回归）；真实服务号发送回执仍由 `M0-CHANNEL-01`、`M3-QA-01` 阻塞。
+  - 背景：`M3-WECHAT-OA-01` 只完成入站协议，发送器一律返回 `provider_transport_not_configured`，因此非官网渠道的回复任务必然以 `channel_sender_not_configured` 失败。这正是 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §4 核实的「真实主动发送整条链路为空」缺口。
+  - 完成证据：新增 `server/integrations/channels/wechat_transport.py`，用 `/cgi-bin/stable_token` 取 access_token，`expires_in-300s` 提前刷新、按 appId 加锁避免并发重复获取；`/cgi-bin/message/custom/send` 发送文本，超长截断并提示回官网查看。新增 `server/integrations/channels/sender_registry.py::ChannelSenderResolver`，按渠道实例惰性从加密凭据构造发送器并缓存；凭据缺失或只有回调凭据（无 AppSecret）时返回无传输的发送器，让回复标记 `uncertain` 而不是伪报成功；`server/worker.py` 默认接线该 resolver，`_resolve_channel_sender` 通过显式 `is_channel_sender_resolver` 标记识别并 await 它（不用鸭子类型，避免 mock 被误认）。
+  - 失败语义（本项核心）：区分「未发出」「结果未知」「永久拒绝」。连接失败/DNS/token 获取失败为 `retryable`（未发出，重试不会重复）；请求已写出但无回执（读超时、响应截断、无法解析的 errcode）为 `uncertain`，既不自动重试也不报成功，避免用户已收到却重复发送；`45015` 超窗、`48001`/`50001` 无客服消息权限、`40003` 非法 openid 为永久拒绝；`-1`/`45009`/`45011`/`48004` 限频为 `retryable`；`40001`/`40014`/`42001`/`42007` token 失效只重试一次，两次拒绝都清除缓存 token；未识别 errcode 按永久处理以免队列空转。发送前校验回复窗口与收件人：收件人只从 `externalConversationId` 的 `<实例>:<openid>` 还原，跨实例会话键一律拒绝，浏览器与模型都无法影响收件人。
+  - 与 `M3-REFACTOR-01` 计划的一处偏离（有意）：调研结论要求 token 缓存用「共享存储+锁，禁进程内 Map」。该要求针对会作废旧 token 的 `/cgi-bin/token`；本实现改用 `/cgi-bin/stable_token`，该端点对并发调用返回同一 token 且不作废旧 token，因此进程内缓存不会让多 Worker 互相顶掉，无需新增共享存储。此耦合已写进模块 docstring：若日后改回 `/cgi-bin/token`，必须先把缓存迁到共享存储。`WechatAccessTokenCache` 已按 appId 泛化，`M3-REFACTOR-01` 可直接搬进 `channels/_wechat/token.py` 供客服/企微复用。
+  - 验证命令与结果：`server/.venv/bin/pytest test/unit_test/test_wechat_transport.py -q`（`27 passed`）覆盖凭据校验、内容截断、成功/永久/限频/token/未映射错误码分类、连接失败为 retryable、写出后超时为 uncertain、5xx 为 retryable、token 缓存复用与过期刷新、并发只取一次、无传输保持 uncertain、跨实例收件人拒绝、超窗拒绝；全量 `pytest test/unit_test -q`（`194 passed`）、`pytest test/integration -q`（`28 passed`）。
+  - 遗留风险：所有发送路径均由本地伪造 HTTP 响应验证，未经真实微信 API 回执确认；客服消息要求认证服务号，部分账号还需把服务器出口 IP 加入白名单；`stable_token` 的真实配额与限频表现待联调观察。
 
 - [ ] `M3-WECHAT-CS-01` 实现微信客服适配器：通知接收、同步游标、消息去重和客服回复协议。
   - 状态：`TODO`；依赖 `M0-CHANNEL-01`；建议以 `M3-REFACTOR-01` 为前置。

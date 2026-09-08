@@ -19,6 +19,7 @@ from core.delivery import DeliveryWorker
 from core.migration import Migration
 from core.platform_worker import build_platform_delivery_handlers
 from integrations.adp.provider import ADPAgentProvider, AgentProvider, ControlledLookupAgentProvider
+from integrations.channels.sender_registry import ChannelSenderResolver
 from integrations.m3.adapter import M3LookupAdapter
 from util.database import create_db_engine
 
@@ -72,13 +73,25 @@ def build_worker(
     worker_id: str | None = None,
     idle_seconds: float = 1.0,
     agent_provider_factory: Any = build_agent_provider,
+    reply_sender_factory: Any = None,
 ) -> DeliveryWorker:
-    """Create a worker with the platform handlers and controlled provider."""
+    """Create a worker with the platform handlers and controlled provider.
+
+    The reply sender resolves per channel instance from stored credentials. A
+    channel without usable send credentials still reports an uncertain delivery
+    rather than a false success.
+    """
+    sender_resolver = (
+        reply_sender_factory
+        if reply_sender_factory is not None
+        else ChannelSenderResolver(sessionmaker)
+    )
     return DeliveryWorker(
         sessionmaker=sessionmaker,
         handlers=build_platform_delivery_handlers(
             sessionmaker,
             agent_provider_factory=agent_provider_factory,
+            reply_sender_factory=sender_resolver,
         ),
         worker_id=worker_id,
         idle_seconds=idle_seconds,
