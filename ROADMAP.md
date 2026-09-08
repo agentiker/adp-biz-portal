@@ -29,7 +29,7 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
-当前任务计数：`45 / 59` 项已完成，`14` 项未完成（其中 `7` 项 `BLOCKED`、`4` 项 `IN PROGRESS`、`3` 项 `TODO`）。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`45 / 60` 项已完成，`15` 项未完成（其中 `7` 项 `BLOCKED`、`4` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -280,9 +280,16 @@
   - 验收：数据库迁移保留 `IntegrationConnection`、`EnterpriseExternalAccount` 和旧 binding 路由兼容性，但新渠道凭据不依赖企业/连接；Admin、服务端 API、OpenAPI 和生成类型一致；全局实例唯一、无绑定读取和 ADP 配置脱敏状态测试通过。验证结果：`server/.venv/bin/pytest server/test/unit_test/test_wechat_official_account.py server/test/unit_test/test_channel_credentials.py server/test/unit_test/test_platform_migration.py -q`（23 passed）、`npm run type-check`、`npm run build-only`、OpenAPI 校验、生成类型 `--check`、Python 编译和 `git diff --check` 均通过。
 
 - [ ] `M3-WECHAT-CS-01` 实现微信客服适配器：通知接收、同步游标、消息去重和客服回复协议。
-  - 状态：`TODO`；依赖 `M0-CHANNEL-01`。
+  - 状态：`TODO`；依赖 `M0-CHANNEL-01`；建议以 `M3-REFACTOR-01` 为前置。
+  - 参考实现：openclaw-china `extensions/wecom-kf/src/webhook.ts` 的 cursor 拉取（先 ack、投递前存 `next_cursor`、首启 drain）；会话作用域抄 LangBot `get_launcher_id` 但做成真 ABC 方法，键用 `open_kfid|external_userid`；反例（勿抄）AstrBot/LangBot 客服 `while has_more` 只取 `[-1]` 丢批。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5。
 - [ ] `M3-WECOM-01` 实现企业微信智能机器人适配器，选择并实现长连接或 HTTPS 回调模式。
-  - 状态：`TODO`；依赖 `M0-CHANNEL-01`。
+  - 状态：`TODO`；依赖 `M0-CHANNEL-01`；建议以 `M3-REFACTOR-01` 为前置。
+  - 参考实现：AstrBot 内置腾讯官方 JSON 加解密 `wecom_ai_bot/WXBizJsonMsgCrypt.py`（wechatpy 不覆盖机器人 JSON 信封）；双模式抄 AstrBot「单适配器双模式」；反例（勿抄）LangBot `wecombot` 关掉 CorpID 校验。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5。
+- [ ] `M3-REFACTOR-01` 将渠道适配层提升为一等包并结构化：契约中性化、按渠道拆目录、统一 WeChat crypto、抽 `core/channel_ingress` 编排 seam。
+  - 状态：`TODO`；作为 `M3-WECHAT-CS-01` 和 `M3-WECOM-01` 的结构前置。
+  - 范围：`server/channels/`（从 `integrations/channels/` 提升）；`channels/contracts.py` 收敛 `InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities` 使 core 依赖契约而非反向；`channels/_wechat/{crypto,crypto_json,token,text}.py` 供公众号/客服/企微复用；`ChannelAdapter.normalize` 收成带类型签名并新增 `get_launcher_id` 会话键钩子；把「验签→normalize→replay→身份→入队」从 2266 行的 `router/platform.py` 抽到 `core/channel_ingress.py`（鉴权仍留平台服务侧，不进渠道包）。
+  - 验收：适配器仍不触碰 DB/models/identity/credentials/replay；渠道包依赖仅指向 `contracts`；每文件 <400 行、crypto 单份；现有 `M3-FRAMEWORK-01`/`M3-WECHAT-OA-01` 测试全绿且行为不变。
+  - 依据：`docs/plans/2026-09-08-channel-adapter-reference-research.md` §6。
 - [x] `M3-CRED-01` 实现渠道凭据加密存储、轮换、最小权限读取和脱敏展示。
   - 状态：`DONE`（2026-09-06，本地实现和专项回归）
   - 完成证据：新增 `platform_channel_credential` 表和 revision 8；`server/core/channel_credentials.py` 使用 Fernet 认证加密、当前密钥写入、旧密钥只读轮换、指纹校验和缺失/非法密钥 fail closed；`GET/POST /api/v1/admin/channel-credentials`、`POST .../<id>/rotate`、`POST .../<id>/disable` 均要求 `platform.manage`，响应只返回掩码和元数据；新平台路径只校验渠道实例唯一性，旧企业/连接字段和 binding 表仅保留兼容序列化与 legacy 路由；创建/轮换/停用写入不含凭据内容的审计事件。
@@ -308,6 +315,7 @@
   - 遗留风险：本地测试只能证明平台状态机、权限边界和迁移行为；微信服务号、微信客服、企业微信的真实回调验签/解密、渠道发送协议、OAuth/身份样本和第三方联调仍由 `M0-CHANNEL-01`、`M3-VERIFY-01`、`M3-QA-01` 阻塞，不能以本地 API 或 Mock 代替。被动引导回复已按协议构造并可自解密验证，但未经真实服务号回执确认。
 - [ ] `M3-QA-01` 完成重复消息、断线重连、进程重启、回复窗口、超时和发送失败的真实联调记录。
   - 状态：`BLOCKED`；依赖至少一个可用渠道账号和 `M2-WORKER-01`。
+  - 参考实现：access token 管理抄 openclaw-china `token.ts`（`expires_in-300s`、退避、errcode 集），并补 TTL/共享锁/`40001`（多 worker 禁进程内 Map）；公众号 5s 竞速→客服消息兜底抄 AstrBot MsgId 区分重试/新问 + `asyncio.shield`，deadline 在解密后起算，勿抄 openclaw 正则抠 XML 与 LangBot `passive` 载体模式。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5。
 
 ## M4：试运行与交付
 
