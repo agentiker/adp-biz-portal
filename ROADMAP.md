@@ -205,8 +205,12 @@
   - 修复二（回复截止时间没有生产方）：方案 §6.3 要求 InboundMessage 携带回复截止时间，但 `ChannelCapabilities.reply_window_seconds` 无消费者、`replyWindowExpiresAt` 无生产者，微信发送器里的窗口校验是死代码。现 `InboundMessageInput` 增加 `reply_window_expires_at`，微信适配器按客服消息窗口从发信时刻推导并落库到 `platform_inbound_message.ReplyWindowExpiresAt`，回复任务载荷携带该截止时间，发送前统一判定并以 `reply_window_expired` 拒绝。
   - 修复三（回复前重新鉴权是条件性的）：`process_platform_reply_task()` 过去只在载荷含 `accountId` 时复核账号/会话/企业/membership/权限，注释说明是为兼容最小单测载荷，等于在生产授权路径里留了测试分支。现身份字段一律必填，校验抽出为 `_reply_authorization_error()`，`platformSessionId` 按渠道可空，单测载荷补齐为完整授权载荷。
   - 修复四（单一发送器无法按渠道路由）：`build_platform_delivery_handlers()` 只接受一个 `reply_sender_factory`，多渠道无法各用自己的发送协议。现支持按 `channel` 或 `channel:instance` 的映射，声明了其它 `channel` 的发送器不会收到本渠道回复，未匹配时仍以 `channel_sender_not_configured` 明确失败而不伪报成功。
-  - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（165 passed）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q`（28 passed）；`make platform_api_check`、`npm run type-check`、`npm run build-only` 通过。
-  - 遗留风险：企业范围选择器仅完成本地实现与构建验证，真实浏览器桌面/移动端验收待人工执行；按渠道路由的发送器目前只有官网与微信服务号两种实现，微信客服/企微仍分别由 `M3-WECHAT-CS-01`、`M3-WECOM-01` 负责；真实发送回执仍未验证。
+  - 修复五（官网异步入站状态接口一直 500）：`WebChannelInboundStatusApi` 使用了未导入的 `PlatformInboundMessage`，`GET /api/v1/channels/web/inbound/<id>` 自 `M2-WORKER-02` 起每次都抛 `NameError`。该接口此前没有任何测试覆盖，Portal 的异步轮询在真实浏览器里必然失败。现补齐导入，并新增两个定向单测覆盖正常读取与「他人消息不可见」的归属校验。
+  - 修复六（Portal 390px 横向溢出）：真实浏览器验收时发现「我的会话」面板在 390px 下把文档撑到 465px。`portal-columns` 的 grid 轨道改为 `minmax(0, ...)`，允许列收缩到 min-content 以下。属本轮验收顺带修复的既有响应式缺陷。
+  - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（167 passed）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q`（28 passed）；`make platform_api_check`、`npm run type-check`、`npm run build-only` 通过。
+  - 真实浏览器验收（2026-09-08，本地 API + Vite + Worker，schema revision 12）：为一个 customer 用户绑定两个有效企业后，登录响应 `enterprise` 为 `null`、`enterprises` 返回两项；Portal 出现企业范围选择器，未选择时输入框与按钮禁用并提示「请先选择本次查询的企业范围」；选择「企业 B」后 `POST /api/v1/channels/web/inbound` 请求体携带该 `enterpriseId` 并返回 201；Worker 处理后 `platform_execution_run` 落在企业 B（旧实现会按名称排序静默选中企业 A），官网执行上下文仍保留 `PlatformSessionId`；状态接口由 500 变为 200。`1280x900` 与 `390x844` 均无横向溢出，刷新后控制台 `0 errors / 0 warnings`。
+  - 测试产物：`output/tests/m2-channel-fix-01-enterprise-scope-browser.json`；截图 `output/playwright/m2-channel-fix-01-scope-required-1280.png`、`m2-channel-fix-01-enterprise-scope-1280.png`、`m2-channel-fix-01-enterprise-scope-390.png`。
+  - 遗留风险：浏览器验收使用 `M3_USE_MOCK=true`，不代表真实 M3 联调；按渠道路由的发送器目前只有官网与微信服务号两种实现，微信客服/企微仍分别由 `M3-WECHAT-CS-01`、`M3-WECOM-01` 负责；真实渠道发送回执仍未验证。
 
 - [ ] `M2-TEST-FIX-01` 修复测试基座缺陷：路由重复注册与顺序相关的收集失败。
   - 状态：`DONE`（2026-09-08，本地回归）
@@ -300,7 +304,7 @@
   - 已纠正偏差五（未绑定发送者的 ack 语义）：微信对非 2xx 回调会重试并向用户显示“该公众号暂时无法提供服务”。现未绑定发送者收到 200 + 被动引导回复（提示登录官网绑定或联系销售/客服），加密模式下回复同样加密，回复内容拒绝 `]]>` 与控制字符以免伪造 XML 结构；拒绝事件写入脱敏审计。
   - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（165 passed，需先 `python migrate.py upgrade` 使本地库到 revision 12）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q`（28 passed，隔离 schema）；`make platform_api_check` 通过（41 个公开操作、50 个 schema，生成类型已同步）；`cd client/packages/app && npm run type-check`、`npm run build-only` 通过。
   - 测试产物：`output/tests/m3-identity-01-platform-user-scope.json`、`m3-identity-01-platform-scope-migration.json`、`m3-identity-01-worker-single-membership.json`、`m3-identity-01-channel-sessionless-execution.json`。
-  - 待验证（人工）：真实浏览器桌面与移动端的绑定页与企业范围选择器，以及部署后 schema revision/API/UI。
+  - 已验证（2026-09-08 真实浏览器）：企业范围选择器与官网异步查询链路已在 `1280x900`、`390x844` 完成验收，见 `M2-CHANNEL-FIX-01`。绑定页仍待人工验收（需要真实渠道 OpenID 样本）；部署后 schema revision/API/UI 待发布时确认。
   - 遗留风险：本地测试只能证明平台状态机、权限边界和迁移行为；微信服务号、微信客服、企业微信的真实回调验签/解密、渠道发送协议、OAuth/身份样本和第三方联调仍由 `M0-CHANNEL-01`、`M3-VERIFY-01`、`M3-QA-01` 阻塞，不能以本地 API 或 Mock 代替。被动引导回复已按协议构造并可自解密验证，但未经真实服务号回执确认。
 - [ ] `M3-QA-01` 完成重复消息、断线重连、进程重启、回复窗口、超时和发送失败的真实联调记录。
   - 状态：`BLOCKED`；依赖至少一个可用渠道账号和 `M2-WORKER-01`。

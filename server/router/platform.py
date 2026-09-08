@@ -102,6 +102,7 @@ from model.platform import (
     PlatformEvidence,
     PlatformExecutionRun,
     PlatformEnterprise,
+    PlatformInboundMessage,
     PlatformMembership,
     PlatformMessage,
     PlatformMigration,

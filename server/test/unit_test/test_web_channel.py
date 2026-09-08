@@ -158,6 +158,96 @@ async def test_web_channel_route_persists_normalized_callback_and_ignores_client
     assert json.loads(artifact.read_text(encoding="utf-8"))["clientIdentityIgnored"] is True
 
 
+@pytest.mark.asyncio
+async def test_web_inbound_status_route_reads_progress_for_its_own_message():
+    """Regression: the status route referenced an unimported model and 500'd.
+
+    Nothing covered this endpoint, so the Portal's asynchronous poll failed on
+    every query even though the message had been recorded successfully.
+    """
+    from test.app_bootstrap import ensure_app
+
+    ensure_app()
+    import router.platform as platform_router
+
+    context = _context()
+    inbound_id = uuid.uuid4()
+    inbound = SimpleNamespace(
+        Id=inbound_id,
+        ChannelInstanceId="web-portal",
+        ExternalMessageId="web-message-status",
+        SenderIdentityId=str(context.user.Id),
+        Status="processed",
+    )
+    conversation_id = str(uuid.uuid4())
+    source_task = SimpleNamespace(Status="succeeded", Payload={"conversationId": conversation_id})
+    reply_task = SimpleNamespace(Status="succeeded")
+    conversation = SimpleNamespace(Id=conversation_id)
+    results = [source_task, reply_task, conversation]
+
+    class _Db:
+        async def get(self, _model, key):
+            return inbound if str(key) == str(inbound_id) else None
+
+        async def execute(self, _statement):
+            value = results.pop(0)
+            return SimpleNamespace(scalar_one_or_none=lambda: value)
+
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(db=_Db(), platform=context),
+        headers={"Authorization": "Bearer web-token"},
+        cookies={},
+    )
+    response = await platform_router.WebChannelInboundStatusApi.get.__wrapped__(
+        platform_router.WebChannelInboundStatusApi(),
+        request,
+        str(inbound_id),
+    )
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["inboundMessageId"] == str(inbound_id)
+    assert payload["inboundStatus"] == "processed"
+    assert payload["taskStatus"] == "succeeded"
+    assert payload["conversationId"] == conversation_id
+
+
+@pytest.mark.asyncio
+async def test_web_inbound_status_route_hides_another_users_message():
+    from test.app_bootstrap import ensure_app
+
+    ensure_app()
+    import router.platform as platform_router
+
+    context = _context()
+    inbound_id = uuid.uuid4()
+    # Recorded by a different platform user; ownership is checked on the server.
+    inbound = SimpleNamespace(
+        Id=inbound_id,
+        ChannelInstanceId="web-portal",
+        ExternalMessageId="web-message-other",
+        SenderIdentityId=str(uuid.uuid4()),
+        Status="processed",
+    )
+
+    class _Db:
+        async def get(self, _model, _key):
+            return inbound
+
+        async def execute(self, _statement):  # pragma: no cover - must not run
+            raise AssertionError("ownership must be rejected before any task lookup")
+
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(db=_Db(), platform=context),
+        headers={"Authorization": "Bearer web-token"},
+        cookies={},
+    )
+    with pytest.raises(platform_router.PlatformNotFound):
+        await platform_router.WebChannelInboundStatusApi.get.__wrapped__(
+            platform_router.WebChannelInboundStatusApi(),
+            request,
+            str(inbound_id),
+        )
+
+
 class _EnterpriseScopeDb:
     """Fake session returning a fixed set of active enterprises for a user."""
 
