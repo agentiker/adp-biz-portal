@@ -29,6 +29,8 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
+部署进展（2026-09-09）：将提交 `d079e95`（微信服务号回复改为「一条完整答案 `msgtype=text` + 结尾图文卡片 `msgtype=news`」，见 `M3-WECHAT-OA-03` 范围调整，无 schema 变更）以镜像 `adp-chat-client:d079e95` 部署到 `xdimspace-01:/opt/tencent-adp-gateway`。Docker Hub 拉取 `python:3.12-slim` 返回 EOF；因本轮仅改源码/测试、依赖未变，按 skill 用 overlay 到上一个良好镜像 `rev12e` 构建（跳过 `uv sync`）。`compose up` 的一次性 `migrate` 确认 `database revision: 12`（无迁移，故未做 DB dump），api/worker/reverse-proxy 均 healthy 并已重启反向代理；公网 `/healthz`=ok、`/readyz`=ready schemaRevision 12。回滚镜像 `adp-chat-client:rollback-pre-d079e95`（部署前在役镜像）。已知 `[TCADP.get_info] 450006-用户未登录或者未注册` 元信息报错为既有问题、与本次无关。真实微信「单条答案 + 图文卡片」体感待用户在手机上验收。服务器 `.env`、PostgreSQL 数据卷未触碰。
+
 当前任务计数：`47 / 63` 项已完成，`16` 项未完成（其中 `7` 项 `BLOCKED`、`5` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M2-ADP-ROUTE-01`（DONE，Worker 默认路由平台唯一 ADP 应用、不以 M3 为前置）与 `M3-WECHAT-OA-03`（IN PROGRESS，ACK+流式+Markdown+图文卡片，对齐 ADP 原生体感，含一处有意的证据校验范围变更）。首个真实微信认证服务号已接入并完成绑定/入站/出站真实联调。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
