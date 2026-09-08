@@ -69,6 +69,13 @@ class AgentResponse:
         )
 
 
+class StreamSink(Protocol):
+    """Receives agent text while it is still being produced."""
+
+    async def emit(self, text: str) -> None:
+        """Deliver one ready chunk of reply text to the channel."""
+
+
 class AgentProvider(Protocol):
     """Application-facing Agent/ADP provider contract."""
 
@@ -76,8 +83,13 @@ class AgentProvider(Protocol):
     def capabilities(self) -> frozenset[str]:
         """Return provider capabilities in platform tool names."""
 
-    async def execute(self, request: AgentRequest) -> AgentResponse:
-        """Execute one server-scoped Agent request."""
+    async def execute(self, request: AgentRequest, *, sink: Any = None) -> AgentResponse:
+        """Execute one server-scoped Agent request.
+
+        ``sink`` is optional. When supplied, a provider that receives upstream
+        text incrementally forwards it as it arrives so the customer sees the
+        answer being written instead of waiting for the whole response.
+        """
 
 
 def allowlisted_evidence(raw: Any) -> list[dict[str, Any]]:
@@ -165,7 +177,9 @@ class ControlledLookupAgentProvider:
     def __init__(self, lookup_adapter: Any = None):
         self.lookup_adapter = lookup_adapter or M3LookupAdapter()
 
-    async def execute(self, request: AgentRequest) -> AgentResponse:
+    async def execute(self, request: AgentRequest, *, sink: Any = None) -> AgentResponse:
+        # This local provider has no upstream stream to forward, so ``sink`` is
+        # accepted for contract compatibility and deliberately unused.
         # The adapter receives only the server-selected customer scope. The
         # Agent envelope remains available for a future real ADP implementation
         # without making the worker depend on ADP's raw request shape.
@@ -295,7 +309,7 @@ class ADPAgentProvider:
         self.application_id = application_id.strip()[:64]
         self.vendor = vendor
 
-    async def execute(self, request: AgentRequest) -> AgentResponse:
+    async def execute(self, request: AgentRequest, *, sink: Any = None) -> AgentResponse:
         normalized_query = str(request.query or "").strip()
         if (
             not self.vendor
@@ -339,6 +353,17 @@ class ADPAgentProvider:
                         delta = _event_value(payload, "Text", "text")
                         if isinstance(delta, str):
                             text_parts.append(delta[:4000])
+                            if sink is not None:
+                                # Forward upstream text as it arrives. A channel
+                                # send must never abort the run: the full answer
+                                # is still persisted for the portal.
+                                try:
+                                    await sink.emit(delta[:4000])
+                                except Exception as exc:
+                                    logger.warning(
+                                        "streaming sink failed: %s", type(exc).__name__
+                                    )
+                                    sink = None
         except DeliveryRetryableError:
             raise
         except Exception as exc:
@@ -346,6 +371,12 @@ class ADPAgentProvider:
             # only the exception type is safe for server logs.
             logger.warning("ADP Agent execution failed: %s", type(exc).__name__)
             return AgentResponse.upstream_error(normalized_query.upper())
+
+        if sink is not None:
+            try:
+                await sink.close()
+            except Exception as exc:
+                logger.warning("streaming sink close failed: %s", type(exc).__name__)
 
         summary = "".join(text_parts).strip()[:2000]
         if not summary:

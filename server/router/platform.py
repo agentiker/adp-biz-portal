@@ -60,6 +60,7 @@ from core.channel_credentials import (
     ChannelCredentialError,
     decrypt_credential,
     encrypt_credential,
+    list_active_channel_instances,
     load_active_channel_credentials,
     load_active_channel_instance_credential,
     serialize_credential,
@@ -1058,6 +1059,7 @@ WECHAT_UNBOUND_REPLY = (
     "请登录官网平台完成渠道绑定，或联系您的销售/客服协助开通。"
 )
 WECHAT_BIND_SUCCESS_REPLY = "绑定成功，现在可以直接在这里查询您有权限的业务数据。"
+WECHAT_ACK_REPLY = "已收到，正在为你查询…"
 WECHAT_BIND_FAILED_REPLY = (
     "绑定未成功：绑定码无效、已使用或已过期。请回到官网平台重新获取绑定码后再发送。"
 )
@@ -1192,9 +1194,16 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
             max_attempts=PLATFORM_INBOUND_MAX_ATTEMPTS,
         )
         await request.ctx.db.commit()
-        # WeChat accepts the literal success body.  Detailed task IDs stay out
-        # of the provider response and are available through platform storage.
-        return text("success", status=200)
+        # Answer inside the provider's synchronous window so the sender sees
+        # immediate feedback; the answer itself streams in afterwards as
+        # customer-service messages. Task IDs stay out of the provider response
+        # and are available through platform storage.
+        return _wechat_reply(
+            adapter,
+            envelope=envelope,
+            content=WECHAT_ACK_REPLY,
+            encrypted=encrypted,
+        )
 
     async def _confirm_binding(
         self,
@@ -1490,6 +1499,23 @@ class AdpShipmentLookupApi(HTTPMethodView):
         return json(payload)
 
 
+async def _default_channel_instance_id(request: Request, channel: str) -> str:
+    """Resolve the only active instance of a channel, or require an explicit one.
+
+    Mirrors the fixed-callback rule: guessing between several instances would
+    bind a customer to the wrong tenant's channel, so ambiguity fails closed.
+    """
+    try:
+        instances = await list_active_channel_instances(request.ctx.db, channel=channel)
+    except ChannelCredentialError as exc:
+        raise PlatformForbidden("该渠道尚未配置") from exc
+    if not instances:
+        raise PlatformForbidden("该渠道尚未配置")
+    if len(instances) > 1:
+        raise PlatformBadRequest("该渠道有多个实例，请指定渠道实例")
+    return instances[0]
+
+
 class ChannelIdentityBindApi(HTTPMethodView):
     """Start and inspect channel identities owned by the current user."""
 
@@ -1512,7 +1538,14 @@ class ChannelIdentityBindApi(HTTPMethodView):
         context = _context(request)
         body = _body(request)
         channel = _required_channel_text(body, "channel", 48)
-        channel_instance_id = _required_channel_text(body, "channelInstanceId", 128)
+        # A customer cannot be expected to know which channel instance serves
+        # them, so an omitted instance is resolved server-side when the channel
+        # has exactly one active instance. Only non-secret instance IDs are read.
+        channel_instance_id = (
+            _required_channel_text(body, "channelInstanceId", 128)
+            if body.get("channelInstanceId") not in (None, "")
+            else await _default_channel_instance_id(request, channel)
+        )
         # Optional: a customer normally cannot supply their own channel
         # identity (a WeChat OpenID is not visible to them), so the binding is
         # confirmed by the channel adapter that receives the state. Pages that

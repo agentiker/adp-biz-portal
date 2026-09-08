@@ -470,6 +470,36 @@ class WechatOfficialAccountSender:
             # failure; retrying the same payload cannot help.
             return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": str(exc)})
 
+    async def send_result_card(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        title: str,
+        description: str,
+        url: str,
+    ) -> DeliveryReceipt:
+        """Send the structured result as a rich card.
+
+        A text message cannot render structure, so the record-worthy view of a
+        result — title, summary and a link to the full evidence — goes out as a
+        ``news`` article. Returns an uncertain receipt when no transport is
+        configured, exactly like a text send.
+        """
+        if self._transport is None:
+            return DeliveryReceipt(status="uncertain", uncertain=True, metadata={"reason": "provider_transport_not_configured"})
+        send_news = getattr(self._transport, "send_news", None)
+        if send_news is None:
+            return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": "card_not_supported"})
+        conversation = str(payload.get("externalConversationId") or "")
+        prefix = f"{self.channel_instance_id}:"
+        open_id = conversation[len(prefix):].strip() if conversation.startswith(prefix) else ""
+        if not open_id:
+            return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": "missing_recipient_identity"})
+        try:
+            return await send_news(open_id=open_id, title=title, description=description, url=url)
+        except WechatSendError as exc:
+            return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": str(exc)})
+
     def _open_id(self, message: OutboundMessage, metadata: Mapping[str, Any]) -> str | None:
         """Recover the recipient OpenID from the persisted reply payload.
 

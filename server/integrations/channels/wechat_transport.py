@@ -19,6 +19,7 @@ The three outcomes this module distinguishes:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -42,6 +43,20 @@ DEFAULT_TIMEOUT_SECONDS = 10
 # Refresh early so a token cannot expire between the check and the send.
 TOKEN_EXPIRY_MARGIN_SECONDS = 300
 MAX_TEXT_CHARS = 2000
+JSON_UTF8_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
+
+
+def _utf8_json(payload: Mapping[str, Any]) -> bytes:
+    """Serialize a request body as raw UTF-8 rather than escaped ASCII.
+
+    ``json.dumps`` defaults to ``ensure_ascii=True``, and aiohttp's ``json=``
+    argument uses that default. WeChat does not decode ``\\uXXXX`` escapes in
+    message content: it forwards them to the reader literally, so a Chinese
+    reply arrives as ``\\u4f60\\u597d``. Sending raw UTF-8 bytes is the only
+    form the provider renders correctly.
+    """
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
 
 # WeChat error codes that will fail the same way on every retry.
 PERMANENT_ERROR_CODES = frozenset({
@@ -73,6 +88,24 @@ class WechatSendError(RuntimeError):
 class _CachedToken:
     value: str
     expires_at: float
+
+
+def _card_text(value: Any, *, limit: int, field: str) -> str:
+    """Bound a card field, keeping it single-line for the provider's layout."""
+    if not isinstance(value, str) or not value.strip():
+        raise WechatSendError(f"{field} is empty")
+    normalized = " ".join(value.split())
+    return normalized[:limit]
+
+
+def _card_url(value: Any) -> str:
+    """Require an absolute HTTPS/HTTP link the provider will accept."""
+    if not isinstance(value, str) or not value.strip():
+        raise WechatSendError("card url is empty")
+    normalized = value.strip()
+    if not normalized.startswith(("https://", "http://")) or len(normalized) > 1024:
+        raise WechatSendError("card url is invalid")
+    return normalized
 
 
 class WechatAccessTokenCache:
@@ -209,12 +242,46 @@ class WechatCustomerServiceTransport:
             text = f"{text[: MAX_TEXT_CHARS - 12]}…（详见官网）"
         return {"msgtype": "text", "text": {"content": text}}
 
+    async def send_news(
+        self,
+        *,
+        open_id: str,
+        title: str,
+        description: str,
+        url: str,
+        picture_url: str = "",
+    ) -> DeliveryReceipt:
+        """Deliver one rich card.
+
+        A text message cannot render structure, so a result worth reading as a
+        record (title, summary, a link back to the full evidence) is sent as a
+        ``news`` article instead.
+        """
+        recipient = self._recipient(open_id)
+        article = {
+            "title": _card_text(title, limit=64, field="card title"),
+            "description": _card_text(description, limit=120, field="card description"),
+            "url": _card_url(url),
+        }
+        if picture_url:
+            article["picurl"] = _card_url(picture_url)
+        payload = {"touser": recipient, "msgtype": "news", "news": {"articles": [article]}}
+        for attempt in (1, 2):
+            token = await self._tokens.token(app_id=self.app_id, app_secret=self._app_secret)
+            receipt, token_stale = await self._post(token=token, payload=payload)
+            if not token_stale:
+                return receipt
+            self._tokens.invalidate(self.app_id)
+            if attempt == 2:
+                raise DeliveryRetryableError("wechat_token_stale")
+        raise DeliveryRetryableError("wechat_send_not_attempted")
+
     async def _post(self, *, token: str, payload: Mapping[str, Any]) -> tuple[DeliveryReceipt, bool]:
         timeout = aiohttp.ClientTimeout(total=self._timeout_seconds)
         url = f"{self._api_base}{CUSTOM_SEND_PATH}?access_token={token}"
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload) as response:
+                async with session.post(url, data=_utf8_json(payload), headers=JSON_UTF8_HEADERS) as response:
                     status = response.status
                     body = await response.json(content_type=None)
         except (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError) as exc:

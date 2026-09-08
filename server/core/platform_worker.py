@@ -7,6 +7,8 @@ before the M3 call, and tool/reply records are finalized in a new transaction.
 
 from __future__ import annotations
 
+import inspect
+import logging
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -47,6 +49,7 @@ from integrations.adp.provider import (
 )
 from integrations.m3.adapter import M3LookupAdapter, M3LookupResult
 from integrations.channels.base import DeliveryReceipt
+from integrations.channels.stream_sink import ChannelStreamSink
 from model.account import Account, AccountStatus
 from model.platform import (
     EnterpriseStatus,
@@ -64,6 +67,8 @@ from model.platform import (
     PlatformUser,
 )
 
+
+logger = logging.getLogger(__name__)
 
 PLATFORM_INBOUND_TASK_TYPE = "platform.inbound.process"
 PLATFORM_REPLY_TASK_TYPE = "platform.reply"
@@ -264,19 +269,87 @@ def _rejection_code(exc: Exception) -> str:
     return "task_rejected"
 
 
+def _provider_accepts_sink(provider: Any) -> bool:
+    """Report whether a provider implements the streaming contract.
+
+    The sink is an optional extension, so a provider written against the
+    original ``execute(request)`` signature must keep working rather than
+    failing every message with a TypeError.
+    """
+    execute = getattr(provider, "execute", None)
+    if execute is None:
+        return False
+    try:
+        parameters = inspect.signature(execute).parameters
+    except (TypeError, ValueError):
+        return False
+    if "sink" in parameters:
+        return True
+    return any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+
+
+async def _execute_provider(provider: Any, request: AgentRequest, *, sink: Any = None) -> Any:
+    if sink is not None and _provider_accepts_sink(provider):
+        return await provider.execute(request, sink=sink)
+    return await provider.execute(request)
+
+
+async def _build_stream_sink(
+    sender: Any,
+    *,
+    channel: str,
+    channel_instance_id: str,
+    external_conversation_id: str,
+    inbound_id: str,
+    trace_id: str,
+) -> Any:
+    """Build a streaming sink when the channel can push messages mid-run.
+
+    The website channel is read back by the browser, so it needs no push. A
+    channel without a configured sender streams nothing and still receives the
+    single validated reply from the reply task.
+    """
+    if channel == "web" or not channel_instance_id:
+        return None
+    resolved = await _resolve_channel_sender(
+        sender, channel=channel, channel_instance_id=channel_instance_id
+    )
+    if resolved is None:
+        return None
+    return ChannelStreamSink(
+        resolved,
+        open_id_payload={
+            "channel": channel,
+            "channelInstanceId": channel_instance_id,
+            "externalConversationId": external_conversation_id,
+            "traceId": trace_id,
+        },
+        idempotency_prefix=f"platform-stream:{inbound_id}",
+    )
+
+
 async def process_platform_inbound_task(
     sessionmaker: Callable[[], AsyncSession],
     task: PlatformDeliveryTask,
     *,
     adapter: Any = None,
     agent_provider: AgentProvider | Any = None,
+    reply_sender: Any = None,
 ) -> DeliveryOutcome:
-    """Process one normalized inbound message through the Agent provider."""
+    """Process one normalized inbound message through the Agent provider.
+
+    ``reply_sender`` enables streaming: when the channel can push messages, the
+    upstream agent text is forwarded as it arrives instead of waiting for the
+    whole answer. What was streamed is recorded on the reply payload so the
+    final reply task does not repeat it.
+    """
     inbound_id: str | None = None
     trace_id: str | None = None
     account_id: str | None = None
     conversation_id_value: str | None = None
     run_id: str | None = None
+    streamed_chunks = 0
+    streamed_sequence = 0
     db = sessionmaker()
     inbound: PlatformInboundMessage | None = None
     try:
@@ -563,8 +636,19 @@ async def process_platform_inbound_task(
             trace_id=trace_id or "platform-worker",
             visitor_id=f"platform:{enterprise.Id}:{account.Id}",
         )
-        raw_result = await provider.execute(provider_request)
+        sink = await _build_stream_sink(
+            reply_sender,
+            channel=channel,
+            channel_instance_id=inbound.ChannelInstanceId,
+            external_conversation_id=inbound.ExternalConversationId,
+            inbound_id=inbound_id,
+            trace_id=trace_id or "platform-worker",
+        )
+        raw_result = await _execute_provider(provider, provider_request, sink=sink)
         result = _result_payload(raw_result, query=query.upper())
+        if sink is not None:
+            streamed_chunks = sink.sent_chunks
+            streamed_sequence = sink.sequence
     except DeliveryRetryableError:
         # A known transient M3 failure may retry the business task within its
         # bounded attempt count. The tool request ID remains stable, so a
@@ -680,6 +764,11 @@ async def process_platform_inbound_task(
             # Stable across worker restarts and safe for an upstream sender to
             # use as its message/idempotency key when delivery is retried.
             "deliveryIdempotencyKey": f"platform-reply:{inbound_id}",
+            # Streaming already showed the customer this answer. The reply task
+            # must not send it a second time, but it still re-checks
+            # authorization and records delivery.
+            "streamedChunks": streamed_chunks,
+            "streamedSequence": streamed_sequence,
         }
         reply_task, reply_created = await enqueue_delivery_task(
             final_db,
@@ -840,6 +929,51 @@ async def _resolve_channel_sender(
     return sender
 
 
+def _portal_result_url(payload: Mapping[str, Any]) -> str | None:
+    """Build a portal link for a channel message, or None when unavailable.
+
+    Without a configured public origin there is no link a customer could open,
+    so the card is skipped rather than sent with an unreachable URL.
+    """
+    base = str(tagentic_config.PLATFORM_PUBLIC_BASE_URL or "").strip().rstrip("/")
+    conversation_id = payload.get("conversationId")
+    if not base or not isinstance(conversation_id, str) or not conversation_id.strip():
+        return None
+    if not base.startswith(("https://", "http://")):
+        return None
+    return f"{base}/#/portal/lookup?conversationId={conversation_id.strip()}"
+
+
+async def _send_result_card(sender: Any, *, payload: Mapping[str, Any]) -> str:
+    """Send the closing rich card when the channel and configuration allow it.
+
+    A card failure never fails the reply: the answer itself already reached the
+    customer, so this only reports what happened.
+    """
+    send_card = getattr(sender, "send_result_card", None) if sender is not None else None
+    if send_card is None:
+        return "unsupported"
+    url = _portal_result_url(payload)
+    if url is None:
+        return "skipped_no_public_url"
+    title = str(payload.get("title") or "业务查询结果").strip() or "业务查询结果"
+    summary = str(payload.get("summary") or "").strip()
+    if not summary:
+        return "skipped_no_summary"
+    try:
+        receipt = await send_card(
+            payload=payload,
+            title=title,
+            description=summary,
+            url=url,
+        )
+    except Exception as exc:
+        logger.warning("result card send failed: %s", type(exc).__name__)
+        return "failed"
+    status = getattr(receipt, "status", None)
+    return str(status) if status else "unknown"
+
+
 async def process_platform_reply_task(
     sessionmaker: Callable[[], AsyncSession],
     task: PlatformDeliveryTask,
@@ -903,12 +1037,30 @@ async def process_platform_reply_task(
     finally:
         await db.close()
 
+    streamed_chunks = payload.get("streamedChunks")
+    already_streamed = isinstance(streamed_chunks, int) and streamed_chunks > 0
+
     if channel != "web":
         sender = await _resolve_channel_sender(
             sender,
             channel=channel,
             channel_instance_id=channel_instance_id,
         )
+
+    if channel != "web" and already_streamed:
+        # The answer already reached the customer as a stream. Re-sending the
+        # text would duplicate what they just read; a closing card adds the
+        # structured record and a link to the full evidence.
+        card = await _send_result_card(sender, payload=payload)
+        return DeliveryOutcome({
+            "status": "delivered",
+            "channel": channel,
+            "deliveryMode": "streamed",
+            "streamedChunks": streamed_chunks,
+            "resultCard": card,
+        })
+
+    if channel != "web":
         if sender is None:
             raise DeliveryRejectedError("channel_sender_not_configured")
         send = getattr(sender, "send", None)
@@ -988,11 +1140,13 @@ def build_platform_delivery_handlers(
         provider = (
             agent_provider_factory() if callable(agent_provider_factory) else agent_provider_factory
         )
+        sender = reply_sender_factory() if callable(reply_sender_factory) else reply_sender_factory
         return await process_platform_inbound_task(
             sessionmaker,
             task,
             adapter=adapter,
             agent_provider=provider,
+            reply_sender=sender,
         )
 
     async def reply_handler(task: PlatformDeliveryTask) -> DeliveryOutcome:

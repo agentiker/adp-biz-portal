@@ -521,6 +521,29 @@ export async function listAdminChannelIdentities(): Promise<ChannelIdentity[]> {
   return httpService.get<ChannelIdentity[]>('/api/v1/admin/channel-identities')
 }
 
+export async function listMyChannelIdentities(): Promise<ChannelIdentity[]> {
+  if (useMock) return mockChannelIdentities.map((item) => ({ ...item }))
+  return httpService.get<ChannelIdentity[]>('/api/v1/channel-identities')
+}
+
+export async function startChannelIdentityBinding(
+  channel: string,
+  channelInstanceId?: string,
+): Promise<{ identity: ChannelIdentity; state: string }> {
+  // The external identity is deliberately not sent: a customer cannot see
+  // their own WeChat OpenID, so the trusted channel adapter supplies it when
+  // the one-time state arrives from the real sender. The instance is resolved
+  // server-side when the channel has exactly one active instance.
+  return httpService.post<{ identity: ChannelIdentity; state: string }>('/api/v1/channel-identities', {
+    channel,
+    ...(channelInstanceId ? { channelInstanceId } : {}),
+  })
+}
+
+export async function revokeMyChannelIdentity(id: string): Promise<{ identity: ChannelIdentity }> {
+  return httpService.post<{ identity: ChannelIdentity }>(`/api/v1/channel-identities/${encodeURIComponent(id)}/revoke`, {})
+}
+
 export async function revokeAdminChannelIdentity(id: string): Promise<{ identity: ChannelIdentity }> {
   if (useMock) {
     const item = mockChannelIdentities.find((row) => row.id === id)

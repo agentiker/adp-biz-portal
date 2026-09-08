@@ -383,7 +383,7 @@ export interface ShipmentResult {
 
 export interface StartChannelIdentityBindingRequest {
   channel: string
-  channelInstanceId: string
+  channelInstanceId?: string | null
   externalIdentityId?: string | null
 }
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -59,12 +60,64 @@ def build_agent_provider() -> AgentProvider:
             vendor=selected[2],
         )
 
-    adapter = M3LookupAdapter(
-        use_mock=bool(tagentic_config.M3_USE_MOCK),
-        base_url=tagentic_config.M3_BASE_URL,
-        timeout_seconds=tagentic_config.M3_TIMEOUT_SECONDS,
+    # No explicit mapping: the first phase gives the platform exactly one ADP
+    # application, configured through APP_CONFIGS. Route to it.
+    platform_provider = _platform_application_provider()
+    if platform_provider is not None:
+        return platform_provider
+
+    # Development fallback only, and only when M3 was configured on purpose.
+    # Whether the agent can reach M3 is the agent's own tool configuration, so a
+    # missing M3 setting must never stop a message from reaching ADP.
+    if tagentic_config.M3_USE_MOCK or str(tagentic_config.M3_BASE_URL or "").strip():
+        adapter = M3LookupAdapter(
+            use_mock=bool(tagentic_config.M3_USE_MOCK),
+            base_url=tagentic_config.M3_BASE_URL,
+            timeout_seconds=tagentic_config.M3_TIMEOUT_SECONDS,
+        )
+        return ControlledLookupAgentProvider(adapter)
+
+    # Nothing is configured. Return an ADP provider without a vendor so each
+    # message fails honestly as an upstream error instead of being answered by a
+    # local stand-in that was never meant for production.
+    logging.error(
+        "no ADP application is configured: set APP_CONFIGS (single platform app) "
+        "or ADP_AGENT_CONFIGS; messages will report an upstream error"
     )
-    return ControlledLookupAgentProvider(adapter)
+    return ADPAgentProvider(agent_id=_default_agent_id(), application_id="", vendor=None)
+
+
+def _default_agent_id() -> str:
+    configured = str(tagentic_config.ADP_DEFAULT_AGENT_ID or "").strip()
+    return configured[:128] if configured else "platform-default"
+
+
+def _platform_application_provider() -> AgentProvider | None:
+    """Resolve the single platform ADP application from ``APP_CONFIGS``.
+
+    Several configured applications are ambiguous without an explicit mapping,
+    so that case fails closed rather than guessing which one serves customers.
+    """
+    configs = list(tagentic_config.APP_CONFIGS or [])
+    if len(configs) != 1 or not isinstance(configs[0], dict):
+        if len(configs) > 1:
+            logging.error(
+                "APP_CONFIGS has %s applications; set ADP_AGENT_CONFIGS to choose the platform agent",
+                len(configs),
+            )
+        return None
+    application_id = str(configs[0].get("ApplicationId") or "").strip()
+    if not application_id:
+        return None
+    vendor = TAgenticApp.apps.get(application_id)
+    if vendor is None or not callable(getattr(vendor, "chat", None)):
+        logging.error("configured ADP application %s is not usable", application_id)
+        return ADPAgentProvider(
+            agent_id=_default_agent_id(), application_id=application_id, vendor=None
+        )
+    return ADPAgentProvider(
+        agent_id=_default_agent_id(), application_id=application_id, vendor=vendor
+    )
 
 
 def build_worker(

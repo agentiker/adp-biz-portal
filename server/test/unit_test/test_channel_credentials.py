@@ -225,3 +225,28 @@ def test_write_evidence():
         + "\n",
         encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_instance_listing_returns_ids_without_decrypting():
+    """A customer starting a binding must not force credential decryption."""
+    from types import SimpleNamespace
+
+    from core.channel_credentials import list_active_channel_instances
+
+    class _Db:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, statement):
+            self.statements.append(str(statement))
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: ["oa-a", "oa-b"])
+            )
+
+    db = _Db()
+    instances = await list_active_channel_instances(db, channel="wechat_official_account")
+    assert instances == ["oa-a", "oa-b"]
+    # Only the instance column is selected; no ciphertext is read.
+    assert "Ciphertext" not in db.statements[0]
+    assert "ChannelInstanceId" in db.statements[0]

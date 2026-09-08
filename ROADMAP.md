@@ -29,7 +29,7 @@
 
 微信固定回调（2026-09-07）：新增 `/wechat/callback` 和 `/api/v1/channels/wechat-official-account/callback`。固定入口仅在恰好一个启用的微信服务号实例时工作；微信服务号 XML 回调不携带 AppID，无法安全地凭 AppID 在多个 Token 之间猜测，因此多实例场景继续使用带固定实例 ID 的 URL。
 
-当前任务计数：`46 / 61` 项已完成，`15` 项未完成（其中 `7` 项 `BLOCKED`、`4` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`47 / 63` 项已完成，`16` 项未完成（其中 `7` 项 `BLOCKED`、`5` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M2-ADP-ROUTE-01`（DONE，Worker 默认路由平台唯一 ADP 应用、不以 M3 为前置）与 `M3-WECHAT-OA-03`（IN PROGRESS，ACK+流式+Markdown+图文卡片，对齐 ADP 原生体感，含一处有意的证据校验范围变更）。首个真实微信认证服务号已接入并完成绑定/入站/出站真实联调。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -287,6 +287,22 @@
   - 与 `M3-REFACTOR-01` 计划的一处偏离（有意）：调研结论要求 token 缓存用「共享存储+锁，禁进程内 Map」。该要求针对会作废旧 token 的 `/cgi-bin/token`；本实现改用 `/cgi-bin/stable_token`，该端点对并发调用返回同一 token 且不作废旧 token，因此进程内缓存不会让多 Worker 互相顶掉，无需新增共享存储。此耦合已写进模块 docstring：若日后改回 `/cgi-bin/token`，必须先把缓存迁到共享存储。`WechatAccessTokenCache` 已按 appId 泛化，`M3-REFACTOR-01` 可直接搬进 `channels/_wechat/token.py` 供客服/企微复用。
   - 验证命令与结果：`server/.venv/bin/pytest test/unit_test/test_wechat_transport.py -q`（`27 passed`）覆盖凭据校验、内容截断、成功/永久/限频/token/未映射错误码分类、连接失败为 retryable、写出后超时为 uncertain、5xx 为 retryable、token 缓存复用与过期刷新、并发只取一次、无传输保持 uncertain、跨实例收件人拒绝、超窗拒绝；全量 `pytest test/unit_test -q`（`194 passed`）、`pytest test/integration -q`（`28 passed`）。
   - 遗留风险：所有发送路径均由本地伪造 HTTP 响应验证，未经真实微信 API 回执确认；客服消息要求认证服务号，部分账号还需把服务器出口 IP 加入白名单；`stable_token` 的真实配额与限频表现待联调观察。
+  - 真实联调进展（2026-09-08→09，认证服务号 + 安全模式，生产 `adp.xdimspace.cn`）：这是首个接入的真实渠道账号，`M0-CHANNEL-01`/`M3-QA-01` 的「至少一个可用渠道账号」前置已满足（其余真实渠道仍缺）。真实微信端到端验证：服务器配置 URL 验证（明文 GET）通过；入站 AES 安全模式验签+解密+身份解析（绑定后 `processed`）；出站客服消息真实投递成功（`platform.reply` succeeded，`stable_token`+`custom/send` 真实调通）。修复两个真实环境暴露的缺陷：(a) errcode `40164` IP 不在白名单——需将服务器出口 IP 加入公众号 IP 白名单；(b) UTF-8 编码——aiohttp `json=` 默认 `ensure_ascii=True` 使中文投递为 `\uXXXX` 字面量，改为 `ensure_ascii=False`+UTF-8 bytes+`charset=utf-8` header，由真实投递验证。
+
+- [x] `M2-ADP-ROUTE-01` Worker 默认路由到平台唯一 ADP 应用，业务网关不以 M3 配置为前置。
+  - 状态：`DONE`（2026-09-08，本地实现 + 生产验证消息到达 ADP）
+  - 背景：`worker.py::build_agent_provider` 原逻辑为 `ADP_AGENT_CONFIGS` 为空即回落本地 M3 provider、绕过 ADP。生产未配 `ADP_AGENT_CONFIGS`，每条消息去查 M3 配置、查不到即 `upstream_error`（客户收到「业务系统暂时不可用」）。与方案 §6.2「校验通过后才转发给一期全平台唯一的 ADP 应用，其运行配置由 `APP_CONFIGS` 提供」不符——M3 是否接入 ADP agent 属 agent 侧工具配置、不确定，不能作为消息到达 ADP 的前置。
+  - 修复：优先级改为 ① `ADP_AGENT_CONFIGS` 显式映射（行为不变）；② `APP_CONFIGS` 恰好一项 → 平台唯一 ADP 应用（与 API `_adp_config_status()` 同口径）；③ 仅当 `M3_USE_MOCK`/`M3_BASE_URL` 刻意配置才用本地 M3 provider（开发）；④ 全空 → 无 vendor 的 ADP provider，消息诚实报 upstream error 并 ERROR 日志，不用本地替身冒充生产。多 `APP_CONFIGS` 无显式映射时 fail closed。
+  - 验证：`test_worker_agent_routing.py`（8 passed，含「缺 M3 不阻断到达 ADP」回归主项）、全量 204 passed。生产：修复后真实微信消息成功到达 ADP 并返回回答（此前恒 upstream_error）。
+  - 遗留风险：生产 `DescribeApp` 元信息接口仍报 `450006-用户未登录或者未注册`；`chat` 走通说明其授权有效，但二者共用 `TC_SECRET_*`，元信息接口授权需腾讯云侧确认。
+
+- [ ] `M3-WECHAT-OA-03` 对齐 ADP 原生对话体感：ACK + 流式输出 + Markdown 适配 + 图文卡片。
+  - 状态：`IN PROGRESS`（2026-09-09，本地实现与回归完成、已部署；真实微信流式/卡片体感待用户验收）
+  - 背景：核实 `vendor/tcadp/tcadp.py::chat` 为真 SSE 流（`Stream: enable`+`Incremental: true`，逐行 `readline` 逐事件 `yield`，vendor 零攒批），流被 `ADPAgentProvider` 累积收敛成一次性全文。目标对齐 ADP 原生：先 ACK 再流式。
+  - 完成证据：`ADPAgentProvider.execute` 新增可选 `sink`，边收 `text.delta` 边转发；`_execute_provider` 按签名探测，旧 `execute(request)` provider 不受影响。新增 `stream_sink.py::ChannelStreamSink`（句末/段落分块、每块独立幂等键 `platform-stream:<inbound>:<seq>`、失败即停不中断 run、上限 12 块下限 60 字防 `45009`）与 `text_format.py`（markdown→纯文本，emoji/换行保留；`split_at_boundary` 供切分）。回调 5 秒内返回被动 ACK「已收到，正在为你查询…」（加密模式同样加密）。`wechat_transport.send_news`+`send_result_card` 追发 `msgtype=news` 图文卡片（标题+摘要+回 Portal 链接，需 `PLATFORM_PUBLIC_BASE_URL`，未配置则跳过）。回复任务见 `streamedChunks>0` 不重发正文、只补卡片。
+  - 有意的范围变更（安全）：按用户明确指示「鉴权通过后直接转发 ADP 流式给客户端」，流式文本不再经发送前证据白名单校验，`allowlisted_evidence()` 移到流结束后运行（Portal 侧仍保留完整校验记录与证据）。偏离方案「关键业务结论校验后返回」。前置权限校验（execution context + tool claim）仍在流开始前完成。若模型流出不实业务结论需重新评估。
+  - 验证：`test_text_format.py`（17）、`test_stream_sink.py`（13，含幂等/断点续发/失败不中断/限流/向后兼容）、`test_wechat_transport.py`（31，含卡片与 UTF-8）；全量 237 passed、集成 28 passed。
+  - 待验收（真实微信）：ACK 秒回、答案分条流入、结尾图文卡片、中文/emoji 正常、markdown 清理；worker 日志核对分块数/卡片投递/`45009`。分块节奏（`min_chars`/`max_chunks`）可调。
 
 - [ ] `M3-WECHAT-CS-01` 实现微信客服适配器：通知接收、同步游标、消息去重和客服回复协议。
   - 状态：`TODO`；依赖 `M0-CHANNEL-01`；建议以 `M3-REFACTOR-01` 为前置。
@@ -320,7 +336,8 @@
   - 已纠正偏差五（未绑定发送者的 ack 语义）：微信对非 2xx 回调会重试并向用户显示“该公众号暂时无法提供服务”。现未绑定发送者收到 200 + 被动引导回复（提示登录官网绑定或联系销售/客服），加密模式下回复同样加密，回复内容拒绝 `]]>` 与控制字符以免伪造 XML 结构；拒绝事件写入脱敏审计。
   - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（165 passed，需先 `python migrate.py upgrade` 使本地库到 revision 12）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q`（28 passed，隔离 schema）；`make platform_api_check` 通过（41 个公开操作、50 个 schema，生成类型已同步）；`cd client/packages/app && npm run type-check`、`npm run build-only` 通过。
   - 测试产物：`output/tests/m3-identity-01-platform-user-scope.json`、`m3-identity-01-platform-scope-migration.json`、`m3-identity-01-worker-single-membership.json`、`m3-identity-01-channel-sessionless-execution.json`。
-  - 已验证（2026-09-08 真实浏览器）：企业范围选择器与官网异步查询链路已在 `1280x900`、`390x844` 完成验收，见 `M2-CHANNEL-FIX-01`。绑定页仍待人工验收（需要真实渠道 OpenID 样本）；部署后 schema revision/API/UI 待发布时确认。
+  - 已验证（2026-09-08 真实浏览器）：企业范围选择器与官网异步查询链路已在 `1280x900`、`390x844` 完成验收，见 `M2-CHANNEL-FIX-01`。
+  - 绑定页补齐并真实验收（2026-09-08→09）：此前 Portal「账号与绑定」为写死占位、客户侧绑定 UI 从未实现。补齐 `platformService` 的 `startChannelIdentityBinding/listMyChannelIdentities/revokeMyChannelIdentity` 与 Portal 真实 UI（获取绑定码/绑定码展示/已绑定列表/解绑）；`channelInstanceId` 改可选，新增 `core/channel_credentials.list_active_channel_instances`（只查实例 ID 不解密）由服务端解析、恰好一实例才自动选中、多实例 fail closed。真实微信已完成一次端到端绑定：`pci_` 码经公众号发送 → `channel.identity.confirm/success`、身份 `active`、`ExternalIdentityId` 由适配器写入、`EnterpriseId` 为 NULL、`StateHash` 已烧毁。
   - 遗留风险：本地测试只能证明平台状态机、权限边界和迁移行为；微信服务号、微信客服、企业微信的真实回调验签/解密、渠道发送协议、OAuth/身份样本和第三方联调仍由 `M0-CHANNEL-01`、`M3-VERIFY-01`、`M3-QA-01` 阻塞，不能以本地 API 或 Mock 代替。被动引导回复已按协议构造并可自解密验证，但未经真实服务号回执确认。
 - [ ] `M3-QA-01` 完成重复消息、断线重连、进程重启、回复窗口、超时和发送失败的真实联调记录。
   - 状态：`BLOCKED`；依赖至少一个可用渠道账号和 `M2-WORKER-01`。
