@@ -168,6 +168,39 @@ async def test_sender_fails_closed_for_window_and_unknown_transport():
 
 
 @pytest.mark.asyncio
+async def test_sender_cleans_markdown_into_plain_text_before_send():
+    """The account renders text as plain text, so markdown markup is stripped."""
+    from integrations.channels.base import DeliveryReceipt
+
+    class _RecordingTransport:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, *, open_id, content):
+            self.sent.append({"open_id": open_id, "content": content})
+            return DeliveryReceipt(status="delivered")
+
+    transport = _RecordingTransport()
+    sender = WechatOfficialAccountSender(channel_instance_id="oa-test", transport=transport)
+    message = OutboundMessage(
+        channel="wechat_official_account",
+        channel_instance_id="oa-test",
+        external_conversation_id="oa-test:openid_test",
+        text="**提单** `BL-1` 状态：\n- 已到港\n[详情](https://example.com/x)",
+        idempotency_key="delivery-1",
+        trace_id="trace",
+    )
+    receipt = await sender.send(message=message)
+    assert receipt.status == "delivered"
+    assert len(transport.sent) == 1
+    sent = transport.sent[0]["content"]
+    assert "**" not in sent and "`" not in sent
+    assert "提单" in sent and "BL-1" in sent
+    assert "· 已到港" in sent
+    assert "https://example.com/x" in sent
+
+
+@pytest.mark.asyncio
 async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
     from test.app_bootstrap import ensure_app
 

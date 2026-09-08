@@ -316,6 +316,13 @@ async def _build_stream_sink(
     )
     if resolved is None:
         return None
+    if not getattr(resolved, "supports_incremental_stream", False):
+        # A channel that can only send discrete messages (WeChat Official
+        # Account) delivers one complete answer from the reply task instead of
+        # mid-run chunks, so nothing is streamed here. Real streaming is opt-in
+        # per sender (e.g. the WeCom smart-bot stream protocol) and belongs to
+        # M3-WECOM-01.
+        return None
     return ChannelStreamSink(
         resolved,
         open_id_payload={
@@ -1085,10 +1092,16 @@ async def process_platform_reply_task(
                 raise DeliveryUncertainError("channel_send_result_unknown")
             if result.status == "failed":
                 raise DeliveryRejectedError(str((result.metadata or {}).get("reason") or "channel_send_rejected"))
+        # The complete answer was delivered as one message; a closing card adds
+        # the structured record and a link to the full evidence. A card failure
+        # never fails the reply, mirroring the streamed path.
+        card = await _send_result_card(sender, payload=payload)
         return DeliveryOutcome({
             "status": "delivered",
             "channel": channel,
+            "deliveryMode": "single",
             "providerResult": result if isinstance(result, Mapping) else {},
+            "resultCard": card,
         })
 
     db = sessionmaker()
