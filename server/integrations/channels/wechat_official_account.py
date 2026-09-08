@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from core.delivery import InboundMessageInput
 from core.error.platform import PlatformBadRequest
 from integrations.channels.base import ChannelCapabilities, DeliveryReceipt, OutboundMessage
+from integrations.channels.text_format import to_plain_text
 from integrations.channels.wechat_transport import WechatSendError
 
 
@@ -463,8 +464,12 @@ class WechatOfficialAccountSender:
         open_id = self._open_id(message, metadata)
         if open_id is None:
             return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": "missing_recipient_identity"})
+        # The account renders text messages as plain text, so markdown markup
+        # would show its raw asterisks and hashes. The streamed path cleaned
+        # each chunk; the single complete answer is cleaned the same way here.
+        content = to_plain_text(message.text) or (message.text or "")
         try:
-            return await self._transport.send_text(open_id=open_id, content=message.text)
+            return await self._transport.send_text(open_id=open_id, content=content)
         except WechatSendError as exc:
             # A malformed outbound message is a platform bug, not a provider
             # failure; retrying the same payload cannot help.

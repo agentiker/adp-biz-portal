@@ -226,3 +226,38 @@ async def test_a_provider_without_the_sink_parameter_still_runs():
     sentinel = object()
     await _execute_provider(streaming, request, sink=sentinel)
     assert streaming.received_sink is sentinel
+
+
+@pytest.mark.asyncio
+async def test_no_sink_for_a_sender_that_cannot_stream_incrementally():
+    """WeChat Official Account sends one complete answer, not mid-run chunks."""
+    from core.platform_worker import _build_stream_sink
+
+    discrete = _RecordingSender()  # no supports_incremental_stream attribute
+    sink = await _build_stream_sink(
+        discrete,
+        channel="wechat_official_account",
+        channel_instance_id="oa-1",
+        external_conversation_id="oa-1:openid_a",
+        inbound_id="abc",
+        trace_id="t",
+    )
+    assert sink is None
+
+
+@pytest.mark.asyncio
+async def test_sink_is_built_when_the_sender_opts_into_streaming():
+    """A sender that declares incremental streaming (e.g. WeCom smart bot) streams."""
+    from core.platform_worker import _build_stream_sink
+
+    streaming_sender = _RecordingSender()
+    streaming_sender.supports_incremental_stream = True
+    sink = await _build_stream_sink(
+        streaming_sender,
+        channel="wecom_smart_bot",
+        channel_instance_id="bot-1",
+        external_conversation_id="bot-1:openid_a",
+        inbound_id="abc",
+        trace_id="t",
+    )
+    assert isinstance(sink, ChannelStreamSink)
