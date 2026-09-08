@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from core.delivery import InboundMessageInput
 from core.error.platform import PlatformBadRequest
 from integrations.channels.base import ChannelCapabilities, DeliveryReceipt, OutboundMessage
+from integrations.channels.wechat_transport import WechatSendError
 
 
 WECHAT_OFFICIAL_ACCOUNT = "wechat_official_account"
@@ -417,10 +418,18 @@ class WechatOfficialAccountAdapter:
 
 
 class WechatOfficialAccountSender:
+    """Deliver a platform reply as a WeChat customer-service message.
+
+    A transport is optional on purpose: without app credentials the sender
+    reports an uncertain outcome instead of claiming a delivery that never
+    happened.
+    """
+
     channel = WECHAT_OFFICIAL_ACCOUNT
 
-    def __init__(self, *, channel_instance_id: str):
+    def __init__(self, *, channel_instance_id: str, transport: Any = None):
         self.channel_instance_id = channel_instance_id
+        self._transport = transport
 
     async def send(self, *, message: OutboundMessage | None = None, payload: Mapping[str, Any] | None = None) -> DeliveryReceipt:
         # The delivery worker currently passes its persisted payload; keeping
@@ -448,4 +457,29 @@ class WechatOfficialAccountSender:
                     return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": "reply_window_expired"})
             except ValueError:
                 return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": "invalid_reply_window"})
-        return DeliveryReceipt(status="uncertain", uncertain=True, metadata={"reason": "provider_transport_not_configured"})
+        if self._transport is None:
+            return DeliveryReceipt(status="uncertain", uncertain=True, metadata={"reason": "provider_transport_not_configured"})
+
+        open_id = self._open_id(message, metadata)
+        if open_id is None:
+            return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": "missing_recipient_identity"})
+        try:
+            return await self._transport.send_text(open_id=open_id, content=message.text)
+        except WechatSendError as exc:
+            # A malformed outbound message is a platform bug, not a provider
+            # failure; retrying the same payload cannot help.
+            return DeliveryReceipt(status="failed", uncertain=False, metadata={"reason": str(exc)})
+
+    def _open_id(self, message: OutboundMessage, metadata: Mapping[str, Any]) -> str | None:
+        """Recover the recipient OpenID from the persisted reply payload.
+
+        ``externalConversationId`` is ``<instance>:<openid>`` as produced by
+        ``normalize_xml``; the sender never accepts a recipient from anywhere
+        the browser or the model could influence.
+        """
+        conversation = message.external_conversation_id or str(metadata.get("externalConversationId") or "")
+        prefix = f"{self.channel_instance_id}:"
+        if conversation.startswith(prefix):
+            candidate = conversation[len(prefix):].strip()
+            return candidate or None
+        return None
