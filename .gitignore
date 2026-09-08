@@ -19,5 +19,11 @@ server/static/
 server/logs/
 yarn.lock
 .playwright-cli/
+.playwright-mcp/
 output/
 .pytest_cache/
+# Local scratch that must never be committed: agent worktrees and reference
+# clones are separate git repositories, so `git add -A` would otherwise stage
+# them as embedded repos.
+.claude/worktrees/
+ref-repos/
