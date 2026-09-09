@@ -56,6 +56,7 @@ from core.platform import (
     utc_now,
 )
 from core.delivery import InboundMessageInput, record_inbound_message
+from core.channel_ingress import resolve_and_enqueue_inbound
 from core.channel_credentials import (
     ChannelCredentialError,
     decrypt_credential,
@@ -1187,28 +1188,18 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
                 encrypted=encrypted,
             )
 
-        identity = await resolve_active_channel_identity(
+        ingress = await resolve_and_enqueue_inbound(
             request.ctx.db,
             channel=adapter.channel,
             channel_instance_id=adapter.channel_instance_id,
             external_identity_id=envelope.open_id,
+            message=envelope.message,
+            base_task_payload=envelope.task_payload,
+            trace_id=envelope.message.trace_id,
+            task_type=PLATFORM_INBOUND_TASK_TYPE,
+            max_attempts=PLATFORM_INBOUND_MAX_ATTEMPTS,
         )
-        if identity is None:
-            await create_audit(
-                request.ctx.db,
-                actor_account_id=None,
-                action="channel.inbound.reject",
-                target_type="platform_channel_identity",
-                target_id=None,
-                trace_id=envelope.message.trace_id,
-                outcome="rejected",
-                metadata={
-                    "channel": adapter.channel,
-                    "channelInstanceId": adapter.channel_instance_id,
-                    "externalIdentityFingerprint": external_identity_fingerprint(envelope.open_id),
-                    "reason": "channel_identity_not_bound",
-                },
-            )
+        if not ingress.bound:
             await request.ctx.db.commit()
             return _wechat_reply(
                 adapter,
@@ -1216,23 +1207,6 @@ class WechatOfficialAccountCallbackApi(HTTPMethodView):
                 content=WECHAT_UNBOUND_REPLY,
                 encrypted=encrypted,
             )
-        task_payload = dict(envelope.task_payload)
-        task_payload.update({
-            "platformUserId": str(identity.UserId),
-            # Enterprise scope is selected by the worker from the platform
-            # user's active memberships. Channel identity is platform-level.
-            "enterpriseId": None,
-            "accountId": str(identity.AccountId),
-            "channel": adapter.channel,
-            "traceId": envelope.message.trace_id,
-        })
-        inbound, task, created = await record_inbound_message(
-            request.ctx.db,
-            message=envelope.message,
-            task_type=PLATFORM_INBOUND_TASK_TYPE,
-            task_payload=task_payload,
-            max_attempts=PLATFORM_INBOUND_MAX_ATTEMPTS,
-        )
         await request.ctx.db.commit()
         # Answer inside the provider's synchronous window so the sender sees
         # immediate feedback; the answer itself streams in afterwards as
