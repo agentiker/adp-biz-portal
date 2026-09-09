@@ -35,7 +35,7 @@
 
 部署进展（2026-09-09，app-only 修复 45002）：将提交 `5686f2f`（客服文本改按字节截断，修复长报告 45002 导致文本+卡片都不达）以镜像 `adp-chat-client:5686f2f` 部署到 `xdimspace-01`。服务端 only、无前端改动、**无 schema 变更（保持 13）**，故 migrate 一次性容器 no-op、未做 DB 备份。overlay 到 `rev12e` 构建；在役镜像 tag 为 `rollback-pre-5686f2f`。api/worker/reverse-proxy 均 healthy 并已重启反向代理；`/readyz`=ready schemaRevision 13；running worker 镜像确认含 `MAX_TEXT_BYTES`，重启后无 45002。真实微信长报告「截断预览 + 图文卡片」体感待用户验收。
 
-当前任务计数：`48 / 64` 项已完成，`16` 项未完成（其中 `7` 项 `BLOCKED`、`5` 项 `IN PROGRESS`、`4` 项 `TODO`）。新增 `M3-WECHAT-OA-04`（DONE，公众号卡片改为免登录只读结果页 + 迁移 revision 13）。新增 `M2-ADP-ROUTE-01`（DONE，Worker 默认路由平台唯一 ADP 应用、不以 M3 为前置）与 `M3-WECHAT-OA-03`（IN PROGRESS，ACK+流式+Markdown+图文卡片，对齐 ADP 原生体感，含一处有意的证据校验范围变更）。首个真实微信认证服务号已接入并完成绑定/入站/出站真实联调。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`48 / 64` 项已完成，`16` 项未完成（其中 `7` 项 `BLOCKED`、`6` 项 `IN PROGRESS`、`3` 项 `TODO`）。`M3-WECHAT-CS-01` 转入 `IN PROGRESS`（微信客服协议核心 + 共享 crypto + 迁移 14 游标已落地并单测，网络投递/编排/联调未完成）。新增 `M3-WECHAT-OA-04`（DONE，公众号卡片改为免登录只读结果页 + 迁移 revision 13）。新增 `M2-ADP-ROUTE-01`（DONE，Worker 默认路由平台唯一 ADP 应用、不以 M3 为前置）与 `M3-WECHAT-OA-03`（IN PROGRESS，ACK+流式+Markdown+图文卡片，对齐 ADP 原生体感，含一处有意的证据校验范围变更）。首个真实微信认证服务号已接入并完成绑定/入站/出站真实联调。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
 
 ## M0：技术验证与风险收敛
 
@@ -322,11 +322,13 @@
   - 遗留风险：真实微信点击卡片打开只读页的体感待用户验收；含迁移 12→13，部署须先备份 DB + tag 回滚镜像。
 
 - [ ] `M3-WECHAT-CS-01` 实现微信客服适配器：通知接收、同步游标、消息去重和客服回复协议。
-  - 状态：`TODO`；依赖 `M0-CHANNEL-01`；建议以 `M3-REFACTOR-01` 为前置。
-  - 参考实现：openclaw-china `extensions/wecom-kf/src/webhook.ts` 的 cursor 拉取（先 ack、投递前存 `next_cursor`、首启 drain）；会话作用域抄 LangBot `get_launcher_id` 但做成真 ABC 方法，键用 `open_kfid|external_userid`；反例（勿抄）AstrBot/LangBot 客服 `while has_more` 只取 `[-1]` 丢批。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5。
+  - 状态：`IN PROGRESS`（2026-09-09；协议核心已落地并单测，网络投递+编排+联调未完成）；依赖 `M0-CHANNEL-01`。
+  - 已完成（本地、单测）：前置共享 crypto `channels/_wechat/crypto.py`（AES 参数化 receiver_id，公众号已委托、行为不变，提交 `a1352bd`）；`ChannelAdapter` 会话键钩子 `channels.base.launcher_id_from_envelope`；durable 游标 `PlatformChannelCursor` + 迁移 **revision 14** + `core/channel_cursor.py`（投递前存 `next_cursor`，提交 `1f2c674`）；`channels/wechat_kf` 适配器（GET echo 验签解密、POST 通知验签解密取 `Token`/`OpenKfId`、JSON+XML 双信封、进程内重放、仅 `origin==3 && text` 规范化、会话键 `open_kfid|external_userid`，提交 `adbda37`，4 单测）。
+  - 未完成：网络传输（`gettoken`/`kf/sync_msg` 游标循环/`kf/send_msg`）、Worker `platform.channel.pull` 拉取任务（先 ack、循环 `has_more`、首启 drain、按 msgid 幂等）、router 回调路由、回复 sender（单条 + 卡片；注意 kf 无 `news`，卡片用 `link` 或文末附链接）、`ChannelSenderResolver`/registry 注册、凭据字段与 Admin、集成测试。
+  - 参考实现：openclaw-china `extensions/wecom-kf/src/webhook.ts` 的 cursor 拉取（先 ack、投递前存 `next_cursor`、首启 drain）；会话作用域用 `open_kfid|external_userid`；反例（勿抄）AstrBot/LangBot 客服 `while has_more` 只取 `[-1]` 丢批。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5。
 - [ ] `M3-WECOM-01` 实现企业微信智能机器人适配器，选择并实现长连接或 HTTPS 回调模式。
-  - 状态：`TODO`；依赖 `M0-CHANNEL-01`；建议以 `M3-REFACTOR-01` 为前置。
-  - 参考实现：AstrBot 内置腾讯官方 JSON 加解密 `wecom_ai_bot/WXBizJsonMsgCrypt.py`（wechatpy 不覆盖机器人 JSON 信封）；双模式抄 AstrBot「单适配器双模式」；反例（勿抄）LangBot `wecombot` 关掉 CorpID 校验。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5。
+  - 状态：`TODO`；依赖 `M0-CHANNEL-01`；已定 **WS 长连接真流式**（累积快照）。前置 `channels/_wechat/crypto.py` 已就绪（JSON 信封 `crypto_json` 待加，receiveId 传真实 CorpID）。
+  - 参考实现：AstrBot 内置腾讯官方 JSON 加解密 `wecom_ai_bot/WXBizJsonMsgCrypt.py`（wechatpy 不覆盖机器人 JSON 信封）；LangBot `wecombot.py`/`ws_client.py` 的 stream 状态机（空帧→累积快照→`finish`）；反例（勿抄）LangBot ws 关掉 CorpID 校验（传空串）。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5 与计划 Phase 2。
 - [ ] `M3-REFACTOR-01` 将渠道适配层提升为一等包并结构化：契约中性化、按渠道拆目录、统一 WeChat crypto、抽 `core/channel_ingress` 编排 seam。
   - 状态：`TODO`；作为 `M3-WECHAT-CS-01` 和 `M3-WECOM-01` 的结构前置。
   - 范围：`server/channels/`（从 `integrations/channels/` 提升）；`channels/contracts.py` 收敛 `InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities` 使 core 依赖契约而非反向；`channels/_wechat/{crypto,crypto_json,token,text}.py` 供公众号/客服/企微复用；`ChannelAdapter.normalize` 收成带类型签名并新增 `get_launcher_id` 会话键钩子；把「验签→normalize→replay→身份→入队」从 2266 行的 `router/platform.py` 抽到 `core/channel_ingress.py`（鉴权仍留平台服务侧，不进渠道包）。
