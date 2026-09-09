@@ -20,6 +20,7 @@ from integrations.channels.wechat_official_account import (
     WechatProtocolError,
 )
 from integrations.channels.base import OutboundMessage
+import core.channel_ingress as channel_ingress
 
 
 def _stub_callback_side_effects(monkeypatch, platform_router, *, claimed=None):
@@ -32,6 +33,9 @@ def _stub_callback_side_effects(monkeypatch, platform_router, *, claimed=None):
     monkeypatch.setattr(platform_router, "claim_replay_key", fake_claim)
     monkeypatch.setattr(platform_router, "prune_expired_replay_markers", AsyncMock(return_value=0))
     monkeypatch.setattr(platform_router, "create_audit", AsyncMock())
+    # Identity resolution + enqueue moved into core.channel_ingress; the reject
+    # audit is written there, so neutralize it at that seam too.
+    monkeypatch.setattr(channel_ingress, "create_audit", AsyncMock())
     return claims
 
 
@@ -224,8 +228,8 @@ async def test_public_callback_enqueues_only_confirmed_identity(monkeypatch):
         return SimpleNamespace(Id="inbound-id", Status="queued"), SimpleNamespace(Id="task-id"), True
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
-    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=identity))
-    monkeypatch.setattr(platform_router, "record_inbound_message", fake_record)
+    monkeypatch.setattr(channel_ingress, "resolve_active_channel_identity", AsyncMock(return_value=identity))
+    monkeypatch.setattr(channel_ingress, "record_inbound_message", fake_record)
     claims = _stub_callback_side_effects(monkeypatch, platform_router)
 
     request = SimpleNamespace(
@@ -317,8 +321,8 @@ async def test_public_callback_accepts_encrypted_xml(monkeypatch):
         return SimpleNamespace(Id="inbound-aes", Status="queued"), SimpleNamespace(Id="task-aes"), True
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
-    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=identity))
-    monkeypatch.setattr(platform_router, "record_inbound_message", fake_record)
+    monkeypatch.setattr(channel_ingress, "resolve_active_channel_identity", AsyncMock(return_value=identity))
+    monkeypatch.setattr(channel_ingress, "record_inbound_message", fake_record)
     _stub_callback_side_effects(monkeypatch, platform_router)
     request = SimpleNamespace(
         ctx=SimpleNamespace(db=SimpleNamespace(commit=AsyncMock())),
@@ -354,8 +358,8 @@ async def test_public_callback_rejects_unbound_identity_before_enqueue(monkeypat
         return token
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
-    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=None))
-    monkeypatch.setattr(platform_router, "record_inbound_message", record_inbound)
+    monkeypatch.setattr(channel_ingress, "resolve_active_channel_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr(channel_ingress, "record_inbound_message", record_inbound)
     _stub_callback_side_effects(monkeypatch, platform_router)
 
     request = SimpleNamespace(
@@ -401,9 +405,9 @@ async def test_binding_code_is_confirmed_and_never_reaches_the_agent(monkeypatch
         return token
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
-    monkeypatch.setattr(platform_router, "record_inbound_message", record_inbound)
+    monkeypatch.setattr(channel_ingress, "record_inbound_message", record_inbound)
     monkeypatch.setattr(platform_router, "confirm_channel_identity_binding", confirm)
-    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr(channel_ingress, "resolve_active_channel_identity", AsyncMock(return_value=None))
     _stub_callback_side_effects(monkeypatch, platform_router)
 
     request = SimpleNamespace(
@@ -440,7 +444,7 @@ async def test_failed_binding_code_reports_failure_without_enqueue(monkeypatch):
         return token
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
-    monkeypatch.setattr(platform_router, "record_inbound_message", record_inbound)
+    monkeypatch.setattr(channel_ingress, "record_inbound_message", record_inbound)
     monkeypatch.setattr(
         platform_router,
         "confirm_channel_identity_binding",
@@ -485,8 +489,8 @@ async def test_unbound_reply_is_encrypted_when_the_callback_is_encrypted(monkeyp
         return json.dumps({"token": token, "appId": app_id, "encodingAesKey": aes_key})
 
     monkeypatch.setattr(platform_router, "load_active_channel_instance_credential", fake_credential)
-    monkeypatch.setattr(platform_router, "resolve_active_channel_identity", AsyncMock(return_value=None))
-    monkeypatch.setattr(platform_router, "record_inbound_message", AsyncMock())
+    monkeypatch.setattr(channel_ingress, "resolve_active_channel_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr(channel_ingress, "record_inbound_message", AsyncMock())
     _stub_callback_side_effects(monkeypatch, platform_router)
 
     request = SimpleNamespace(
