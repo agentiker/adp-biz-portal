@@ -112,6 +112,14 @@ const router = createRouter({
       },
       component: () => import('@/pages/Share.vue'),
     },
+    {
+      path: '/shared',
+      name: 'shared-result',
+      meta: {
+        unauthorized: true,
+      },
+      component: () => import('@/pages/SharedResult.vue'),
+    },
   ],
 })
 

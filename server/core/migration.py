@@ -39,6 +39,7 @@ from model.platform import (
     PlatformMessage,
     PlatformMigration,
     PlatformSchemaVersion,
+    PlatformSharedResult,
     PlatformToolCall,
     PlatformToolDefinition,
     PlatformUser,
@@ -75,7 +76,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 12
+    CURRENT_PLATFORM_SCHEMA_VERSION = 13
     REVISIONS = (
         MigrationRevision(
             1,
@@ -160,6 +161,11 @@ class Migration:
             "platform_channel_execution_scope_schema",
             (PlatformChannelReplayMarker.__tablename__,),
         ),
+        MigrationRevision(
+            13,
+            "platform_shared_result_schema",
+            (PlatformSharedResult.__tablename__,),
+        ),
     )
 
     @classmethod
@@ -188,6 +194,7 @@ class Migration:
             PlatformEvidence,
             PlatformInboundMessage,
             PlatformDeliveryTask,
+            PlatformSharedResult,
             PlatformConfigVersion,
             PlatformToolDefinition,
             PlatformExecutionContext,
