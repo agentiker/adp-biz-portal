@@ -42,8 +42,21 @@ CUSTOM_SEND_PATH = "/cgi-bin/message/custom/send"
 DEFAULT_TIMEOUT_SECONDS = 10
 # Refresh early so a token cannot expire between the check and the send.
 TOKEN_EXPIRY_MARGIN_SECONDS = 300
-MAX_TEXT_CHARS = 2000
+# WeChat customer-service text is limited by BYTES (~2048), not characters, so
+# a Chinese answer must be truncated by encoded length or the provider rejects
+# the whole message with errcode 45002.
+MAX_TEXT_BYTES = 2000
+TEXT_TRUNCATION_NOTICE = "…（完整内容见下方卡片）"
 JSON_UTF8_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Truncate to at most ``max_bytes`` UTF-8 bytes on a character boundary."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    # ``errors='ignore'`` drops a trailing byte sequence split mid-character.
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def _utf8_json(payload: Mapping[str, Any]) -> bytes:
@@ -236,10 +249,11 @@ class WechatCustomerServiceTransport:
         if not isinstance(content, str) or not content.strip():
             raise WechatSendError("message content is empty")
         text = content.strip()
-        if len(text) > MAX_TEXT_CHARS:
-            # Truncate rather than let the provider reject the whole reply; the
-            # portal keeps the complete answer.
-            text = f"{text[: MAX_TEXT_CHARS - 12]}…（详见官网）"
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            # A long answer is truncated to a preview here and delivered in full
+            # by the closing rich card, which links to the portal result page.
+            budget = MAX_TEXT_BYTES - len(TEXT_TRUNCATION_NOTICE.encode("utf-8"))
+            text = _truncate_utf8(text, budget) + TEXT_TRUNCATION_NOTICE
         return {"msgtype": "text", "text": {"content": text}}
 
     async def send_news(
