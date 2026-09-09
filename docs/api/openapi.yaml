@@ -266,6 +266,78 @@ paths:
               schema: { type: string, enum: [success] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/channels/wechat-kf/{channel_instance_id}/callback:
+    get:
+      tags: [Portal]
+      operationId: verifyWechatKfCallback
+      summary: Verify a WeChat 客服 (WeCom Customer Service) callback endpoint
+      security: []
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: msg_signature
+          in: query
+          required: true
+          schema: { type: string, minLength: 40, maxLength: 40 }
+        - name: timestamp
+          in: query
+          required: true
+          schema: { type: string }
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: echostr
+          in: query
+          required: true
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: Decrypted echo challenge
+          content:
+            text/plain:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Portal]
+      operationId: receiveWechatKfCallback
+      summary: Receive a signed WeChat 客服 notification and pull messages
+      security: []
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+        - name: msg_signature
+          in: query
+          required: true
+          schema: { type: string, minLength: 40, maxLength: 40 }
+        - name: timestamp
+          in: query
+          required: true
+          schema: { type: string }
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+          application/xml:
+            schema: { type: string }
+      responses:
+        '200':
+          description: Notification accepted; messages pulled out-of-band
+          content:
+            text/plain:
+              schema: { type: string, enum: [success] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/channels/wechat-official-account/callback:
     get:
       tags: [Portal]
