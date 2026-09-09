@@ -56,7 +56,15 @@ from core.platform import (
     utc_now,
 )
 from core.delivery import InboundMessageInput, record_inbound_message
+from core.delivery import enqueue_delivery_task
 from core.channel_ingress import resolve_and_enqueue_inbound
+from integrations.channels.wechat_kf import WECHAT_KF, WechatKfAdapter
+from integrations.channels.sender_registry import (
+    CREDENTIAL_CORP_ID_KEYS,
+    CREDENTIAL_CORP_SECRET_KEYS,
+    _credential_fields,
+    _first,
+)
 from core.channel_credentials import (
     ChannelCredentialError,
     decrypt_credential,
@@ -80,6 +88,7 @@ from core.channel_identity import (
 from core.channel_replay import claim_replay_key, prune_expired_replay_markers
 from core.channel_share import load_shared_result, revoke_account_shared_results
 from core.platform_worker import PLATFORM_INBOUND_MAX_ATTEMPTS, PLATFORM_INBOUND_TASK_TYPE
+from core.platform_worker import PLATFORM_CHANNEL_PULL_TASK_TYPE
 from integrations.m3.adapter import M3LookupAdapter, M3LookupResult
 from integrations.channels.registry import ChannelRegistryError, register_default_adapters
 from integrations.channels.wechat_official_account import (
@@ -1312,6 +1321,78 @@ class WechatOfficialAccountFixedCallbackApi(WechatOfficialAccountCallbackApi):
         return await super().post(request, await _default_wechat_instance_id(request))
 
 
+async def _wechat_kf_adapter(request: Request, channel_instance_id: str) -> WechatKfAdapter:
+    if not isinstance(channel_instance_id, str) or not channel_instance_id.strip() or len(channel_instance_id) > 128:
+        raise PlatformBadRequest("渠道实例格式不正确")
+    try:
+        credential = await load_active_channel_instance_credential(
+            request.ctx.db, channel=WECHAT_KF, channel_instance_id=channel_instance_id.strip()
+        )
+    except ChannelCredentialError as exc:
+        raise PlatformForbidden("微信客服渠道未配置") from exc
+    fields = _credential_fields(credential)
+    corp_id = _first(fields, CREDENTIAL_CORP_ID_KEYS)
+    token = _first(fields, ("token", "Token"))
+    encoding_aes_key = _first(fields, ("encodingAESKey", "encoding_aes_key", "EncodingAESKey"))
+    try:
+        return WechatKfAdapter(
+            channel_instance_id=channel_instance_id.strip(),
+            corp_id=corp_id or "",
+            token=token or "",
+            encoding_aes_key=encoding_aes_key or "",
+        )
+    except ValueError as exc:
+        raise PlatformForbidden("微信客服渠道凭据不完整") from exc
+
+
+class WechatKfCallbackApi(HTTPMethodView):
+    """WeChat 客服 callback: verify + ack, then pull messages out-of-band.
+
+    The callback carries no message content; it is only a notification. We
+    verify it, return ``success`` immediately (the provider retries on non-2xx),
+    and enqueue a durable pull task so the worker fetches the actual messages
+    via kf/sync_msg with a persisted cursor.
+    """
+
+    async def get(self, request: Request, channel_instance_id: str):
+        adapter = await _wechat_kf_adapter(request, channel_instance_id)
+        echo = adapter.verify_echo(
+            msg_signature=request.args.get("msg_signature", "") or request.args.get("signature", ""),
+            timestamp=request.args.get("timestamp", ""),
+            nonce=request.args.get("nonce", ""),
+            echostr=request.args.get("echostr", ""),
+        )
+        return text(echo)
+
+    async def post(self, request: Request, channel_instance_id: str):
+        adapter = await _wechat_kf_adapter(request, channel_instance_id)
+        callback_token, open_kfid = adapter.verify_and_extract_notification(
+            body=request.body,
+            msg_signature=request.args.get("msg_signature", "") or request.args.get("signature", ""),
+            timestamp=request.args.get("timestamp", ""),
+            nonce=request.args.get("nonce", ""),
+        )
+        # ack-then-pull: enqueue one durable pull task and return immediately.
+        # conversation_key serializes pulls for a given (instance, kf) so a
+        # burst of notifications never races the sync cursor.
+        await enqueue_delivery_task(
+            request.ctx.db,
+            task_type=PLATFORM_CHANNEL_PULL_TASK_TYPE,
+            deduplication_key=f"kf-pull:{adapter.channel_instance_id}:{open_kfid}:{callback_token}",
+            conversation_key=f"{adapter.channel_instance_id}:{open_kfid}",
+            payload={
+                "channel": WECHAT_KF,
+                "channelInstanceId": adapter.channel_instance_id,
+                "openKfId": open_kfid,
+                "callbackToken": callback_token,
+                "traceId": _trace_id(request),
+            },
+            max_attempts=PLATFORM_INBOUND_MAX_ATTEMPTS,
+        )
+        await request.ctx.db.commit()
+        return text("success")
+
+
 class AdpExecutionContextApi(HTTPMethodView):
     """Mint a scoped token for the trusted server-side ADP adapter."""
 
@@ -2286,6 +2367,10 @@ app.add_route(
     WechatOfficialAccountFixedCallbackApi.as_view(),
     "/api/v1/channels/wechat-official-account/callback",
     name="wechat_official_account_fixed_callback",
+)
+app.add_route(
+    WechatKfCallbackApi.as_view(),
+    "/api/v1/channels/wechat-kf/<channel_instance_id:str>/callback",
 )
 app.add_route(ChannelIdentityBindApi.as_view(), "/api/v1/channel-identities")
 app.add_route(ChannelIdentityRevokeApi.as_view(), "/api/v1/channel-identities/<identity_id:str>/revoke")
