@@ -64,9 +64,22 @@ def test_empty_or_oversized_content_is_handled_before_sending():
     with pytest.raises(WechatSendError):
         WechatCustomerServiceTransport._text_body("   ")
     body = WechatCustomerServiceTransport._text_body("x" * 5000)
-    # Truncated instead of letting the provider reject the whole reply.
-    assert len(body["text"]["content"]) <= 2000
-    assert body["text"]["content"].endswith("（详见官网）")
+    # Truncated by BYTES (not chars) instead of letting the provider reject the
+    # whole reply with errcode 45002.
+    assert len(body["text"]["content"].encode("utf-8")) <= 2000
+    assert body["text"]["content"].endswith("（完整内容见下方卡片）")
+
+
+def test_chinese_content_is_truncated_by_bytes_not_characters():
+    # A long Chinese answer is ~3 bytes/char, so a char-based limit would still
+    # blow WeChat's ~2048-byte cap and trigger 45002. Assert byte-safe output.
+    body = WechatCustomerServiceTransport._text_body("货" * 2000)
+    content = body["text"]["content"]
+    assert len(content.encode("utf-8")) <= 2000
+    assert content.endswith("（完整内容见下方卡片）")
+    # A short answer is passed through untouched (no card notice appended).
+    short = WechatCustomerServiceTransport._text_body("已到港，可安排提货。")
+    assert short["text"]["content"] == "已到港，可安排提货。"
 
 
 def test_invalid_recipient_is_rejected_before_sending():
