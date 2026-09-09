@@ -424,6 +424,35 @@ class PlatformSharedResult(Base):
     LastAccessedAt = Column(DateTime, nullable=True)
 
 
+class PlatformChannelCursor(Base):
+    """Durable sync cursor for pull-based channels (WeChat 客服 sync_msg).
+
+    A channel that delivers messages by cursor pagination (not by pushing each
+    message in the callback) must persist the position across API instances and
+    process restarts. The next_cursor is stored BEFORE dispatching a page so a
+    crash never re-reads and re-dispatches an already-processed page; message
+    idempotency is a separate guard by external message id.
+    """
+
+    __tablename__ = "platform_channel_cursor"
+    __table_args__ = (
+        UniqueConstraint(
+            "Channel",
+            "ChannelInstanceId",
+            "ScopeId",
+            name="unique_platform_channel_cursor",
+        ),
+    )
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    Channel = Column(String(48), nullable=False)
+    ChannelInstanceId = Column(String(128), nullable=False)
+    # Sub-scope within the instance (e.g. WeChat 客服 open_kfid); "all" when none.
+    ScopeId = Column(String(128), nullable=False)
+    Cursor = Column(String(1024), nullable=False, server_default="")
+    UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+
 class PlatformDeliveryTask(Base):
     """Durable task queue row used by API and channel workers.
 
