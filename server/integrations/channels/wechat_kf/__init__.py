@@ -5,5 +5,14 @@ from integrations.channels.wechat_kf.adapter import (
     WechatKfAdapter,
     WechatKfInboundEnvelope,
 )
+from integrations.channels.wechat_kf.outbound import WechatKfSender
+from integrations.channels.wechat_kf.transport import WechatCorpTokenCache, WechatKfTransport
 
-__all__ = ["WECHAT_KF", "WechatKfAdapter", "WechatKfInboundEnvelope"]
+__all__ = [
+    "WECHAT_KF",
+    "WechatKfAdapter",
+    "WechatKfInboundEnvelope",
+    "WechatKfSender",
+    "WechatKfTransport",
+    "WechatCorpTokenCache",
+]
