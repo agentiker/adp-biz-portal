@@ -18,7 +18,8 @@ Two properties matter more than smoothness:
 from __future__ import annotations
 
 import logging
-from typing import Any
+import time
+from typing import Any, Awaitable, Callable
 
 from integrations.channels.text_format import split_at_boundary, to_plain_text
 
@@ -31,6 +32,68 @@ DEFAULT_MIN_CHUNK_CHARS = 60
 DEFAULT_MAX_CHUNK_CHARS = 600
 # Providers are chatty; this caps how many bubbles one answer may produce.
 DEFAULT_MAX_CHUNKS = 12
+
+# WeCom smart-robot stream frames replace the whole bubble each time, so each
+# frame carries the full cumulative snapshot (capped) — not a delta.
+DEFAULT_SNAPSHOT_MIN_INTERVAL = 0.4
+DEFAULT_SNAPSHOT_MAX_CHARS = 200_000
+
+
+class SnapshotStreamSink:
+    """Push cumulative snapshots for a channel that replaces the bubble each frame.
+
+    Unlike ``ChannelStreamSink`` (discrete boundary-cut messages), the WeCom
+    smart robot streams by re-rendering one message: every frame carries the
+    full text so far. This sink accumulates ``text.delta`` and pushes the whole
+    snapshot (markdown flattened, capped), throttled so a burst of tiny deltas
+    does not become a frame each; ``close()`` always pushes a final frame with
+    ``is_final=True``. A push failure degrades to "stop streaming" and never
+    breaks the run — the full answer is still persisted.
+    """
+
+    def __init__(
+        self,
+        push: Callable[..., Awaitable[Any]],
+        *,
+        min_interval: float = DEFAULT_SNAPSHOT_MIN_INTERVAL,
+        max_chars: int = DEFAULT_SNAPSHOT_MAX_CHARS,
+    ):
+        self._push = push
+        self._min_interval = max(0.0, min_interval)
+        self._max_chars = max_chars
+        self._buffer = ""
+        self._last_pushed: str | None = None
+        self._last_push_at = 0.0
+        self._failed = False
+        self.frames = 0
+
+    async def emit(self, text: str) -> None:
+        if not isinstance(text, str) or not text or self._failed:
+            return
+        self._buffer += text
+        if (time.monotonic() - self._last_push_at) >= self._min_interval:
+            await self._flush(is_final=False)
+
+    async def close(self) -> None:
+        if self._failed:
+            return
+        await self._flush(is_final=True)
+
+    async def _flush(self, *, is_final: bool) -> None:
+        content = to_plain_text(self._buffer)[: self._max_chars]
+        # A non-final frame identical to the last one is a no-op; a final frame
+        # is always sent so the bubble is marked finished.
+        if not is_final and content == self._last_pushed:
+            return
+        try:
+            await self._push(content, is_final=is_final)
+        except Exception as exc:  # noqa: BLE001 - streaming must never break the run
+            self._failed = True
+            logger.warning("snapshot stream push failed: %s", type(exc).__name__)
+            return
+        self._last_pushed = content
+        self._last_push_at = time.monotonic()
+        self.frames += 1
 
 
 class ChannelStreamSink:
