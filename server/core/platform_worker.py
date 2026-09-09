@@ -50,6 +50,7 @@ from integrations.adp.provider import (
 from integrations.m3.adapter import M3LookupAdapter, M3LookupResult
 from integrations.channels.base import DeliveryReceipt
 from integrations.channels.stream_sink import ChannelStreamSink
+from integrations.channels.text_format import to_plain_text
 from model.account import Account, AccountStatus
 from model.platform import (
     EnterpriseStatus,
@@ -74,6 +75,11 @@ PLATFORM_INBOUND_TASK_TYPE = "platform.inbound.process"
 PLATFORM_REPLY_TASK_TYPE = "platform.reply"
 PLATFORM_INBOUND_MAX_ATTEMPTS = 3
 PLATFORM_REPLY_MAX_ATTEMPTS = 3
+# An answer at or under this length is fully readable in one chat message, so a
+# closing "view on web" card would just be noise. Longer answers get the card:
+# it links to the portal for the full, structured view and covers the case where
+# the text message itself is truncated by the channel's length limit.
+RESULT_CARD_MIN_CHARS = 600
 _TOOL_NAME = "shipment.lookup"
 
 
@@ -967,6 +973,11 @@ async def _send_result_card(sender: Any, *, payload: Mapping[str, Any]) -> str:
     summary = str(payload.get("summary") or "").strip()
     if not summary:
         return "skipped_no_summary"
+    # The card is the overflow affordance, not a decoration on every reply. A
+    # short answer is already shown in full as the text message, so measuring
+    # the reader-visible (plain-text) length decides whether a web view helps.
+    if len(to_plain_text(summary)) <= RESULT_CARD_MIN_CHARS:
+        return "skipped_short_answer"
     try:
         receipt = await send_card(
             payload=payload,
