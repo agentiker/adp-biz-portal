@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 
 PLATFORM_INBOUND_TASK_TYPE = "platform.inbound.process"
 PLATFORM_REPLY_TASK_TYPE = "platform.reply"
+PLATFORM_CHANNEL_PULL_TASK_TYPE = "platform.channel.pull"
 PLATFORM_INBOUND_MAX_ATTEMPTS = 3
 PLATFORM_REPLY_MAX_ATTEMPTS = 3
 # An answer at or under this length is fully readable in one chat message, so a
@@ -1210,7 +1211,60 @@ def build_platform_delivery_handlers(
         sender = reply_sender_factory() if callable(reply_sender_factory) else reply_sender_factory
         return await process_platform_reply_task(sessionmaker, task, sender=sender)
 
+    async def channel_pull_handler(task: PlatformDeliveryTask) -> DeliveryOutcome:
+        # Lazy imports: core.channel_pull imports task-type constants from this
+        # module, so importing it at module scope would be circular.
+        from core.channel_credentials import (
+            ChannelCredentialError,
+            load_active_channel_instance_credential,
+        )
+        from core.channel_pull import sync_wechat_kf
+        from integrations.channels.sender_registry import (
+            CREDENTIAL_CORP_ID_KEYS,
+            CREDENTIAL_CORP_SECRET_KEYS,
+            CREDENTIAL_OPEN_KFID_KEYS,
+            _credential_fields,
+            _first,
+        )
+        from integrations.channels.wechat_kf import WECHAT_KF, WechatKfAdapter, WechatKfTransport
+
+        payload = _payload(task)
+        channel = _bounded_text(payload.get("channel"), limit=32, default="") or ""
+        channel_instance_id = _bounded_text(payload.get("channelInstanceId"), limit=128, default="") or ""
+        open_kfid = _bounded_text(payload.get("openKfId"), limit=128, default="") or ""
+        callback_token = _bounded_text(payload.get("callbackToken"), limit=256, default="") or ""
+        trace_id = _bounded_text(payload.get("traceId"), limit=64, default=None) or f"kf-pull:{channel_instance_id}:{open_kfid}"
+        if channel != WECHAT_KF or not channel_instance_id or not open_kfid:
+            raise DeliveryRejectedError("invalid_channel_pull_task")
+        db = sessionmaker()
+        try:
+            try:
+                credential = await load_active_channel_instance_credential(
+                    db, channel=WECHAT_KF, channel_instance_id=channel_instance_id
+                )
+            except ChannelCredentialError as exc:
+                raise DeliveryRejectedError("wecom_kf_credential_unavailable") from exc
+            fields = _credential_fields(credential)
+            corp_id = _first(fields, CREDENTIAL_CORP_ID_KEYS)
+            corp_secret = _first(fields, CREDENTIAL_CORP_SECRET_KEYS)
+            token = _first(fields, ("token", "Token"))
+            encoding_aes_key = _first(fields, ("encodingAESKey", "encoding_aes_key", "EncodingAESKey"))
+            if not (corp_id and corp_secret and token and encoding_aes_key):
+                raise DeliveryRejectedError("wecom_kf_credential_incomplete")
+            adapter = WechatKfAdapter(
+                channel_instance_id=channel_instance_id, corp_id=corp_id, token=token, encoding_aes_key=encoding_aes_key
+            )
+            transport = WechatKfTransport(corp_id=corp_id, corp_secret=corp_secret, open_kfid=open_kfid)
+            stats = await sync_wechat_kf(
+                db, adapter=adapter, transport=transport, open_kfid=open_kfid,
+                callback_token=callback_token, trace_id=trace_id,
+            )
+        finally:
+            await db.close()
+        return DeliveryOutcome({"status": "pulled", "channel": channel, **stats})
+
     return {
         PLATFORM_INBOUND_TASK_TYPE: inbound_handler,
         PLATFORM_REPLY_TASK_TYPE: reply_handler,
+        PLATFORM_CHANNEL_PULL_TASK_TYPE: channel_pull_handler,
     }

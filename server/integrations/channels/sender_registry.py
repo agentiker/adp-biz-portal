@@ -24,6 +24,12 @@ from integrations.channels.wechat_official_account import (
     WECHAT_OFFICIAL_ACCOUNT,
     WechatOfficialAccountSender,
 )
+from integrations.channels.wechat_kf import (
+    WECHAT_KF,
+    WechatCorpTokenCache,
+    WechatKfSender,
+    WechatKfTransport,
+)
 from integrations.channels.wechat_transport import (
     WechatAccessTokenCache,
     WechatCustomerServiceTransport,
@@ -35,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 CREDENTIAL_APP_ID_KEYS = ("appId", "app_id")
 CREDENTIAL_APP_SECRET_KEYS = ("appSecret", "app_secret")
+CREDENTIAL_CORP_ID_KEYS = ("corpId", "corp_id", "corpid")
+CREDENTIAL_CORP_SECRET_KEYS = ("corpSecret", "corp_secret", "corpsecret")
+CREDENTIAL_OPEN_KFID_KEYS = ("openKfId", "open_kfid", "openKfid")
 
 
 def _credential_fields(credential: Any) -> dict[str, str]:
@@ -78,16 +87,47 @@ class ChannelSenderResolver:
         self._sessionmaker = sessionmaker
         self._senders: dict[str, Any] = {}
         self._token_cache = token_cache if token_cache is not None else WechatAccessTokenCache()
+        self._kf_token_cache = WechatCorpTokenCache()
 
     async def resolve(self, *, channel: str, channel_instance_id: str | None) -> Any:
-        if channel != WECHAT_OFFICIAL_ACCOUNT or not channel_instance_id:
+        if not channel_instance_id or channel not in (WECHAT_OFFICIAL_ACCOUNT, WECHAT_KF):
             return None
         cache_key = f"{channel}:{channel_instance_id}"
         if cache_key in self._senders:
             return self._senders[cache_key]
-        sender = await self._build_wechat_sender(channel_instance_id)
+        if channel == WECHAT_KF:
+            sender = await self._build_wechat_kf_sender(channel_instance_id)
+        else:
+            sender = await self._build_wechat_sender(channel_instance_id)
         self._senders[cache_key] = sender
         return sender
+
+    async def _build_wechat_kf_sender(self, channel_instance_id: str) -> Any:
+        db = self._sessionmaker()
+        try:
+            credential = await load_active_channel_instance_credential(
+                db, channel=WECHAT_KF, channel_instance_id=channel_instance_id
+            )
+        except ChannelCredentialError:
+            logger.warning("wechat kf credential unavailable for instance %s", channel_instance_id)
+            return WechatKfSender(channel_instance_id=channel_instance_id)
+        finally:
+            await db.close()
+        fields = _credential_fields(credential)
+        corp_id = _first(fields, CREDENTIAL_CORP_ID_KEYS)
+        corp_secret = _first(fields, CREDENTIAL_CORP_SECRET_KEYS)
+        open_kfid = _first(fields, CREDENTIAL_OPEN_KFID_KEYS) or ""
+        if not corp_id or not corp_secret:
+            # Callback-verify-only credentials cannot send until corpSecret is set.
+            logger.info("wechat kf instance %s has no corpSecret; replies stay uncertain", channel_instance_id)
+            return WechatKfSender(channel_instance_id=channel_instance_id)
+        try:
+            transport = WechatKfTransport(
+                corp_id=corp_id, corp_secret=corp_secret, open_kfid=open_kfid, tokens=self._kf_token_cache
+            )
+        except WechatSendError:
+            return WechatKfSender(channel_instance_id=channel_instance_id)
+        return WechatKfSender(channel_instance_id=channel_instance_id, transport=transport)
 
     async def _build_wechat_sender(self, channel_instance_id: str) -> Any:
         db = self._sessionmaker()
