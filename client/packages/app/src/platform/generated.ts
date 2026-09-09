@@ -358,6 +358,12 @@ export interface ServiceHealth {
   updatedAt: string
 }
 
+export interface SharedResultResponse {
+  result: ShipmentResult
+  channel: string
+  createdAt: string
+}
+
 export interface ShipmentEvidence {
   label: string
   value: string

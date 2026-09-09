@@ -108,6 +108,28 @@ paths:
                 $ref: '#/components/schemas/PortalSessionDetail'
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/portal/shared/{token}:
+    get:
+      tags: [Portal]
+      operationId: getSharedResult
+      summary: Read one channel result via a no-login share token
+      description: >-
+        Public, read-only view of a single query result addressed by a
+        high-entropy share token. No portal session is required. An invalid,
+        expired, or revoked token returns 404 (never 401).
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Read-only single result for a valid share token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedResultResponse'
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/tools/shipment/lookup:
     post:
       tags: [Tools]
@@ -1071,6 +1093,13 @@ components:
         source: { type: string }
         capturedAt: { type: string, format: date-time }
         known: { type: boolean }
+    SharedResultResponse:
+      type: object
+      required: [result, channel, createdAt]
+      properties:
+        result: { $ref: '#/components/schemas/ShipmentResult' }
+        channel: { type: string }
+        createdAt: { type: string }
     ShipmentResult:
       type: object
       required: [query, conversationId, status, title, summary, evidence, traceId]

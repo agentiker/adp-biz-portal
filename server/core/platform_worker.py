@@ -29,6 +29,7 @@ from core.delivery import (
 )
 from core.error.account import AccountUnauthorized
 from core.error.platform import PlatformBadRequest, PlatformForbidden, PlatformNotFound
+from core.channel_share import create_shared_result
 from core.platform import (
     PlatformContext,
     claim_tool_call,
@@ -757,6 +758,9 @@ async def process_platform_inbound_task(
             "enterpriseId": str(enterprise.Id),
             "conversationId": conversation_id_value,
             "runId": run_id,
+            # The execution-run row id binds a no-login share link to exactly
+            # this result (see core.channel_share / _mint_share_url).
+            "executionRunId": str(final_run.Id),
             "channel": channel,
             "channelInstanceId": inbound.ChannelInstanceId,
             "externalConversationId": inbound.ExternalConversationId,
@@ -942,48 +946,74 @@ async def _resolve_channel_sender(
     return sender
 
 
-def _portal_result_url(payload: Mapping[str, Any]) -> str | None:
-    """Build a portal link for a channel message, or None when unavailable.
+async def _mint_share_url(
+    sessionmaker: Callable[[], AsyncSession], payload: Mapping[str, Any]
+) -> str | None:
+    """Mint a no-login share link for a long answer, or None when not warranted.
 
-    Without a configured public origin there is no link a customer could open,
-    so the card is skipped rather than sent with an unreachable URL.
+    The card is the overflow affordance, not a decoration on every reply: a
+    short answer is fully readable as the text message, so no token is minted
+    and no card is sent. Without a public base URL or an execution run there is
+    no reachable link. The link opens a read-only, single-result page with no
+    portal login (see core.channel_share).
     """
     base = str(tagentic_config.PLATFORM_PUBLIC_BASE_URL or "").strip().rstrip("/")
-    conversation_id = payload.get("conversationId")
-    if not base or not isinstance(conversation_id, str) or not conversation_id.strip():
-        return None
     if not base.startswith(("https://", "http://")):
         return None
-    return f"{base}/#/portal/lookup?conversationId={conversation_id.strip()}"
+    execution_run_id = payload.get("executionRunId")
+    account_id = payload.get("accountId")
+    if not isinstance(execution_run_id, str) or not execution_run_id:
+        return None
+    if not isinstance(account_id, str) or not account_id:
+        return None
+    summary = str(payload.get("summary") or "").strip()
+    # Measure the reader-visible (plain-text) length: short answers get no card.
+    if len(to_plain_text(summary)) <= RESULT_CARD_MIN_CHARS:
+        return None
+    db = sessionmaker()
+    try:
+        ttl_days = int(getattr(tagentic_config, "PLATFORM_SHARED_RESULT_TTL_DAYS", 0) or 0)
+        token = await create_shared_result(
+            db,
+            execution_run_id=execution_run_id,
+            conversation_id=payload.get("conversationId"),
+            account_id=account_id,
+            enterprise_id=payload.get("enterpriseId"),
+            channel=str(payload.get("channel") or ""),
+            channel_instance_id=str(payload.get("channelInstanceId") or ""),
+            ttl_seconds=(ttl_days * 24 * 60 * 60) if ttl_days > 0 else None,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+    return f"{base}/#/shared?token={token}"
 
 
-async def _send_result_card(sender: Any, *, payload: Mapping[str, Any]) -> str:
-    """Send the closing rich card when the channel and configuration allow it.
+async def _send_result_card(sender: Any, *, payload: Mapping[str, Any], share_url: str | None) -> str:
+    """Send the closing rich card when a share link exists for the answer.
 
-    A card failure never fails the reply: the answer itself already reached the
-    customer, so this only reports what happened.
+    ``share_url`` is None for short answers (no card needed) or when no public
+    link could be minted, in which case the card is skipped. A card failure
+    never fails the reply: the answer itself already reached the customer.
     """
     send_card = getattr(sender, "send_result_card", None) if sender is not None else None
     if send_card is None:
         return "unsupported"
-    url = _portal_result_url(payload)
-    if url is None:
-        return "skipped_no_public_url"
+    if not share_url:
+        return "skipped"
     title = str(payload.get("title") or "业务查询结果").strip() or "业务查询结果"
     summary = str(payload.get("summary") or "").strip()
     if not summary:
         return "skipped_no_summary"
-    # The card is the overflow affordance, not a decoration on every reply. A
-    # short answer is already shown in full as the text message, so measuring
-    # the reader-visible (plain-text) length decides whether a web view helps.
-    if len(to_plain_text(summary)) <= RESULT_CARD_MIN_CHARS:
-        return "skipped_short_answer"
     try:
         receipt = await send_card(
             payload=payload,
             title=title,
             description=summary,
-            url=url,
+            url=share_url,
         )
     except Exception as exc:
         logger.warning("result card send failed: %s", type(exc).__name__)
@@ -1065,11 +1095,14 @@ async def process_platform_reply_task(
             channel_instance_id=channel_instance_id,
         )
 
+    # Long answers get a no-login share link; short answers get None (no card).
+    share_url = await _mint_share_url(sessionmaker, payload) if channel != "web" else None
+
     if channel != "web" and already_streamed:
         # The answer already reached the customer as a stream. Re-sending the
         # text would duplicate what they just read; a closing card adds the
         # structured record and a link to the full evidence.
-        card = await _send_result_card(sender, payload=payload)
+        card = await _send_result_card(sender, payload=payload, share_url=share_url)
         return DeliveryOutcome({
             "status": "delivered",
             "channel": channel,
@@ -1106,7 +1139,7 @@ async def process_platform_reply_task(
         # The complete answer was delivered as one message; a closing card adds
         # the structured record and a link to the full evidence. A card failure
         # never fails the reply, mirroring the streamed path.
-        card = await _send_result_card(sender, payload=payload)
+        card = await _send_result_card(sender, payload=payload, share_url=share_url)
         return DeliveryOutcome({
             "status": "delivered",
             "channel": channel,

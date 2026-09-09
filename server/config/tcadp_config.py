@@ -113,6 +113,18 @@ class TCADPConfig(BaseSettings):
         max_length=255,
     )
 
+    PLATFORM_SHARED_RESULT_TTL_DAYS: int = Field(
+        description=(
+            "Lifetime, in days, of a no-login channel result share link. 0 (the "
+            "default) means the link never expires: the rich card stays in the "
+            "customer's chat history forever, so access is bounded by revocation "
+            "(account disable / identity unbind) rather than a clock. A positive "
+            "value opts into a fixed expiry window instead."
+        ),
+        default=0,
+        ge=0,
+    )
+
     PLATFORM_CHANNEL_SERVICE_TOKEN: str = Field(
         description=(
             "High-entropy service token required by trusted channel adapters to confirm "

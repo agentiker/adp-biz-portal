@@ -393,6 +393,37 @@ class PlatformChannelReplayMarker(Base):
     CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
 
+class PlatformSharedResult(Base):
+    """A no-login, read-only share link for one channel query result.
+
+    A channel reply too long for a chat bubble links to a rendered result page
+    that must open without a portal login, so access is a high-entropy bearer
+    token stored only as its SHA-256 digest. Each row is scoped to a single
+    execution run, expires, and is revoked when the owning account is disabled
+    or the channel identity is unbound.
+    """
+
+    __tablename__ = "platform_shared_result"
+    __table_args__ = (
+        Index("idx_platform_shared_result_expires", "ExpiresAt"),
+    )
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    TokenHash = Column(String(64), nullable=False, unique=True, index=True)
+    ExecutionRunId = Column(UUID(), ForeignKey("platform_execution_run.Id", ondelete="CASCADE"), nullable=False, index=True)
+    ConversationId = Column(UUID(), nullable=True)
+    AccountId = Column(UUID(), ForeignKey("account.Id", ondelete="CASCADE"), nullable=False, index=True)
+    EnterpriseId = Column(UUID(), nullable=True)
+    Channel = Column(String(48), nullable=False)
+    ChannelInstanceId = Column(String(128), nullable=False)
+    # NULL means the link never expires: the card stays in the customer's chat
+    # history forever, so access is bounded by revocation, not a clock.
+    ExpiresAt = Column(DateTime, nullable=True)
+    RevokedAt = Column(DateTime, nullable=True)
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    LastAccessedAt = Column(DateTime, nullable=True)
+
+
 class PlatformDeliveryTask(Base):
     """Durable task queue row used by API and channel workers.
 

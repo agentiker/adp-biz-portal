@@ -14,6 +14,7 @@ import type {
   PortalOverview,
   PortalSession,
   PortalSessionDetail,
+  SharedResultResponse,
   ShipmentResult,
   PlatformConfigPayload,
   PlatformRole,
@@ -251,6 +252,12 @@ export async function getPortalSession(conversationId: string): Promise<PortalSe
     }
   }
   return httpService.get<PortalSessionDetail>(`/api/v1/portal/sessions/${encodeURIComponent(conversationId)}`)
+}
+
+export async function getSharedResult(token: string): Promise<SharedResultResponse> {
+  // Public, no-login read of one result. An invalid/expired/revoked token
+  // returns 404 (not 401), so this never triggers the auth logout interceptor.
+  return httpService.get<SharedResultResponse>(`/api/v1/portal/shared/${encodeURIComponent(token)}`)
 }
 
 export async function submitWebInbound(text: string, conversationId?: string | null, messageId?: string, enterpriseId?: string | null): Promise<InboundReceipt> {

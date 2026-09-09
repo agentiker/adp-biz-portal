@@ -77,6 +77,7 @@ from core.channel_identity import (
     resolve_active_channel_identity,
 )
 from core.channel_replay import claim_replay_key, prune_expired_replay_markers
+from core.channel_share import load_shared_result, revoke_account_shared_results
 from core.platform_worker import PLATFORM_INBOUND_MAX_ATTEMPTS, PLATFORM_INBOUND_TASK_TYPE
 from integrations.m3.adapter import M3LookupAdapter, M3LookupResult
 from integrations.channels.registry import ChannelRegistryError, register_default_adapters
@@ -785,6 +786,45 @@ class PortalSessionDetailApi(HTTPMethodView):
                 "evidence": [_serialize_evidence(evidence) for evidence in evidence_by_run.get(str(item.Id), [])],
             } for item in runs],
             "result": _serialize_run_result(latest, evidence_by_run.get(str(latest.Id), [])) if latest else None,
+        })
+
+
+class PortalSharedResultApi(HTTPMethodView):
+    """Public, no-login, read-only view of one channel query result.
+
+    Access is the bearer share token, never a portal session, and it renders a
+    single execution run — no conversation list, no other runs. An invalid,
+    expired, or revoked token returns 404 (never 401, so a public link does not
+    trip the browser's logout-on-401 handling); expiry is deliberately
+    indistinguishable from a missing token.
+    """
+
+    async def get(self, request: Request, token: str):
+        db = request.ctx.db
+        shared = await load_shared_result(db, token)
+        if shared is None:
+            raise PlatformNotFound("链接无效或已过期")
+        run = await db.get(PlatformExecutionRun, shared.ExecutionRunId)
+        if run is None:
+            raise PlatformNotFound("链接无效或已过期")
+        evidence = list((await db.execute(
+            select(PlatformEvidence)
+            .where(PlatformEvidence.ExecutionRunId == run.Id)
+            .order_by(PlatformEvidence.CapturedAt.asc())
+        )).scalars().all())
+        await create_audit(
+            db,
+            actor_account_id=shared.AccountId,
+            action="portal.shared_result.view",
+            target_type="platform_shared_result",
+            target_id=str(shared.Id),
+            trace_id=_trace_id(request),
+        )
+        await db.commit()
+        return json({
+            "result": _serialize_run_result(run, evidence),
+            "channel": shared.Channel,
+            "createdAt": shared.CreatedAt.isoformat() if shared.CreatedAt else "",
         })
 
 
@@ -1865,6 +1905,7 @@ class AdminUserResetPasswordApi(HTTPMethodView):
         await revoke_account_execution_contexts(request.ctx.db, str(user.AccountId))
         reply_tasks_revoked = await revoke_account_delivery_tasks(request.ctx.db, str(user.AccountId))
         channel_identities_revoked = await revoke_account_channel_identities(request.ctx.db, str(user.AccountId))
+        await revoke_account_shared_results(request.ctx.db, str(user.AccountId))
         await _commit_audit(request, action="user.reset_password", target_type="platform_user", target_id=str(user.Id), metadata={"sessionRevoked": True, "replyTasksRevoked": reply_tasks_revoked, "channelIdentitiesRevoked": channel_identities_revoked})
         return json({"userId": str(user.Id), "initialPassword": initial_password})
 
@@ -1940,6 +1981,7 @@ class AdminUserDisableApi(HTTPMethodView):
         await revoke_account_execution_contexts(request.ctx.db, str(user.AccountId))
         reply_tasks_revoked = await revoke_account_delivery_tasks(request.ctx.db, str(user.AccountId))
         channel_identities_revoked = await revoke_account_channel_identities(request.ctx.db, str(user.AccountId))
+        await revoke_account_shared_results(request.ctx.db, str(user.AccountId))
         await _commit_audit(request, action="user.disable", target_type="platform_user", target_id=str(user.Id), metadata={"sessionRevoked": True, "replyTasksRevoked": reply_tasks_revoked, "channelIdentitiesRevoked": channel_identities_revoked})
         return json({"userId": str(user.Id), "status": user.Status})
 
@@ -2257,6 +2299,7 @@ app.add_route(PlatformSessionApi.as_view(), "/api/v1/auth/session")
 app.add_route(PortalOverviewApi.as_view(), "/api/v1/portal/overview")
 app.add_route(PortalSessionsApi.as_view(), "/api/v1/portal/sessions")
 app.add_route(PortalSessionDetailApi.as_view(), "/api/v1/portal/sessions/<conversation_id:str>")
+app.add_route(PortalSharedResultApi.as_view(), "/api/v1/portal/shared/<token:str>")
 app.add_route(ShipmentLookupApi.as_view(), "/api/v1/tools/shipment/lookup")
 app.add_route(WebChannelInboundApi.as_view(), "/api/v1/channels/web/inbound")
 app.add_route(WebChannelInboundStatusApi.as_view(), "/api/v1/channels/web/inbound/<inbound_id:str>")
