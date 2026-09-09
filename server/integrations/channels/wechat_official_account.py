@@ -7,23 +7,29 @@ callbacks can be acknowledged before an outbound transport is configured.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
-import hmac
 import secrets
-import struct
 import time
-import threading
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
 from core.delivery import InboundMessageInput
-from core.error.platform import PlatformBadRequest
+from integrations.channels._wechat.crypto import (
+    WechatProtocolError,
+    cdata as _cdata,
+    check_timestamp as _timestamp,
+    compute_msg_signature,
+    decode_aes_key,
+    decrypt_envelope,
+    encrypt_payload,
+    extract_encrypted_xml,
+    parse_xml as _parse_xml,
+    replay_guard as _replay_guard,
+    verify_msg_signature,
+    verify_signature,
+    xml_value as _xml_value,
+)
 from integrations.channels.base import ChannelCapabilities, DeliveryReceipt, OutboundMessage
 from integrations.channels.text_format import to_plain_text
 from integrations.channels.wechat_transport import WechatSendError
@@ -31,104 +37,7 @@ from integrations.channels.wechat_transport import WechatSendError
 
 WECHAT_OFFICIAL_ACCOUNT = "wechat_official_account"
 DEFAULT_REPLAY_WINDOW_SECONDS = 300
-MAX_XML_BYTES = 256 * 1024
 MAX_REPLY_CHARS = 2000
-
-
-class WechatProtocolError(PlatformBadRequest):
-    """Malformed or unauthenticated provider callback."""
-
-
-def _cdata(value: Any, *, field: str, max_length: int = 255) -> str:
-    """Return text that is safe to embed in a CDATA section.
-
-    ``]]>`` would end the section early and let content forge XML structure, so
-    it is rejected together with control characters instead of being escaped
-    into something the provider may render differently.
-    """
-    if not isinstance(value, str) or not value.strip():
-        raise WechatProtocolError(f"微信{field}格式不正确")
-    normalized = value.strip()
-    if len(normalized) > max_length:
-        raise WechatProtocolError(f"微信{field}长度超限")
-    if "]]>" in normalized or any(ord(char) < 0x20 and char not in "\r\n\t" for char in normalized):
-        raise WechatProtocolError(f"微信{field}包含不支持的字符")
-    return normalized
-
-
-class _ReplayGuard:
-    """Process-local replay cache used as a fast path.
-
-    A single process cannot see what another API instance already accepted, so
-    this only short-circuits obvious repeats. Durable, cross-instance rejection
-    comes from ``core.channel_replay``, which the callback route consults before
-    handing the body to the adapter.
-    """
-
-    def __init__(self, *, max_entries: int = 20_000) -> None:
-        self._entries: dict[str, float] = {}
-        self._lock = threading.Lock()
-        self._max_entries = max_entries
-
-    def check_and_mark(self, key: str, *, now: float, ttl: int) -> bool:
-        with self._lock:
-            cutoff = now - ttl
-            self._entries = {item: stamp for item, stamp in self._entries.items() if stamp >= cutoff}
-            if key in self._entries:
-                return False
-            if len(self._entries) >= self._max_entries:
-                oldest = min(self._entries, key=self._entries.get)
-                self._entries.pop(oldest, None)
-            self._entries[key] = now
-            return True
-
-
-_replay_guard = _ReplayGuard()
-
-
-def verify_signature(*, token: str, timestamp: str, nonce: str, signature: str) -> bool:
-    if not all(isinstance(value, str) and value for value in (token, timestamp, nonce, signature)):
-        return False
-    if len(timestamp) > 32 or len(nonce) > 128 or len(signature) != 40:
-        return False
-    expected = hashlib.sha1("".join(sorted((token, timestamp, nonce))).encode("utf-8")).hexdigest()
-    return hmac.compare_digest(expected, signature.lower())
-
-
-def _timestamp(value: Any, *, now: float, window_seconds: int) -> int:
-    try:
-        parsed = int(str(value))
-    except (TypeError, ValueError) as exc:
-        raise WechatProtocolError("微信回调时间戳格式不正确") from exc
-    if abs(now - parsed) > window_seconds:
-        raise WechatProtocolError("微信回调已超出允许时间窗口")
-    return parsed
-
-
-def _xml_value(root: ET.Element, name: str, *, required: bool = False) -> str:
-    value = root.findtext(name)
-    value = value.strip() if isinstance(value, str) else ""
-    if required and not value:
-        raise WechatProtocolError(f"微信回调缺少{name}")
-    return value
-
-
-def _parse_xml(body: bytes) -> ET.Element:
-    if not isinstance(body, (bytes, bytearray)) or not body or len(body) > MAX_XML_BYTES:
-        raise WechatProtocolError("微信回调 XML 无效")
-    # ElementTree does not resolve external entities, but reject DTD/entity
-    # declarations explicitly so the boundary remains safe if the parser is
-    # ever replaced.
-    lowered = bytes(body).lower()
-    if b"<!doctype" in lowered or b"<!entity" in lowered:
-        raise WechatProtocolError("微信回调 XML 不允许实体声明")
-    try:
-        root = ET.fromstring(body)
-    except ET.ParseError as exc:
-        raise WechatProtocolError("微信回调 XML 无效") from exc
-    if root.tag.rsplit("}", 1)[-1] != "xml":
-        raise WechatProtocolError("微信回调 XML 根节点无效")
-    return root
 
 
 @dataclass(frozen=True)
@@ -170,26 +79,10 @@ class WechatOfficialAccountAdapter:
         self.channel_instance_id = channel_instance_id.strip()
         self.token = token
         self.app_id = app_id.strip() if isinstance(app_id, str) and app_id.strip() else None
-        self._aes_key = self._decode_aes_key(encoding_aes_key) if encoding_aes_key else None
+        self._aes_key = decode_aes_key(encoding_aes_key) if encoding_aes_key else None
         if self._aes_key is not None and not self.app_id:
             raise ValueError("app_id is required for encrypted WeChat callbacks")
         self.replay_window_seconds = replay_window_seconds
-
-    @staticmethod
-    def _decode_aes_key(value: str | None) -> bytes:
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("encoding_aes_key is required")
-        # WeChat displays a 43-character base64 value without the final '='.
-        encoded = value.strip()
-        if len(encoded) not in (43, 44):
-            raise ValueError("encoding_aes_key has an invalid length")
-        try:
-            key = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise ValueError("encoding_aes_key is not valid base64") from exc
-        if len(key) != 32:
-            raise ValueError("encoding_aes_key must decode to 32 bytes")
-        return key
 
     def verify_callback(self, *, signature: str, timestamp: str, nonce: str, now: float | None = None) -> str:
         """Verify a plaintext callback and return its durable replay key."""
@@ -218,8 +111,9 @@ class WechatOfficialAccountAdapter:
         parsed = _timestamp(timestamp, now=current, window_seconds=self.replay_window_seconds)
         if not isinstance(encrypt, str) or not encrypt or len(encrypt) > 512 * 1024:
             raise WechatProtocolError("微信加密回调内容无效")
-        expected = hashlib.sha1("".join(sorted((self.token, str(parsed), nonce, encrypt))).encode("utf-8")).hexdigest()
-        if not isinstance(msg_signature, str) or not hmac.compare_digest(expected, msg_signature.lower()):
+        if not verify_msg_signature(
+            token=self.token, timestamp=str(parsed), nonce=nonce, encrypt=encrypt, msg_signature=msg_signature
+        ):
             raise WechatProtocolError("微信加密回调签名无效")
         replay_key = hashlib.sha256(
             f"{self.channel_instance_id}:aes:{parsed}:{nonce}:{msg_signature}:{hashlib.sha256(encrypt.encode()).hexdigest()}".encode()
@@ -230,43 +124,18 @@ class WechatOfficialAccountAdapter:
 
     @staticmethod
     def extract_encrypted(body: bytes) -> str:
-        root = _parse_xml(body)
-        encrypted = _xml_value(root, "Encrypt", required=True)
-        if len(encrypted) > 512 * 1024:
-            raise WechatProtocolError("微信加密回调内容过大")
-        return encrypted
+        return extract_encrypted_xml(body)
 
     def decrypt_xml(self, encrypt: str) -> bytes:
         """Decrypt the WeChat AES-256-CBC envelope and validate its AppID."""
         if self._aes_key is None or not self.app_id:
             raise WechatProtocolError("微信安全模式凭据不完整")
-        try:
-            ciphertext = base64.b64decode(encrypt, validate=True)
-            decryptor = Cipher(algorithms.AES(self._aes_key), modes.CBC(self._aes_key[:16])).decryptor()
-            padded = decryptor.update(ciphertext) + decryptor.finalize()
-        except (ValueError, binascii.Error) as exc:
-            raise WechatProtocolError("微信加密回调无法解密") from exc
-        if not padded or len(padded) % 32:
-            raise WechatProtocolError("微信加密回调填充无效")
-        pad_length = padded[-1]
-        if not 1 <= pad_length <= 32 or padded[-pad_length:] != bytes([pad_length]) * pad_length:
-            raise WechatProtocolError("微信加密回调填充无效")
-        payload = padded[:-pad_length]
-        if len(payload) < 20:
-            raise WechatProtocolError("微信加密回调内容不完整")
-        message_length = struct.unpack("!I", payload[16:20])[0]
-        message_end = 20 + message_length
-        if message_end > len(payload):
-            raise WechatProtocolError("微信加密回调消息长度无效")
-        xml_body = payload[20:message_end]
-        try:
-            payload_app_id = payload[message_end:].decode("utf-8")
-            xml_body.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise WechatProtocolError("微信加密回调编码无效") from exc
-        if payload_app_id != self.app_id:
-            raise WechatProtocolError("微信加密回调AppID不匹配")
-        return xml_body
+        return decrypt_envelope(
+            aes_key=self._aes_key,
+            encrypt=encrypt,
+            expected_receiver_id=self.app_id,
+            receiver_label="AppID",
+        )
 
     def verification_echo(
         self,
@@ -371,22 +240,12 @@ class WechatOfficialAccountAdapter:
             raise WechatProtocolError("微信安全模式凭据不完整")
         if not isinstance(plain_xml, str) or not plain_xml:
             raise WechatProtocolError("微信回复内容无效")
-        body = plain_xml.encode("utf-8")
-        payload = (
-            secrets.token_bytes(16)
-            + struct.pack("!I", len(body))
-            + body
-            + self.app_id.encode("utf-8")
-        )
-        pad_length = 32 - (len(payload) % 32)
-        padded = payload + bytes([pad_length]) * pad_length
-        encryptor = Cipher(algorithms.AES(self._aes_key), modes.CBC(self._aes_key[:16])).encryptor()
-        encrypted = base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode("ascii")
+        encrypted = encrypt_payload(aes_key=self._aes_key, receiver_id=self.app_id, plain=plain_xml)
         timestamp = str(int(time.time() if now is None else now))
         reply_nonce = nonce if isinstance(nonce, str) and nonce.strip() else secrets.token_hex(8)
-        signature = hashlib.sha1(
-            "".join(sorted((self.token, timestamp, reply_nonce, encrypted))).encode("utf-8")
-        ).hexdigest()
+        signature = compute_msg_signature(
+            token=self.token, timestamp=timestamp, nonce=reply_nonce, encrypt=encrypted
+        )
         return (
             "<xml>"
             f"<Encrypt><![CDATA[{encrypted}]]></Encrypt>"
