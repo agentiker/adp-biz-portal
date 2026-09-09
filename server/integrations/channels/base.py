@@ -47,6 +47,21 @@ class ChannelAdapter(Protocol):
     def normalize(self, **kwargs: Any) -> Any: ...
 
 
+def launcher_id_from_envelope(envelope: Any, *, default: str) -> str:
+    """Return an adapter's session-scope key, or a default sender identity.
+
+    A channel whose session is narrower than the raw sender (WeChat 客服 keys a
+    session by ``open_kfid|external_userid``, group chats by chat id) exposes it
+    via ``get_launcher_id``; adapters without one fall back to the sender.
+    """
+    getter = getattr(envelope, "get_launcher_id", None)
+    if callable(getter):
+        value = getter()
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return default
+
+
 @runtime_checkable
 class ChannelSender(Protocol):
     channel: str
