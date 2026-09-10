@@ -10,7 +10,7 @@ from sanic_restful_api import reqparse
 from sanic.request.types import Request
 from sanic.response import ResponseStream
 
-from router import login_required
+from router.legacy_security import adp_admin_required
 from app_factory import TAgenticApp
 from router.legacy_security import (
     application_for_conversation,
@@ -47,7 +47,7 @@ class FileParseApi(HTTPMethodView):
         data: {"type":"status","payload":{"doc_id":"123","process":100,"status":"SUCCESS"}}
     """
 
-    @login_required
+    @adp_admin_required
     async def post(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ApplicationId", type=str, required=True, location="json")

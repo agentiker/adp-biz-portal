@@ -25,23 +25,6 @@ import { PropsTable, EventsTable, SlotsTable, MethodsTable } from '@/components/
 </template>
 ```
 
-## html/react或其他框架中使用
-
-```html
-<div id="containerId"></div>
-<script>
-ADPChatComponent.Chat.mount('#containerId', {
-  chatId: '',
-  chatList: [],
-  isChatting: false,
-  currentApplicationId: '',
-  currentApplicationName: '',
-  onSend: (query, fileList, conversationId, applicationId) => {},
-  onStop: () => {}
-})
-</script>
-```
-
 ## API
 
 <PropsTable data={[

@@ -44,7 +44,23 @@ const adminNav = [
 ]
 
 const navItems = computed(() => (props.mode === 'admin' ? adminNav : portalNav))
-const pageTitle = computed(() => props.title || navItems.value.find((item) => route.path === item.to)?.label || '工作台')
+
+/**
+ * 命中的导航项：取「是当前路径前缀」的最长那一项。
+ * 不能用 `route.path === item.to` —— 带路由参数的页面（如
+ * `/admin/adp-chat/:applicationId?/:conversationId?`）一旦写入 params，
+ * 精确匹配就会失败、左侧高亮丢失。也不能直接 startsWith，否则 `/admin`
+ * 会连带把所有 `/admin/*` 子页都点亮。
+ */
+const activeNavTo = computed(() => {
+  let best = ''
+  for (const item of navItems.value) {
+    const matched = route.path === item.to || route.path.startsWith(`${item.to}/`)
+    if (matched && item.to.length > best.length) best = item.to
+  }
+  return best
+})
+const pageTitle = computed(() => props.title || navItems.value.find((item) => item.to === activeNavTo.value)?.label || '工作台')
 const displayName = computed(() => platformStore.user?.name || userStore.name || '—')
 const roleLabel = computed(() => platformStore.user?.roleLabel || '—')
 const enterpriseName = computed(() => platformStore.enterprise?.name || '暂无授权企业范围')
@@ -79,12 +95,12 @@ const handleLogout = () => emit('logout')
           :key="item.to"
           :to="item.to"
           class="platform-nav-item"
-          :class="{ active: route.path === item.to }"
+          :class="{ active: item.to === activeNavTo }"
           @click="menuOpen = false"
         >
           <component :is="item.icon" />
           <span>{{ item.label }}</span>
-          <ChevronRightIcon v-if="route.path === item.to" class="nav-current" />
+          <ChevronRightIcon v-if="item.to === activeNavTo" class="nav-current" />
         </RouterLink>
       </nav>
 
@@ -153,7 +169,13 @@ const handleLogout = () => emit('logout')
 .profile-copy strong { font-size: 12px; line-height: 1.1; }
 .profile-copy small { font-size: 10px; color: var(--muted); margin-top: 3px; }
 .platform-content { width: min(1240px, 100%); padding: 34px 40px 56px; margin: 0 auto; }
-.platform-shell--full-bleed .platform-content { width: 100%; max-width: none; padding: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* fullBleed 用于聊天这类需要「满高 + 内部滚动」的页面：外层锁到视口高度，
+   页面自己的 flex 链路才能生效；否则 .platform-shell 的 min-height:100vh
+   会让内容撑高整页滚动。 */
+.platform-shell--full-bleed { height: 100vh; overflow: hidden; }
+.platform-shell--full-bleed .platform-sidebar { overflow-y: auto; }
+.platform-shell--full-bleed .platform-main { min-height: 0; }
+.platform-shell--full-bleed .platform-content { width: 100%; max-width: none; padding: 0; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .menu-trigger, .mobile-close { display: none; }
 .sidebar-backdrop { display: none; }
 @media (max-width: 900px) {

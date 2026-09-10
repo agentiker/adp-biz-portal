@@ -2,7 +2,6 @@
   "pages": [
     "index",
     "quick-start",
-    "init",
     "chat-layout",
     "ui-components"
   ]

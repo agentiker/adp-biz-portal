@@ -3,7 +3,7 @@ from sanic.views import stream
 from sanic.views import HTTPMethodView
 from sanic_restful_api import reqparse
 from sanic.request.types import Request
-from router import login_required
+from router.legacy_security import adp_admin_required
 from app_factory import TAgenticApp
 from router.legacy_security import require_configured_application
 app: TAgenticApp = TAgenticApp.get_app()
@@ -11,7 +11,7 @@ app: TAgenticApp = TAgenticApp.get_app()
 
 class FileUploadApi(HTTPMethodView):
     @stream
-    @login_required
+    @adp_admin_required
     async def post(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ApplicationId", type=str, required=True, location="args")

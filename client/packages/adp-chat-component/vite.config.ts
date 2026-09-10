@@ -11,7 +11,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => {
   const isAnalyze = mode === 'analyze'
-  const isUmd = mode === 'umd'
 
   // 仅在 analyze 模式下按需加载 rollup-plugin-visualizer，避免常态构建依赖它。
   // 用变量名隐藏模块字面量，跳过 TS 静态解析（该包不在依赖中，仅 analyze 模式才会用到，
@@ -70,51 +69,35 @@ export default defineConfig(async ({ mode }) => {
       port: 3000,
     },
     build: {
-      outDir: isUmd ? "dist/umd" : "dist/es",
+      outDir: 'dist/es',
       lib: {
         entry: path.resolve(__dirname, 'src/index.ts'),
         name: 'ADPChatComponent',
+        // 只产 ES。不显式限定时 Vite 默认 ['es','umd']，UMD 会强制打开
+        // inlineDynamicImports，与 manualChunks 冲突并把整图压成单文件。
+        formats: ['es'],
       },
       rollupOptions: {
-        // 外部化依赖，不打包进库
-        external: isUmd ? [] : ['vue', 'tdesign-vue-next', '@tdesign-vue-next/chat'],
-        output: [
-          isUmd ? {
-            format: 'umd',
-            name: 'ADPChatComponent',
-            entryFileNames: 'adp-chat-component.umd.js',
-            globals: {
-              vue: 'Vue',
-              'tdesign-vue-next': 'TDesign',
-              '@tdesign-vue-next/chat': 'TDesignChat',
-            },
-            assetFileNames: (assetInfo: { name?: string }) => {
-              if (assetInfo.name === 'style.css') return 'adp-chat-component.css'
-              return assetInfo.name || 'assets/[name]-[hash][extname]'
-            },
-            // UMD 不支持 manualChunks，动态导入会被内联
-            inlineDynamicImports: true,
-          }
-          :
-          // ES 格式 - 支持代码分割和按需加载
-          {
-            format: 'es',
-            entryFileNames: 'adp-chat-component.es.js',
-            // 使用相对路径，确保 chunk 可以被正确加载
-            chunkFileNames: 'chunks/[name]-[hash].js',
-            assetFileNames: (assetInfo: { name?: string }) => {
-              if (assetInfo.name === 'style.css') return 'adp-chat-component.css'
-              return assetInfo.name || 'assets/[name]-[hash][extname]'
-            },
-            // 手动分包：大体积资源单独打包
-            manualChunks(id: string) {
-              // katex 分包
-              if (id.includes('katex')) {
-                return 'katex'
-              }
-            },
+        // 外部化依赖，不打包进库。UMD 自包含产物已下线，唯一消费者
+        // （平台管理端 app）自带 vue 与 tdesign。
+        external: ['vue', 'tdesign-vue-next', '@tdesign-vue-next/chat'],
+        output: {
+          format: 'es',
+          entryFileNames: 'adp-chat-component.es.js',
+          // 使用相对路径，确保 chunk 可以被正确加载
+          chunkFileNames: 'chunks/[name]-[hash].js',
+          assetFileNames: (assetInfo: { name?: string }) => {
+            if (assetInfo.name === 'style.css') return 'adp-chat-component.css'
+            return assetInfo.name || 'assets/[name]-[hash][extname]'
           },
-        ],
+          // 手动分包：大体积资源单独打包
+          manualChunks(id: string) {
+            // katex 分包
+            if (id.includes('katex')) {
+              return 'katex'
+            }
+          },
+        },
       },
       cssCodeSplit: false,
     },

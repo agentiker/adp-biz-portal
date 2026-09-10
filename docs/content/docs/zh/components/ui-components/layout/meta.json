@@ -2,7 +2,6 @@
   "title": "布局组件",
   "icon": "layout-line",
   "pages": [
-    "main-layout",
-    "side-layout"
+    "main-layout"
   ]
 }

@@ -8,7 +8,7 @@ from sanic_restful_api import reqparse
 from sanic.request.types import Request
 from sanic.exceptions import SanicException
 
-from router import login_required
+from router.legacy_security import adp_admin_required
 from app_factory import TAgenticApp
 from router.legacy_security import (
     application_for_conversation,
@@ -68,7 +68,7 @@ class ForwardApi(HTTPMethodView):
         }
     """
 
-    @login_required
+    @adp_admin_required
     async def post(self, request: Request, action: str):
         # 校验 Action 名称格式，防止注入
         if not ACTION_PATTERN.match(action):

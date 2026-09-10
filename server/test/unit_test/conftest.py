@@ -19,6 +19,9 @@ from model.platform import (
     IntegrationConnection,
     IntegrationConnectionStatus,
     PlatformEnterprise,
+    PlatformMembership,
+    PlatformRole,
+    PlatformUser,
 )
 
 
@@ -123,16 +126,43 @@ async def auth_token(app, account):
         else:
             # Keep reused local fixtures aligned with the binding contract.
             external.WorkspaceId = "workspace-1"
+
+        # 管理员账号在同一个 DB 块里建好。单独用一个 session 级 async fixture 去写库
+        # 会让连接池在 session 事件循环里被占用，随后测试体在自己的循环里复用同一
+        # 连接就会抛 "attached to a different loop"（测试基座既有缺陷，见
+        # ROADMAP M2-TEST-FIX-01）。复用这里唯一的一次 DB 会话即可绕开。
+        admin_account = await CoreAccount.create_account(db, name="legacy-security-admin")
+        admin_account.Role = AccountRole.ADMIN
+        await db.flush()
+        admin_platform_user = PlatformUser(
+            AccountId=admin_account.Id,
+            Name="legacy-security-admin",
+            PhoneNormalized=f"+8613{uuid.uuid4().int % 10**9:09d}",
+            PhoneMasked="138****0000",
+            Role=PlatformRole.ADMIN,
+            Status="active",
+        )
+        db.add(admin_platform_user)
+        await db.flush()
+        # 与普通账号同企业：管理员没有企业绑定时只能走 "未绑定本地管理员" 兜底，
+        # 那条兜底的 workspace_id 为 None，需要 workspace 的文件类路由会 403，
+        # 就测不到真正要测的路径校验了。
+        db.add(
+            PlatformMembership(
+                UserId=admin_platform_user.Id,
+                EnterpriseId=enterprise.Id,
+                MembershipRole=PlatformRole.ADMIN,
+                Active=True,
+            )
+        )
+        account["admin_token"] = await CoreAccount.login(db, admin_account, "127.0.0.1")
+
         await db.commit()
 
     return token
 
 
-@pytest_asyncio.fixture(scope="session")
-async def admin_auth_token(app):
-    """Create a legacy admin token for compatibility-route regression tests."""
-    async with app.config["sessionmaker"]() as db:
-        account = await CoreAccount.create_account(db, name="legacy-security-admin")
-        account.Role = AccountRole.ADMIN
-        await db.commit()
-        return await CoreAccount.login(db, account, "127.0.0.1")
+@pytest.fixture
+def admin_auth_token(auth_token, account):
+    """Legacy admin token, created alongside `auth_token` in the same DB session."""
+    return account["admin_token"]

@@ -9,6 +9,7 @@ from the database.
 
 from __future__ import annotations
 
+from functools import wraps
 from typing import Any
 
 from sanic.exceptions import SanicException
@@ -16,6 +17,7 @@ from sanic.exceptions import SanicException
 from core.account import CoreAccount
 from core.conversation import CoreConversation
 from model.account import AccountRole
+from router import check_login
 from util.database import db_connection
 
 
@@ -175,6 +177,37 @@ async def legacy_account_is_admin(request) -> bool:
 async def require_legacy_admin(request) -> None:
     if not await legacy_account_is_admin(request):
         raise SanicException("管理员权限 required", status_code=403)
+
+
+def adp_admin_required(view):
+    """Gate every route that reaches the ADP vendor behind an administrator.
+
+    The ADP debugger under `/admin/adp-chat` is the only remaining consumer of
+    these compatibility routes, and that page is itself behind `platform.manage`.
+    Requiring an administrator here closes two gaps that `login_required` alone
+    left open:
+
+    * `LEGACY_READ_ACTIONS` used to be reachable by any `login_token` holder, so
+      a non-administrator could read ADP agent/plugin/skill/knowledge metadata
+      through `/adp/<action>` using the platform's own vendor credentials.
+    * `AccountInfoApi` auto-registers a visitor and issues a `login_token` when
+      `AUTO_CREATE_ACCOUNT` is enabled.  Those accounts default to
+      `AccountRole.NORMAL`, so they are now rejected before reaching the vendor.
+
+    The role is read from the database by `legacy_account_is_admin`, never from
+    the token.  Platform administrators already carry `AccountRole.ADMIN`
+    because `core.platform` keeps both role fields in sync on create and on
+    role change.
+    """
+
+    @wraps(view)
+    async def decorated(*args, **kwargs):
+        _, request = args
+        check_login(request)
+        await require_legacy_admin(request)
+        return await view(*args, **kwargs)
+
+    return decorated
 
 
 def require_allowed_action(action: str, is_admin: bool) -> None:

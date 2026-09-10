@@ -3,9 +3,9 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_error_asgi_client(app, auth_token):
+async def test_error_asgi_client(app, admin_auth_token):
     headers = {
-        "Authorization": f"Bearer {auth_token}",
+        "Authorization": f"Bearer {admin_auth_token}",
     }
 
     # get application list

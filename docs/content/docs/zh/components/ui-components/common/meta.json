@@ -2,8 +2,6 @@
   "title": "通用组件",
   "icon": "tools-line",
   "pages": [
-    "file-list",
-    "option-card",
-    "record-icon"
+    "option-card"
   ]
 }

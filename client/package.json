@@ -11,7 +11,6 @@
     "build_app": "cd packages/app && npm run build && cd ../../../server/static && rm -rf app && cp -r ../../client/packages/app/dist app"
   },
   "workspaces": [
-    "packages/*",
-    "packages/adp-chat-component-example/*"
+    "packages/*"
   ]
 }
