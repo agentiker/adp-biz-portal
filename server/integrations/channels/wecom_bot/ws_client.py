@@ -136,6 +136,7 @@ class WecomBotWsGateway:
     async def serve_once(self) -> None:
         """Run one connection: subscribe, heartbeat, and dispatch until closed."""
         conn = await self._connect()
+        logger.info("wecom bot ws connected; subscribing bot_id=%s…", self._config.bot_id[:8])
         stop = asyncio.Event()
         heartbeat = asyncio.create_task(self._heartbeat(conn, stop))
         try:
@@ -182,15 +183,15 @@ class WecomBotWsGateway:
 
     async def _dispatch(self, conn: WsConnection, frame: Mapping[str, Any]) -> None:
         errcode = frame.get("errcode")
+        cmd = frame.get("cmd")
+        if cmd != CMD_MSG_CALLBACK:
+            # Subscribe ack / pong / event: log so 联调 can confirm the handshake.
+            logger.info("wecom bot ws frame cmd=%s errcode=%s errmsg=%s", cmd, errcode, frame.get("errmsg"))
         if isinstance(errcode, int) and errcode != 0:
             if errcode == SUBSCRIBE_CONFLICT_ERRCODE:
                 raise WsSubscribeConflict("aibot_subscribe conflict (errcode 6000)")
-            logger.warning(
-                "wecom bot ws error frame errcode=%s errmsg=%s",
-                errcode, frame.get("errmsg"),
-            )
             return
-        if frame.get("cmd") == CMD_MSG_CALLBACK:
+        if cmd == CMD_MSG_CALLBACK:
             await self._handle_callback(conn, frame)
         # aibot_event_callback / subscribe-ack / pong carry nothing to answer.
 
@@ -203,11 +204,16 @@ class WecomBotWsGateway:
         trace_id = str(body.get("msgid") or f"wecom-bot-{secrets.token_hex(6)}")
         envelope = self._adapter.normalize_message(dict(body), trace_id=trace_id, now=self._now())
         if envelope is None:
+            logger.info("wecom bot inbound ignored (non-text/empty) msgid=%s", trace_id)
             return  # non-text or empty — nothing to stream back
+        logger.info(
+            "wecom bot inbound msgid=%s from=%s chat=%s text_len=%d",
+            trace_id, envelope.from_userid, envelope.chat_type, len(envelope.message.text or ""),
+        )
         # We own the reply stream id; reuse the inbound one if the bot supplied it.
         stream_id = envelope.stream_id or f"{req_id or trace_id}:{secrets.token_hex(5)}"
         reply_stream = self._reply_stream(conn, req_id=req_id, stream_id=stream_id)
-        await run_wecom_bot_turn(
+        result = await run_wecom_bot_turn(
             self._sessionmaker,
             channel=self._adapter.channel,
             channel_instance_id=self._config.channel_instance_id,
@@ -217,11 +223,13 @@ class WecomBotWsGateway:
             now=self._now(),
             guard=self._guard,
         )
+        logger.info("wecom bot turn result msgid=%s status=%s", trace_id, result.get("status"))
 
     def _reply_stream(
         self, conn: WsConnection, *, req_id: str, stream_id: str
     ) -> Callable[..., Awaitable[None]]:
         async def reply_stream(content: str, *, is_final: bool) -> None:
+            logger.info("wecom bot reply stream_id=%s finish=%s len=%d", stream_id, is_final, len(content))
             await conn.send_json(
                 {
                     "cmd": CMD_RESPOND_MSG,
