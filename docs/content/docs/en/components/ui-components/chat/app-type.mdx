@@ -23,21 +23,6 @@ Display current application greeting and suggested questions.
 </template>
 ```
 
-## Usage in HTML/React or Other Frameworks
-
-```html
-<div id="containerId"></div>
-<script>
-ADPChatComponent.ChatAppType.mount('#containerId', {
-  currentApplicationAvatar: '/avatar.png',
-  currentApplicationName: 'App Name',
-  currentApplicationGreeting: 'Hello, how can I help you?',
-  currentApplicationOpeningQuestions: ['Question 1', 'Question 2'],
-  onSelectQuestion: (question) => console.log('selected', question)
-})
-</script>
-```
-
 ## API
 
 <PropsTable data={[

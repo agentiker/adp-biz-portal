@@ -1,57 +1,41 @@
 ---
 title: 组件介绍
-description: ADP Chat Component 是一套完整的 AI 聊天组件库
+description: adp-chat-component 是平台管理端 ADP 调试页的内部组件
 ---
-
-import { PropsTable, EventsTable, SlotsTable, MethodsTable } from '@/components/docs/api-table';
 
 # ADP Chat Component
 
-ADP Chat Component 是一套完整的 AI 聊天组件库，基于 Vue 3 + TDesign 构建，提供了丰富的聊天界面组件。
+> **已弃用为内部组件（2026-09）**：`adp-chat-component` 不再是对外可嵌入的 SDK。它现在只服务平台管理端的 ADP 调试页 `/admin/adp-chat`（`client/packages/app/src/pages/AdminAdpChat.vue`），导出面收敛为一个布局组件 `ADPChat`、axios 拦截器配置和少量类型。UMD/全局挂载入口、动态挂载 `mount()`、以及 ADP 管理面能力（定时任务/渠道/连接器/插件/技能/知识库）均已移除。
 
-## 特性
+`adp-chat-component` 基于 Vue 3 + TDesign，封装了平台管理端 ADP 调试页所需的聊天界面。它随 monorepo 一起维护，仅由 `client/packages/app` 通过 workspace 依赖引用，不再对外发布或嵌入第三方站点。
 
-- **完整的聊天界面** - 提供 ADPChat、Chat、Sender 等核心组件
-- **灵活的布局** - 支持侧边栏、主内容区等多种布局方式
-- **主题定制** - 支持亮色/暗色主题切换
-- **国际化** - 内置中英文支持，可自定义文本
-- **动态挂载** - 支持 Vue 组件和动态挂载两种使用方式
-- **API 模式** - 支持配置 API 自动加载数据
+## 包入口导出
+
+包入口 `adp-chat-component` 只导出以下内容：
+
+- `ADPChat` — 唯一的布局组件，承载应用/会话/消息的完整聊天界面。
+- `configureAxios`、`setRequestInterceptor`、`setResponseInterceptor`、`httpService`、`defaultApiDetailConfig` — service 层的 axios 配置与拦截器（调试页用它注入平台登录态失效处理）。
+- 类型：`ApiConfig`、`ApiDetailConfig`、`Application`、`AppPattern`、`ChatConversation`、`Record`、`Reference`、`QuoteInfo`、`ChatConfig`、`ChatMode`、`ThemeType`，以及枚举 `ScoreValue`。
+
+`ADPChat` 通过 `api-config` 自动加载应用列表、会话列表、会话详情与用户信息，无需手动传入 `applications`/`conversations`/`chatList` 等数据。
 
 ## 快速开始
 
 ```vue
 <template>
-  <ADPChat
-    :applications="applications"
-    :conversations="conversations"
-    :chat-list="chatList"
-    @send="handleSend"
-  />
+  <ADPChat :api-config="apiConfig" />
 </template>
 
 <script setup lang="ts">
-import { ADPChat } from 'adp-chat-component'
+import { ADPChat, type ApiConfig } from 'adp-chat-component'
 import 'adp-chat-component/dist/es/adp-chat-component.css'
+
+const apiConfig: ApiConfig = { baseURL: '/api' }
 </script>
 ```
 
-## 组件列表
+更完整的用法见 [快速开始](/docs/zh/components/quick-start) 与 [ADPChat 组件](/docs/zh/components/chat-layout)。
 
-### 布局组件
-- [ADPChat](/docs/zh/components/layout/chat-layout) - 完整聊天布局
-- [MainLayout](/docs/zh/components/layout/main-layout) - 主内容区布局
-- [SideLayout](/docs/zh/components/layout/side-layout) - 侧边栏布局
+## 内部组件参考
 
-### 聊天组件
-- [Chat](/docs/zh/components/chat/chat) - 聊天主组件
-- [ChatItem](/docs/zh/components/chat/chat-item) - 聊天消息项
-- [ChatSender](/docs/zh/components/chat/sender) - 消息发送器
-- [ChatAppType](/docs/zh/components/chat/app-type) - 应用欢迎页
-
-### 基础组件
-- [Button](/docs/zh/components/basic/button) - 按钮
-- [AIWarning](/docs/zh/components/basic/ai-warning) - AI 警告提示
-- [ApplicationList](/docs/zh/components/basic/application-list) - 应用列表
-- [HistoryList](/docs/zh/components/basic/history-list) - 历史会话列表
-- [Settings](/docs/zh/components/basic/settings) - 设置组件
+`ADPChat` 内部使用的构建块（不单独导出）见 [基础组件概览](/docs/zh/components/ui-components)。

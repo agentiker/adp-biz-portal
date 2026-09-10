@@ -13,7 +13,7 @@ from sanic.response import raw
 from util.security_logging import redact_error
 from sanic.exceptions import SanicException
 
-from router import login_required
+from router.legacy_security import adp_admin_required
 from app_factory import TAgenticApp
 from router.legacy_security import (
     require_configured_application,
@@ -37,7 +37,7 @@ class FileDownloadApi(HTTPMethodView):
         Path:          文件路径，如 /workdir/main.py
     """
 
-    @login_required
+    @adp_admin_required
     async def get(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ApplicationId", type=str, required=True, location="args")

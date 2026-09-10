@@ -124,11 +124,15 @@ export const fetchApplicationList = async (apiPath?: string): Promise<Applicatio
 /**
  * 加载会话列表
  * @param apiPath API 路径
+ * @param params 查询参数；后端按 ApplicationId 过滤并返回扁平数组
  */
-export const fetchConversationList = async (apiPath?: string): Promise<ChatConversation[]> => {
+export const fetchConversationList = async (
+    apiPath?: string,
+    params?: { ApplicationId?: string },
+): Promise<ChatConversation[]> => {
     if (!apiPath) throw new Error('apiPath is required');
     try {
-        const response: ChatConversation[] = await httpService.get(apiPath);
+        const response: ChatConversation[] = await httpService.get(apiPath, params);
         return response || [];
     } catch (error) {
         console.error('获取会话列表失败:', error);

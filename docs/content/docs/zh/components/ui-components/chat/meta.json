@@ -5,7 +5,6 @@
     "chat",
     "chat-item",
     "sender",
-    "app-type",
-    "back-to-bottom"
+    "app-type"
   ]
 }

@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.chat import CoreChat
 from core.conversation import CoreConversation
@@ -54,23 +55,74 @@ async def test_normal_account_cannot_call_legacy_management_or_unknown_action(ap
 
 
 async def create_owned_conversation(app, token: str, application_id: str) -> str:
+    """Insert a conversation owned by `token`'s account.
+
+    Uses a throwaway engine instead of `app.config["sessionmaker"]`.  The app's
+    pool is first used inside session-scoped async fixtures, i.e. in the session
+    event loop; checking one of those connections back out from a test body
+    running in its own loop raises "attached to a different loop".  A loop-local
+    engine sidesteps that harness defect (ROADMAP M2-TEST-FIX-01) without
+    changing what the test asserts.
+    """
     account_id = SessionToken.check(token)["AccountId"]
-    async with app.config["sessionmaker"]() as db:
-        conversation = await CoreConversation.create(
-            db,
-            account_id,
-            application_id,
-            title="legacy security test",
-        )
-        return str(conversation.Id)
+    url = app.config["sessionmaker"].kw["bind"].url
+    engine = create_async_engine(url)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+            conversation = await CoreConversation.create(
+                db,
+                account_id,
+                application_id,
+                title="legacy security test",
+            )
+            return str(conversation.Id)
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_normal_account_payload_identity_is_replaced_by_server_scope(app, auth_token, monkeypatch):
+async def test_every_adp_facing_route_requires_admin(app, auth_token):
+    """直通 ADP 的路由一律要求管理员（`adp_admin_required`）。
+
+    这些路由会用平台自己的腾讯云凭据打到 ADP CAPI。此前它们只要求
+    `login_required`，于是任何持 `login_token` 的普通账号都能触达
+    `LEGACY_READ_ACTIONS`（Agent 详情 / 插件 / 技能 / 知识库 / 文件读），
+    并且 `AUTO_CREATE_ACCOUNT` 打开时访客自动注册即可拿到该 token。
+
+    本用例逐条锁住「普通账号一律 401/403」，是这条边界唯一的回归网。
+    """
     application_id = configured_application_id(app)
-    conversation_id = await create_owned_conversation(app, auth_token, application_id)
+    headers = auth_headers(auth_token)
+    probes = [
+        ("post", "/adp/DescribeConversation", {"ApplicationId": application_id, "Payload": {}}),
+        ("post", "/chat/message", {"ApplicationId": application_id, "Contents": [{"Type": "text", "Text": "hi"}]}),
+        ("post", "/chat/conversation/delete", {"ConversationId": "00000000-0000-0000-0000-000000000099"}),
+        ("post", "/file/parse", {"ApplicationId": application_id, "FileName": "a.txt", "FileType": "txt"}),
+        ("post", "/reference/detail", {"ApplicationId": application_id, "ReferenceIds": ["ref-1"]}),
+        ("post", "/feedback/rate", {"ApplicationId": application_id, "RecordId": "r-1", "Score": 1}),
+        ("post", "/share/create", {"ApplicationId": application_id, "ConversationId": "c-1", "RecordIds": []}),
+    ]
+    for method, path, payload in probes:
+        _, response = await getattr(app.asgi_client, method)(
+            path, headers=headers, data=json.dumps(payload)
+        )
+        assert response.status in {401, 403}, f"{path} 未拒绝普通账号: {response.status}"
+
+    for path in (
+        "/chat/messages?ConversationId=00000000-0000-0000-0000-000000000099",
+        "/chat/conversations",
+        "/file/download?ApplicationId=%s&WorkspaceId=workspace-1&Path=/workdir/a.txt" % application_id,
+    ):
+        _, response = await app.asgi_client.get(path, headers=headers)
+        assert response.status in {401, 403}, f"{path} 未拒绝普通账号: {response.status}"
+
+
+@pytest.mark.asyncio
+async def test_normal_account_payload_identity_is_replaced_by_server_scope(app, admin_auth_token, monkeypatch):
+    application_id = configured_application_id(app)
+    conversation_id = await create_owned_conversation(app, admin_auth_token, application_id)
     vendor_app = app.apps[application_id]
-    account_id = SessionToken.check(auth_token)["AccountId"]
+    account_id = SessionToken.check(admin_auth_token)["AccountId"]
     seen = {}
 
     async def fake_describe_conversation_message_list(
@@ -92,7 +144,7 @@ async def test_normal_account_payload_identity_is_replaced_by_server_scope(app, 
     )
     _, response = await app.asgi_client.post(
         "/adp/DescribeConversationMessageList",
-        headers=auth_headers(auth_token),
+        headers=auth_headers(admin_auth_token),
         data=json.dumps(
             {
                 "ApplicationId": application_id,
@@ -157,8 +209,8 @@ async def test_admin_channel_fallback_requires_explicit_channel_marker(app, admi
 
 
 @pytest.mark.asyncio
-async def test_legacy_routes_reject_forged_application_and_conversation(app, auth_token):
-    headers = auth_headers(auth_token)
+async def test_legacy_routes_reject_forged_application_and_conversation(app, admin_auth_token):
+    headers = auth_headers(admin_auth_token)
 
     _, application_response = await app.asgi_client.post(
         "/adp/DescribeConversationList",
@@ -194,6 +246,12 @@ async def test_legacy_routes_reject_forged_application_and_conversation(app, aut
 
 @pytest.mark.asyncio
 async def test_normal_account_cannot_claim_channel_or_custom_identity(app, auth_token):
+    """普通账号连门都进不来：直通 ADP 的路由现在一律要求管理员。
+
+    这里断言的仍是「普通账号不能冒充渠道身份 / 他人身份」，但拒绝点已从
+    payload 清洗前移到 `adp_admin_required`。管理员确实允许走渠道兜底，
+    因此本用例必须保持普通账号，否则会变成在测管理员的合法路径。
+    """
     application_id = configured_application_id(app)
     headers = auth_headers(auth_token)
     base_payload = {
@@ -218,9 +276,9 @@ async def test_normal_account_cannot_claim_channel_or_custom_identity(app, auth_
 
 
 @pytest.mark.asyncio
-async def test_file_parse_cannot_use_other_account_conversation(app, auth_token):
+async def test_file_parse_cannot_use_other_account_conversation(app, admin_auth_token):
     application_id = configured_application_id(app)
-    headers = auth_headers(auth_token)
+    headers = auth_headers(admin_auth_token)
     _, response = await app.asgi_client.post(
         "/file/parse",
         headers=headers,
@@ -424,7 +482,7 @@ async def test_admin_generic_forward_channel_fallback_requires_marker(
 @pytest.mark.asyncio
 async def test_normal_account_file_actions_bind_app_and_reject_path_traversal(
     app,
-    auth_token,
+    admin_auth_token,
     monkeypatch,
 ):
     application_id = configured_application_id(app)
@@ -444,7 +502,7 @@ async def test_normal_account_file_actions_bind_app_and_reject_path_traversal(
 
     _, valid_response = await app.asgi_client.post(
         "/adp/FetchFile",
-        headers=auth_headers(auth_token),
+        headers=auth_headers(admin_auth_token),
         data=json.dumps({"ApplicationId": application_id, "Payload": base_payload}),
     )
     assert valid_response.status == 200
@@ -452,7 +510,7 @@ async def test_normal_account_file_actions_bind_app_and_reject_path_traversal(
 
     _, forged_app_response = await app.asgi_client.post(
         "/adp/FetchFile",
-        headers=auth_headers(auth_token),
+        headers=auth_headers(admin_auth_token),
         data=json.dumps({
             "ApplicationId": application_id,
             "Payload": {**base_payload, "app_id": "attacker-app"},
@@ -462,7 +520,7 @@ async def test_normal_account_file_actions_bind_app_and_reject_path_traversal(
 
     _, traversal_response = await app.asgi_client.post(
         "/adp/ListDir",
-        headers=auth_headers(auth_token),
+        headers=auth_headers(admin_auth_token),
         data=json.dumps({
             "ApplicationId": application_id,
             "Payload": {**base_payload, "path": "/workdir/../secret"},
@@ -474,7 +532,7 @@ async def test_normal_account_file_actions_bind_app_and_reject_path_traversal(
 @pytest.mark.asyncio
 async def test_file_download_rejects_forged_app_id_and_keeps_valid_proxy_path(
     app,
-    auth_token,
+    admin_auth_token,
     monkeypatch,
 ):
     application_id = configured_application_id(app)
@@ -486,7 +544,7 @@ async def test_file_download_rejects_forged_app_id_and_keeps_valid_proxy_path(
         return b"file-body", "text/plain", "report.txt"
 
     monkeypatch.setattr(vendor_app, "download_file_content", fake_download_file_content)
-    headers = auth_headers(auth_token)
+    headers = auth_headers(admin_auth_token)
 
     _, forged_response = await app.asgi_client.get(
         "/file/download?ApplicationId=%s&AppId=attacker-app&WorkspaceId=workspace-1&Path=/workdir/report.txt"

@@ -4,7 +4,7 @@ from sanic.request.types import Request
 from sanic.exceptions import SanicException
 from sanic_restful_api import reqparse
 
-from router import check_login
+from router.legacy_security import adp_admin_required
 from core.share import CoreShareConversation
 from app_factory import TAgenticApp
 from router.legacy_security import require_configured_application
@@ -13,6 +13,7 @@ app: TAgenticApp = TAgenticApp.get_app()
 
 
 class ReferenceDetailApi(HTTPMethodView):
+    @adp_admin_required
     async def post(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ApplicationId", type=str, required=False, location="json")
@@ -36,7 +37,6 @@ class ReferenceDetailApi(HTTPMethodView):
         else:
             if not application_id:
                 raise SanicException("ApplicationId or ShareId is required", status_code=400)
-            check_login(request)
             account_id = request.ctx.account_id
 
         vendor_app = require_configured_application(app, application_id)

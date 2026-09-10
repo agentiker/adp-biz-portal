@@ -64,10 +64,6 @@
                                     :language="props.language"
                                     :i18n="chatItemI18n"
                                     :chat-i18n="i18n"
-                                    :mentionSkills="mentionSkills"
-                                    :mentionKnowledge="mentionKnowledge"
-                                    :mentionTools="mentionTools"
-                                    :mentionConnectors="mentionConnectors"
                                     :readonly="readonly"
                                     :hasSubsequentUserRecord="hasSubsequentUserRecord(index)"
                                     :historyQuestionnaireSkipped="isHistoryQuestionnaireSkipped(index)"
@@ -127,34 +123,17 @@
                     </div>
                 </TCard>
 
-                <Sender 
-                    ref="senderRef" 
-                    :isStreamLoad="isChatting" 
+                <Sender
+                    ref="senderRef"
+                    :isStreamLoad="isChatting"
                     :isMobile="isMobile"
                     :theme="theme"
                     :mode="props.mode"
                     :language="props.language"
                     :i18n="senderI18n"
-                    :useInternalRecord="useInternalRecord"
-                    :asrUrlApi="asrUrlApi"
-                    :enableVoiceInput="props.enableVoiceInput"
-                    :isUploading="props.isUploading"
-                    :channelInputDisabled="props.channelInputDisabled"
-                    :currentApplicationId="props.currentApplicationId"
-                    :enableSkills="props.enableSkills && agentDetailAvailable"
-                    :enableModelSelector="props.enableModelSelector && agentDetailAvailable"
-                    :enableConnector="props.enableConnector && agentDetailAvailable"
-                    :enableTools="props.enableTools && agentDetailAvailable"
-                    :enableKnowledge="props.enableKnowledge && agentDetailAvailable"
-                    :spaceId="props.skillsSpaceId"
-                    :skillsApplicationId="skillsAppId"
                     @stop="onStop"
                     @send="handleSend"
-                    @uploadFile="handleUploadFile"
-                    @startRecord="handleStartRecord"
-                    @stopRecord="handleStopRecord"
                     @message="handleMessage"
-                    @mention-list-update="onMentionListUpdate"
                 >
                     <!-- 快捷按钮：消息列表为空时显示，放在 Sender 内部编辑器上方，对齐 webim assist-quick-buttons -->
                     <template #quick-buttons>
@@ -177,8 +156,6 @@ import { Chat as TChat } from '@tdesign-vue-next/chat'
 import { Checkbox, Loading as TLoading, Card as TCard, Checkbox as TCheckbox, Divider as TDivider } from 'tdesign-vue-next'
 import type { Record } from '../../model/chat-v2'
 import type { Questionnaire } from '../../model/chat-v2'
-import type { NormalizedSkill, AgentSkillInfo } from '../../model/skills'
-import { normalizeSkill } from '../../composables/useSkills'
 import {
     hasSubsequentUserRecord as hasSubsequentUserRecordInList,
     isHistoryQuestionnaireSkipped as isHistoryQuestionnaireSkippedInList,
@@ -326,10 +303,6 @@ const skillsAppId = computed(() => {
     return val;
 });
 
-const { getAgentDetailByAppId } = useAgentStore();
-
-/** 标记 getAgentDetailByAppId 是否返回了有效数据，用于和外部传入的 enable* props 做 AND 运算 */
-const agentDetailAvailable = ref(false);
 
 // 调试：持续打印 currentApplicationId 变化
 watch(() => props.currentApplicationId, (v) => {
@@ -337,7 +310,7 @@ watch(() => props.currentApplicationId, (v) => {
 }, { immediate: true });
 
 const emit = defineEmits<{
-    (e: 'send', query: string, fileList: FileProps[], conversationId: string, applicationId: string): void;
+    (e: 'send', query: string, conversationId: string, applicationId: string): void;
     (e: 'stop'): void;
     (e: 'loadMore', conversationId: string, lastRecordId: string): void;
     (e: 'rate', conversationId: string, recordId: string, score: typeof ScoreValue[keyof typeof ScoreValue]): void;
@@ -360,118 +333,6 @@ const emit = defineEmits<{
  * 内部聊天列表（用于本地状态管理）
  */
 const internalChatList = ref<Record[]>([]);
-
-/**
- * mention 列表：由 Sender 在拉取 Skills/Tools/Knowledge 后 emit，
- * 透传给 ChatItem → MdContent，用于把消息文本中的 @skill:/@knowledgeBase:/@tool: 还原为蓝色 chip
- */
-const mentionSkills = ref<NormalizedSkill[]>([]);
-const mentionKnowledge = ref<NormalizedSkill[]>([]);
-const mentionTools = ref<NormalizedSkill[]>([]);
-const mentionConnectors = ref<NormalizedSkill[]>([]);
-
-/** Sender mention 列表更新事件处理 */
-function onMentionListUpdate(payload: {
-    skills: NormalizedSkill[];
-    knowledgeBase?: NormalizedSkill[];
-    tools: NormalizedSkill[];
-    connectors: NormalizedSkill[];
-}) {
-    // eslint-disable-next-line no-console
-    console.log('[Chat/Index] onMentionListUpdate received',
-        'skills:', (payload.skills || []).length,
-        'knowledge:', (payload.knowledgeBase || []).length,
-        'tools:', (payload.tools || []).length,
-        'connectors:', (payload.connectors || []).length);
-    mentionSkills.value = payload.skills || [];
-    mentionKnowledge.value = payload.knowledgeBase || [];
-    mentionTools.value = payload.tools || [];
-    mentionConnectors.value = payload.connectors || [];
-}
-
-/**
- * 独立拉取 mention 数据（标准/claw 両モード共通）
- * Sender の Skills ボタン表示に関わらず、ロードすれば使えるように
- */
-async function refreshMentionLists() {
-    const appId = skillsAppId.value;
-    if (!appId) return;
-    try {
-        const result = await getAgentDetailByAppId(appId);
-        // 请求返回后，如果应用 ID 已经变化，丢弃过期结果
-        if (skillsAppId.value !== appId) return;
-        if (!result) {
-            agentDetailAvailable.value = false;
-            return;
-        }
-        agentDetailAvailable.value = true;
-        // skills
-        mentionSkills.value = ((result.skills || []) as AgentSkillInfo[])
-            .filter((s) => !!s.DisplayName)
-            .map(normalizeSkill);
-        // tools / connectors（Sender.vue と同様の解析ロジック）
-        const plugins = result.plugins || [];
-        const pluginClassMap = new Map<string, number>();
-        for (const p of plugins) {
-            const pid = (p.PluginId || p.plugin_id || '') as string;
-            if (pid) pluginClassMap.set(pid, (p.PluginClass ?? p.plugin_class ?? 0) as number);
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const allTools = (result.tools || []) as any[];
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const parseRaw = (t: any) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const cfg = (t.Config || t.config || {}) as any;
-            const raw = String(t.tool_name || t.ToolName || t.name || t.Name || cfg.description || cfg.Description || '');
-            const idx = raw.lastIndexOf('/');
-            return idx > -1 ? { displayName: raw.slice(0, idx), name: raw.slice(idx + 1) } : { displayName: raw, name: raw };
-        };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const getPluginId = (t: any) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const cfg = (t.Config || t.config || {}) as any;
-            return (cfg.plugin_id || cfg.pluginid || cfg.PluginId || '') as string;
-        };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const toolPluginName = (t: any) =>
-            String(t.plugin_name || t.PluginName || t.PluginDisplayName || t.plugin_display_name || '');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const buildItem = (t: any) => {
-            const { displayName, name } = parseRaw(t);
-            const pluginName = toolPluginName(t);
-            let finalDisplayName = displayName;
-            if (!displayName || displayName === name) {
-                finalDisplayName = (pluginName && pluginName !== name) ? `${pluginName}/${name}` : (displayName || name);
-            }
-            return {
-                id: (t.tool_id || t.ToolId || '') as string,
-                name: name || ((t.tool_id || t.ToolId || '') as string),
-                displayName: finalDisplayName || displayName || name || '',
-                iconUrl: (t.IconUrl || t.icon_url || '') as string,
-            } as NormalizedSkill;
-        };
-        mentionConnectors.value = allTools
-            .filter((t) => pluginClassMap.get(getPluginId(t)) === 1)
-            .map(buildItem);
-        mentionTools.value = allTools
-            .filter((t) => pluginClassMap.get(getPluginId(t)) === 0)
-            .map(buildItem);
-    } catch (e) {
-        agentDetailAvailable.value = false;
-        // eslint-disable-next-line no-console
-        console.warn('[Chat/Index] refreshMentionLists failed:', e);
-    }
-    // eslint-disable-next-line no-console
-    console.log('[Chat/Index] refreshMentionLists done',
-        'skills:', mentionSkills.value.length,
-        'tools:', mentionTools.value.length,
-        'connectors:', mentionConnectors.value.length);
-}
-
-/** skillsAppId 変化時に mention データを独立取得 */
-watch(skillsAppId, (val) => {
-    if (val) refreshMentionLists();
-}, { immediate: true });
 
 /**
  * 计算属性：实际使用的聊天列表
@@ -647,48 +508,10 @@ onUnmounted(() => {
 })
 
 /**
- * 把 PromptContent 中的 @skill:xxx / @tool:xxx / @knowledgeBase:id:name
- * 内联标记转为 wangEditor 可识别的 mention HTML 标签。
- */
-const buildPromptInsertHtml = (text: string): string => {
-    if (!text) return '';
-    let html = text
-        // 先转义 HTML 特殊字符，防止 XSS
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        // @skill:xxx → mention HTML
-        .replace(
-            /@skill:([\w-]+)/g,
-            (_match, skillId) =>
-                `<span data-w-e-type="mention" data-mention-type="skills" data-mention-id="${skillId}" data-mention-name="${skillId}" class="at-mention-tag" contenteditable="false"><span class="at-mention-tag__text">@${skillId}</span></span>`
-        )
-        // @tool:xxx → mention HTML（icon modifier = "plugins"）
-        .replace(
-            /@tool:([\w-]+)/g,
-            (_match, toolId) =>
-                `<span data-w-e-type="mention" data-mention-type="tools" data-mention-id="${toolId}" data-mention-name="${toolId}" class="at-mention-tag" contenteditable="false"><span class="at-mention-tag__text">@${toolId}</span></span>`
-        )
-        // @knowledgeBase:id:name → mention HTML
-        .replace(
-            /@knowledgeBase:([\w-]+):([^@\s]+)/g,
-            (_match, kbId, kbName) =>
-                `<span data-w-e-type="mention" data-mention-type="knowledge" data-mention-id="${kbId}" data-mention-name="${kbName}" data-mention-display-name="${kbName}" class="at-mention-tag" contenteditable="false"><span class="at-mention-tag__text">@${kbName}</span></span>`
-        )
-        // 换行转 <br>
-        .replace(/\n/g, '<br/>');
-    return html;
-};
-
-/**
- * 处理快捷按钮建议选择：将建议文本（含 @skill/@tool/@knowledgeBase 标记）
- * 转为编辑器 mention HTML 后填入输入框，不自动发送
+ * 处理快捷按钮建议选择：把建议文本填入输入框，不自动发送
  */
 const onSelectSuggestion = (promptContent: string) => {
-    if (senderRef.value) {
-        const insertHtml = buildPromptInsertHtml(promptContent);
-        senderRef.value.changeSenderVal(insertHtml, []);
-    }
+    senderRef.value?.changeSenderVal(promptContent);
 }
 
 /**
@@ -779,21 +602,21 @@ const notifyComplete = () => {
 /**
  * 发送消息
  */
-const inputEnter = function (queryVal: string | undefined, fileList?: FileProps[]) {
+const inputEnter = function (queryVal: string | undefined) {
     if (props.isChatting) {
         return
     }
     if (!queryVal) return
-    
-    emit('send', queryVal, fileList || [], props.chatId, props.currentApplicationId);
-    senderRef.value && senderRef.value.changeSenderVal('', [])
+
+    emit('send', queryVal, props.chatId, props.currentApplicationId);
+    senderRef.value?.changeSenderVal('')
 }
 
 /**
  * 处理发送
  */
-const handleSend = (value: string, fileList: FileProps[]) => {
-    inputEnter(value, fileList);
+const handleSend = (value: string) => {
+    inputEnter(value);
 }
 
 const extractRecordText = (record: Record): string => {

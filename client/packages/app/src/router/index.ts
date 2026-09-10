@@ -68,57 +68,27 @@ const router = createRouter({
       component: () => import('@/pages/Admin.vue'),
     },
     {
-      // 渠道会话：/:applicationId/channel/:conversationId
-      // 渠道（访客）会话不落地本地 chat_conversation 表，权威源在 CAPI DescribeConversationList。
-      // 通过 URL 里的 /channel/ 段显式区分：
-      //   1) 刷新时前端可直接判定为渠道会话，跳过普通 /chat/messages 首屏拉取
-      //   2) 侧栏点击渠道会话时 router.push 到该变体，保持刷新可复原
-      // 注意：必须放在通用 home 路由之前，确保 /channel/ 段优先匹配（vue-router 从上到下匹配）。
-      path: '/:applicationId/channel/:conversationId',
-      name: 'home-channel',
-      component: () => import('@/pages/Home.vue'),
-    },
-    {
-      // 定时任务会话：/:applicationId/timertask/:conversationId?triggerId=xxx
-      // 定时任务（AppTrigger）触发的会话与渠道会话同源（不在本地 chat_conversation 表，走 CAPI）。
-      // 通过 URL 里的 /timertask/ 段显式区分：
-      //   1) 刷新时前端判定为定时任务会话，走 DescribeConversationMessageList 拉首屏
-      //   2) 右侧默认展开定时任务执行记录面板（sidebar 模式，对齐企微机器人体验）
-      //   3) query.triggerId 用于刷新后自动定位到具体触发器详情
-      // 必须放在通用 home 路由之前。
-      path: '/:applicationId/timertask/:conversationId',
-      name: 'home-timertask',
-      component: () => import('@/pages/Home.vue'),
-    },
-    {
-      // 统一层级结构：/:applicationId?/:conversationId?
-      // 例：/                       -> 未选应用
-      //     /appA                   -> 选中应用 appA，无会话
-      //     /appA/convX             -> 应用 appA 下的普通会话 convX
-      path: '/:applicationId?/:conversationId?',
-      name: 'home',
-      component: () => import('@/pages/Home.vue'),
-    },
-    {
       path: '/login',
       name: 'login',
       component: () => import('@/pages/Login.vue'),
     },
     {
-      path: '/share/:shareId?',
-      name: 'share',
-      meta:{
-        unauthorized: true
-      },
-      component: () => import('@/pages/Share.vue'),
-    },
-    {
+      // 免登录只读分享结果页：微信服务号图文卡片点开的目标页，保留公开可访问。
+      // 必须放在下方 catch-all 之前，否则会被 /:pathMatch 抢先匹配并重定向到 login。
       path: '/shared',
       name: 'shared-result',
       meta: {
         unauthorized: true,
       },
       component: () => import('@/pages/SharedResult.vue'),
+    },
+    {
+      // 旧 ADP 控制台聊天页（Home）与旧公开分享页（Share）已下线，平台只保留
+      // /admin/adp-chat 一个 ADP agent chat 调试入口和上面的 /shared 只读页。
+      // 任何其它未匹配路径统一交给 login 路由，由下方 beforeEach 按 canManage
+      // 落到 admin 或 portal；未登录则停在登录页。catch-all 必须是最后一条。
+      path: '/:pathMatch(.*)*',
+      redirect: { name: 'login' },
     },
   ],
 })
@@ -127,6 +97,8 @@ router.beforeEach(
   async (to: RouteLocationNormalized, _from: RouteLocationNormalized) => {
     const platformRoute = to.path === '/portal' || to.path.startsWith('/portal/') || to.path === '/admin' || to.path.startsWith('/admin/')
     const platformStore = usePlatformStore()
+
+    // 免登录路由（如 /shared 只读结果页）直接放行，不走平台鉴权。
     if (to.meta.unauthorized) {
       return
     }
@@ -162,7 +134,8 @@ router.beforeEach(
       return
     }
 
-    if (!isLoggedIn()) return { name: 'login' }
+    // 到这里的都是非平台、非登录、非免登录路由；旧 Home/Share 页下线后已无此类
+    // 具名路由，未匹配路径都会命中 catch-all 重定向到 login，故无需兜底分支。
     return
   },
 )
