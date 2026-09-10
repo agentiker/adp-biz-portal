@@ -28,13 +28,10 @@ import aiohttp
 from app_factory import create_app_with_configs
 from core.channel_credentials import load_active_channel_credentials
 from core.migration import Migration
-from integrations.channels.sender_registry import (
-    CREDENTIAL_CORP_ID_KEYS,
-    _credential_fields,
-    _first,
-)
+from integrations.channels.sender_registry import _credential_fields, _first
 from integrations.channels.wecom_bot.adapter import WECOM_BOT
 from integrations.channels.wecom_bot.ws_client import (
+    DEFAULT_WS_URL,
     WsConnection,
     WecomBotWsConfig,
     WecomBotWsGateway,
@@ -45,13 +42,12 @@ from worker import build_agent_provider
 
 logger = logging.getLogger(__name__)
 
-# Credential field aliases for the WeCom smart robot.
+# Credential field aliases for the WeCom smart robot. WS long-connection needs
+# only bot_id + secret; token/corpId/encodingAESKey are for the webhook/media
+# path and are not required here.
 CREDENTIAL_BOT_ID_KEYS = ("botId", "bot_id", "botid")
 CREDENTIAL_BOT_SECRET_KEYS = ("secret", "botSecret", "bot_secret")
-CREDENTIAL_TOKEN_KEYS = ("token", "callbackToken", "callback_token")
-CREDENTIAL_AES_KEYS = ("encodingAESKey", "encoding_aes_key", "aesKey", "encodingAeskey")
 
-DEFAULT_WS_URL = "wss://openws.work.weixin.qq.com/aibot/callback"
 # Inbound frames are small; keep headroom without inviting a huge-frame DoS.
 WS_MAX_MSG_SIZE = 4 * 1024 * 1024
 
@@ -103,20 +99,13 @@ def build_configs(credentials: list[tuple[str, str]]) -> list[WecomBotWsConfig]:
         fields = _credential_fields(blob)
         bot_id = _first(fields, CREDENTIAL_BOT_ID_KEYS)
         secret = _first(fields, CREDENTIAL_BOT_SECRET_KEYS)
-        corp_id = _first(fields, CREDENTIAL_CORP_ID_KEYS)
-        token = _first(fields, CREDENTIAL_TOKEN_KEYS)
-        aes_key = _first(fields, CREDENTIAL_AES_KEYS)
-        if not (bot_id and secret and corp_id and token and aes_key):
+        if not (bot_id and secret):
             logger.warning(
-                "wecom_bot instance %s is missing botId/secret/corpId/token/encodingAESKey; skipping",
-                instance_id,
+                "wecom_bot instance %s is missing botId/secret; skipping", instance_id
             )
             continue
         configs.append(
-            WecomBotWsConfig(
-                channel_instance_id=instance_id, bot_id=bot_id, secret=secret,
-                corp_id=corp_id, token=token, encoding_aes_key=aes_key,
-            )
+            WecomBotWsConfig(channel_instance_id=instance_id, bot_id=bot_id, secret=secret)
         )
     return configs
 
