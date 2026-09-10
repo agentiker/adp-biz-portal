@@ -62,6 +62,21 @@ services:
         condition: service_completed_successfully
     command: ["python", "worker.py", "--idle-seconds", "1"]
 
+  wecom-ws-gateway:
+    image: ${APP_IMAGE:-adp-chat-client:local}
+    restart: unless-stopped
+    env_file:
+      - ${COMPOSE_ENV_FILE:-./.env}
+    environment:
+      PGSQL_HOST: postgres
+      PGSQL_PORT: 5432
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # Holds an outbound WebSocket per configured wecom_bot instance and streams
+    # replies inline; no inbound port. Idle no-op when no bot is configured.
+    command: ["python", "wecom_ws_gateway.py"]
+
   reverse-proxy:
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
     restart: unless-stopped
