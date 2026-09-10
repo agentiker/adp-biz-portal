@@ -32,12 +32,27 @@ const submitting = ref(false)
 const activeCredential = ref<ChannelCredential | null>(null)
 const identityActionId = ref<string | null>(null)
 const formError = ref('')
-const credentialForm = ref({ channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' })
+const credentialChannel = ref<'wechat_official_account' | 'wechat_customer_service' | 'wecom_bot'>('wechat_official_account')
+const credentialForm = ref({
+  channelInstanceId: '',
+  token: '', appId: '', appSecret: '', encodingAesKey: '',
+  corpId: '', corpSecret: '', openKfId: '',
+  botId: '', secret: '',
+})
 const rotateToken = ref('')
 const modalRef = ref<HTMLElement | null>(null)
 const previouslyFocused = ref<HTMLElement | null>(null)
 
-const activeWechatCredentials = computed(() => credentials.value.filter((item) => item.channel === 'wechat_official_account' && item.status === 'active'))
+const activeByChannel = (channel: string) => credentials.value.filter((item) => item.channel === channel && item.status === 'active')
+const activeWechatCredentials = computed(() => activeByChannel('wechat_official_account'))
+const activeKfCredentials = computed(() => activeByChannel('wechat_customer_service'))
+const activeBotCredentials = computed(() => activeByChannel('wecom_bot'))
+const emptyCredentialForm = () => ({
+  channelInstanceId: '',
+  token: '', appId: '', appSecret: '', encodingAesKey: '',
+  corpId: '', corpSecret: '', openKfId: '',
+  botId: '', secret: '',
+})
 const channelCards = computed(() => [
   {
     id: 'web',
@@ -58,17 +73,17 @@ const channelCards = computed(() => [
   {
     id: 'wechat_customer_service',
     name: '微信客服',
-    note: '通知同步、游标和客服回复协议待开发',
-    status: '待接入',
-    tone: 'pending',
+    note: activeKfCredentials.value.length ? `${activeKfCredentials.value.length} 个启用实例，等待真实账号联调` : '通知同步 + 游标拉取 + 单条答案/图文卡片已就绪，尚未配置实例',
+    status: activeKfCredentials.value.length ? '已配置' : '未配置',
+    tone: activeKfCredentials.value.length ? 'configured' : 'neutral',
     icon: UserIcon,
   },
   {
     id: 'wecom_bot',
     name: '企业微信机器人',
-    note: '长连接或 HTTPS 回调模式待确认',
-    status: '待接入',
-    tone: 'pending',
+    note: activeBotCredentials.value.length ? `${activeBotCredentials.value.length} 个启用实例，等待真实 BotId/Secret 联调` : 'WS 长连接真流式已就绪，尚未配置实例',
+    status: activeBotCredentials.value.length ? '已配置' : '未配置',
+    tone: activeBotCredentials.value.length ? 'configured' : 'neutral',
     icon: ApiIcon,
   },
 ])
@@ -112,8 +127,13 @@ const loadData = async () => {
   }
 }
 
-const openCredential = () => {
-  credentialForm.value = { channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
+const CONFIGURABLE_CHANNELS = ['wechat_official_account', 'wechat_customer_service', 'wecom_bot'] as const
+const isConfigurableChannel = (id: string) => (CONFIGURABLE_CHANNELS as readonly string[]).includes(id)
+const openCredential = (channel: string = 'wechat_official_account') => {
+  credentialChannel.value = isConfigurableChannel(channel)
+    ? (channel as typeof credentialChannel.value)
+    : 'wechat_official_account'
+  credentialForm.value = emptyCredentialForm()
   formError.value = ''
   modal.value = 'credential'
 }
@@ -174,24 +194,51 @@ watch(modal, async (value, previous) => {
   }
 })
 
+const trimmed = (value: string) => value.trim()
+const withOptional = (base: Record<string, string>, extras: Record<string, string>) => {
+  const out: Record<string, string> = { ...base }
+  for (const [key, value] of Object.entries(extras)) {
+    if (value.trim()) out[key] = value.trim()
+  }
+  return out
+}
+
+const buildCredential = (): Record<string, string> => {
+  const f = credentialForm.value
+  if (credentialChannel.value === 'wecom_bot') {
+    return { botId: trimmed(f.botId), secret: trimmed(f.secret) }
+  }
+  if (credentialChannel.value === 'wechat_customer_service') {
+    return withOptional(
+      { corpId: trimmed(f.corpId) },
+      { token: f.token, encodingAESKey: f.encodingAesKey, corpSecret: f.corpSecret, openKfId: f.openKfId },
+    )
+  }
+  return withOptional(
+    { token: trimmed(f.token) },
+    { appId: f.appId, appSecret: f.appSecret, encodingAesKey: f.encodingAesKey },
+  )
+}
+
+const credentialSuccessToast = () => ({
+  wecom_bot: '企业微信机器人实例已配置，启动 WS 网关即可订阅（本地：python wecom_ws_gateway.py）',
+  wechat_customer_service: '微信客服实例已配置，下一步请在企业微信后台填写回调地址',
+  wechat_official_account: '微信服务号实例已配置，下一步请在微信后台填写回调地址',
+}[credentialChannel.value])
+
 const submitCredential = async () => {
   submitting.value = true
   formError.value = ''
   try {
     await createChannelCredential({
-      channel: 'wechat_official_account',
+      channel: credentialChannel.value,
       channelInstanceId: credentialForm.value.channelInstanceId.trim(),
-      credential: JSON.stringify({
-        token: credentialForm.value.token,
-        ...(credentialForm.value.appId.trim() ? { appId: credentialForm.value.appId.trim() } : {}),
-        ...(credentialForm.value.appSecret.trim() ? { appSecret: credentialForm.value.appSecret.trim() } : {}),
-        ...(credentialForm.value.encodingAesKey.trim() ? { encodingAesKey: credentialForm.value.encodingAesKey.trim() } : {}),
-      }),
+      credential: JSON.stringify(buildCredential()),
     })
     modal.value = null
-    credentialForm.value = { channelInstanceId: '', token: '', appId: '', appSecret: '', encodingAesKey: '' }
+    credentialForm.value = emptyCredentialForm()
     await loadData()
-    setToast('微信服务号实例已配置，下一步请在微信后台填写回调地址')
+    setToast(credentialSuccessToast())
   } catch (error) {
     formError.value = errorMessage(error, '渠道凭据保存失败。')
   } finally {
@@ -244,9 +291,16 @@ const revokeIdentity = async (item: ChannelIdentity) => {
   }
 }
 
-const callbackUrl = (item: ChannelCredential | null) => item
-  ? `${window.location.origin}/api/v1/channels/wechat-official-account/${encodeURIComponent(item.channelInstanceId)}/callback`
-  : ''
+const CALLBACK_PATH: Record<string, string> = {
+  wechat_official_account: 'wechat-official-account',
+  wechat_customer_service: 'wechat-kf',
+}
+const callbackUrl = (item: ChannelCredential | null) => {
+  if (!item) return ''
+  const path = CALLBACK_PATH[item.channel]
+  if (!path) return ''  // wecom_bot is an outbound WS long-connection, no callback URL
+  return `${window.location.origin}/api/v1/channels/${path}/${encodeURIComponent(item.channelInstanceId)}/callback`
+}
 
 const copyCallbackUrl = async (item: ChannelCredential) => {
   try {
@@ -258,7 +312,7 @@ const copyCallbackUrl = async (item: ChannelCredential) => {
 }
 
 const formatTime = (value?: string | null) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
-const channelLabel = (value: string) => ({ wechat_official_account: '微信服务号', web: 'Web 官网' } as Record<string, string>)[value] || value
+const channelLabel = (value: string) => ({ wechat_official_account: '微信服务号', wechat_customer_service: '微信客服', wecom_bot: '企业微信机器人', web: 'Web 官网' } as Record<string, string>)[value] || value
 const credentialStatus = (item: ChannelCredential) => item.status === 'active' ? '已配置' : '已停用'
 const identityStatus = (value: ChannelIdentity['status']) => ({ active: '已确认', pending: '待确认', revoked: '已撤销', expired: '已过期' } as Record<string, string>)[value] || value
 // A binding awaiting channel confirmation has no external identity yet.
@@ -285,7 +339,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
     </div>
     <div class="channel-intro-actions">
       <button class="channel-button channel-button--secondary" :disabled="loading" @click="loadData"><RefreshIcon />{{ loading ? '刷新中…' : '刷新' }}</button>
-      <button class="channel-button channel-button--primary" @click="openCredential"><LinkIcon />接入微信服务号</button>
+      <button class="channel-button channel-button--primary" @click="openCredential()"><LinkIcon />接入微信服务号</button>
     </div>
   </section>
 
@@ -296,7 +350,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
       <span class="channel-card-icon"><component :is="item.icon" /></span>
       <div class="channel-card-main"><strong>{{ item.name }}</strong><p>{{ item.note }}</p></div>
       <span class="channel-badge" :class="`channel-badge--${item.tone}`"><i></i>{{ item.status }}</span>
-      <button v-if="item.id === 'wechat_official_account'" class="channel-text-button" @click="openGuide()">联调说明</button>
+      <div class="channel-card-actions">
+        <button v-if="isConfigurableChannel(item.id)" class="channel-text-button" @click="openCredential(item.id)">配置</button>
+        <button v-if="item.id === 'wechat_official_account'" class="channel-text-button" @click="openGuide()">联调说明</button>
+      </div>
     </article>
   </section>
 
@@ -344,15 +401,34 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleModalKeydown))
 
   <div v-if="modal" class="channel-modal-backdrop" @click.self="closeModal">
     <form v-if="modal === 'credential'" ref="modalRef" class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title" @submit.prevent="submitCredential">
-      <header><div><p>微信服务号</p><h2 id="channel-modal-title">配置回调实例</h2></div><button type="button" aria-label="关闭" :disabled="submitting" @click="closeModal"><CloseIcon /></button></header>
-      <div class="channel-modal-notice"><LockOnIcon /><span>支持明文和安全模式 XML 回调。凭据会加密保存，提交后不会再次显示。</span></div>
-      <label>渠道实例 ID<input v-model="credentialForm.channelInstanceId" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" placeholder="例如 oa-customer-service" /><small>用于生成唯一回调地址，保存后不可修改。</small></label>
-      <label>回调 Token<input v-model="credentialForm.token" required minlength="3" maxlength="512" type="password" autocomplete="new-password" placeholder="与微信后台填写的 Token 一致" /></label>
-      <label>微信 AppID（安全模式必填）<input v-model="credentialForm.appId" maxlength="128" autocomplete="off" placeholder="例如 wxxxxxxxxxxxxxxxx" /></label>
-      <label>微信 AppSecret（发送消息时使用）<input v-model="credentialForm.appSecret" maxlength="512" type="password" autocomplete="new-password" /></label>
-      <label>EncodingAESKey（安全模式）<input v-model="credentialForm.encodingAesKey" maxlength="44" autocomplete="off" placeholder="微信后台生成的 43 位密钥" /><small>填写 AppID 和 EncodingAESKey 后，回调地址可选择安全模式；只填 Token 则保持明文兼容。</small></label>
+      <header><div><p>{{ channelLabel(credentialChannel) }}</p><h2 id="channel-modal-title">配置渠道实例</h2></div><button type="button" aria-label="关闭" :disabled="submitting" @click="closeModal"><CloseIcon /></button></header>
+      <div class="channel-modal-notice"><LockOnIcon /><span>凭据会加密保存，提交后不会再次显示。</span></div>
+      <label>渠道实例 ID<input v-model="credentialForm.channelInstanceId" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" placeholder="例如 oa-customer-service" /><small>渠道级唯一标识，保存后不可修改。</small></label>
+
+      <template v-if="credentialChannel === 'wechat_official_account'">
+        <label>回调 Token<input v-model="credentialForm.token" required minlength="3" maxlength="512" type="password" autocomplete="new-password" placeholder="与微信后台填写的 Token 一致" /></label>
+        <label>微信 AppID（安全模式必填）<input v-model="credentialForm.appId" maxlength="128" autocomplete="off" placeholder="例如 wxxxxxxxxxxxxxxxx" /></label>
+        <label>微信 AppSecret（发送消息时使用）<input v-model="credentialForm.appSecret" maxlength="512" type="password" autocomplete="new-password" /></label>
+        <label>EncodingAESKey（安全模式）<input v-model="credentialForm.encodingAesKey" maxlength="44" autocomplete="off" placeholder="微信后台生成的 43 位密钥" /><small>填写 AppID 和 EncodingAESKey 后回调可用安全模式；只填 Token 则保持明文兼容。</small></label>
+      </template>
+
+      <template v-else-if="credentialChannel === 'wechat_customer_service'">
+        <label>企业 CorpID<input v-model="credentialForm.corpId" required maxlength="128" autocomplete="off" placeholder="企业微信的 CorpID" /></label>
+        <label>回调 Token<input v-model="credentialForm.token" maxlength="512" type="password" autocomplete="new-password" placeholder="与企业微信回调配置一致" /></label>
+        <label>EncodingAESKey<input v-model="credentialForm.encodingAesKey" maxlength="44" autocomplete="off" placeholder="43 位回调加密密钥" /></label>
+        <label>客服 Secret（拉取/发送消息）<input v-model="credentialForm.corpSecret" maxlength="512" type="password" autocomplete="new-password" /></label>
+        <label>Open KfID（可选，限定客服账号）<input v-model="credentialForm.openKfId" maxlength="128" autocomplete="off" placeholder="留空则不限定" /></label>
+        <small>CorpID + Token + EncodingAESKey 用于接收回调；CorpID + Secret 用于拉取消息和发送回复。</small>
+      </template>
+
+      <template v-else-if="credentialChannel === 'wecom_bot'">
+        <label>BotID<input v-model="credentialForm.botId" required maxlength="128" autocomplete="off" placeholder="智能机器人的 BotID" /></label>
+        <label>Secret<input v-model="credentialForm.secret" required maxlength="512" type="password" autocomplete="new-password" placeholder="长连接订阅 Secret" /></label>
+        <small>WS 长连接真流式，只需 BotID + Secret；配置后启动 WS 网关即可订阅（无需公网回调）。</small>
+      </template>
+
       <div v-if="formError" class="channel-form-error"><ErrorCircleIcon />{{ formError }}</div>
-      <footer><button type="button" class="channel-button channel-button--secondary" :disabled="submitting" @click="closeModal">取消</button><button type="submit" class="channel-button channel-button--primary" :disabled="submitting">{{ submitting ? '保存中…' : '保存并生成地址' }}</button></footer>
+      <footer><button type="button" class="channel-button channel-button--secondary" :disabled="submitting" @click="closeModal">取消</button><button type="submit" class="channel-button channel-button--primary" :disabled="submitting">{{ submitting ? '保存中…' : '保存实例' }}</button></footer>
     </form>
 
     <form v-else-if="modal === 'rotate'" ref="modalRef" class="channel-modal" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title" @submit.prevent="submitRotate">
