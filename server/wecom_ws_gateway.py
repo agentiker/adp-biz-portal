@@ -50,6 +50,9 @@ CREDENTIAL_BOT_SECRET_KEYS = ("secret", "botSecret", "bot_secret")
 
 # Inbound frames are small; keep headroom without inviting a huge-frame DoS.
 WS_MAX_MSG_SIZE = 4 * 1024 * 1024
+# When no bot is configured, idle this long before re-checking (avoids a
+# crash-loop under restart:unless-stopped and picks up a newly added bot).
+NO_CONFIG_RECHECK_SECONDS = 60
 
 
 def ws_url() -> str:
@@ -117,11 +120,23 @@ async def run_gateway(args: argparse.Namespace) -> None:
     try:
         async with sessionmaker() as db:
             await Migration.validate_startup(db)
-            credentials = await load_active_channel_credentials(db, channel=WECOM_BOT)
-        configs = build_configs(credentials)
-        if not configs:
-            logger.warning("no active wecom_bot channel instances configured; nothing to serve")
-            return
+
+        async def _load() -> list[WecomBotWsConfig]:
+            async with sessionmaker() as db:
+                return build_configs(await load_active_channel_credentials(db, channel=WECOM_BOT))
+
+        configs = await _load()
+        while not configs:
+            if max_sessions is not None:
+                # Bounded run (smoke test): don't block when nothing is configured.
+                logger.warning("no active wecom_bot channel instances configured; nothing to serve")
+                return
+            # Long-running service: idle and re-check instead of exiting (which
+            # would crash-loop under restart:unless-stopped) so a newly added bot
+            # credential is picked up without a manual restart.
+            logger.warning("no active wecom_bot channel instances configured; re-checking in %ss", NO_CONFIG_RECHECK_SECONDS)
+            await asyncio.sleep(NO_CONFIG_RECHECK_SECONDS)
+            configs = await _load()
         provider = build_agent_provider()
         url = ws_url()
         async with aiohttp.ClientSession() as session:
