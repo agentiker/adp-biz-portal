@@ -23,21 +23,6 @@ import { PropsTable, EventsTable, SlotsTable, MethodsTable } from '@/components/
 </template>
 ```
 
-## html/react或其他框架中使用
-
-```html
-<div id="containerId"></div>
-<script>
-ADPChatComponent.ChatAppType.mount('#containerId', {
-  currentApplicationAvatar: '/avatar.png',
-  currentApplicationName: 'App Name',
-  currentApplicationGreeting: '你好，有什么可以帮助你的？',
-  currentApplicationOpeningQuestions: ['问题1', '问题2'],
-  onSelectQuestion: (question) => console.log('selected', question)
-})
-</script>
-```
-
 ## API
 
 <PropsTable data={[

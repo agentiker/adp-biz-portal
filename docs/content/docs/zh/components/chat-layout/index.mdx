@@ -7,7 +7,7 @@ import { PropsTable, EventsTable, SlotsTable, MethodsTable } from '@/components/
 
 # ADPChat 组件
 
-在 Vue/React 项目中使用 `ADPChat` 组件或 `ADPChatMounter` API 快速创建聊天界面。
+在 Vue 项目中使用 `ADPChat` 组件创建聊天界面。它是本组件库对外唯一的入口，平台管理端调试页 `/admin/adp-chat` 即通过它承载全部聊天能力。
 
 ## vue中使用
 
@@ -34,34 +34,6 @@ import 'adp-chat-component/dist/es/adp-chat-component.css'
 </script>
 ```
 
-## html/react或其他框架中使用
-
-使用 `ADPChatMounter` 可以在任何框架中快速挂载聊天组件：
-
-```html
-<div id="containerId"></div>
-<script>
-ADPChatComponent.ADPChat.mount('#containerId', {
-  theme: 'light',
-  apiConfig: {
-    baseURL: '/api',
-    apiDetailConfig: {
-      applicationListApi: '/applications',
-      conversationListApi: '/conversations',
-    }
-  }
-})
-</script>
-```
-
-### ADPChatMounter 方法
-
-| 方法 | 参数 | 返回值 | 说明 |
-| --- | --- | --- | --- |
-| `mount` | `(selector: string, options: ADPChatProps)` | `string` | 挂载组件，返回实例 ID |
-| `update` | `(instanceId: string, options: Partial<ADPChatProps>)` | `void` | 更新组件配置 |
-| `unmount` | `(instanceId: string)` | `void` | 卸载组件 |
-
 ## API
 
 ### Props
@@ -74,7 +46,6 @@ ADPChatComponent.ADPChat.mount('#containerId', {
   { name: 'logoTitle', type: 'string', default: "''", description: 'Logo 标题' },
   { name: 'isSidePanelOverlay', type: 'boolean', default: 'true', description: '侧边栏是否使用overlay模式（覆盖内容区域）' },
   { name: 'showCloseButton', type: 'boolean', default: 'true', description: '是否显示关闭按钮' },
-  { name: 'showOverlayButton', type: 'boolean', default: 'true', description: '是否显示浮层切换按钮' },
   { name: 'maxAppLen', type: 'number', default: '4', description: '最大应用显示数量' },
   { name: 'applications', type: 'Application[]', default: '[]', description: '应用列表' },
   { name: 'currentApplication', type: 'Application', description: '当前选中的应用' },
@@ -86,7 +57,6 @@ ADPChatComponent.ADPChat.mount('#containerId', {
   { name: 'isChatting', type: 'boolean', default: 'false', description: '是否正在聊天中' },
   { name: 'aiWarningText', type: 'string', default: "'内容由AI生成，仅供参考'", description: 'AI警告文本' },
   { name: 'languageOptions', type: 'LanguageOption[]', default: '中英文', description: '语言选项列表' },
-  { name: 'sideI18n', type: 'SideI18n', description: '侧边栏国际化文本' },
   { name: 'chatI18n', type: 'ChatI18n', description: '聊天国际化文本' },
   { name: 'chatItemI18n', type: 'ChatItemI18n', description: 'ChatItem 国际化文本' },
   { name: 'senderI18n', type: 'SenderI18n', description: 'Sender 国际化文本' },
@@ -110,9 +80,6 @@ ADPChatComponent.ADPChat.mount('#containerId', {
   { name: 'rate', params: '(conversationId, recordId, score)', description: '评分' },
   { name: 'share', params: '(conversationId, applicationId, recordIds)', description: '分享' },
   { name: 'copy', params: '(rowtext, content, type)', description: '复制，rowtext为渲染后的纯文本，content为原始markdown' },
-  { name: 'uploadFile', params: 'File[]', description: '上传文件' },
-  { name: 'startRecord', description: '开始录音' },
-  { name: 'stopRecord', description: '停止录音' },
   { name: 'message', params: '(code: MessageCode, message: string)', description: '消息提示，code 为消息码常量' },
   { name: 'conversationChange', params: 'conversationId', description: '会话变化' },
   { name: 'dataLoaded', params: "(type: 'applications' | 'conversations' | 'chatList' | 'user' | 'systemConfig', data)", description: '数据加载完成' },
@@ -121,9 +88,6 @@ ADPChatComponent.ADPChat.mount('#containerId', {
 ### Slots
 
 <SlotsTable data={[
-  { name: 'sider-logo', description: '侧边栏 Logo 区域，外层传入时显示外层内容，否则显示默认 LogoArea（需要 logoUrl 或 logoTitle）' },
-  { name: 'header-overlay-content', description: '头部浮层按钮区域，外层传入时显示外层内容，否则显示默认浮层图标（需要 showOverlayButton 为 true）' },
-  { name: 'header-close-content', description: '头部关闭按钮区域，外层传入时显示外层内容，否则显示默认关闭图标（需要 showCloseButton 为 true）' },
 ]} />
 
 ### Methods

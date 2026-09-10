@@ -32,7 +32,6 @@ import {
     countAnswered,
     buildSummaryItems,
 } from '../../utils/questionnaire';
-import type { NormalizedSkill } from '../../model/skills';
 
 interface Props extends CommonLayoutProps {
     /** 当前聊天记录项 */
@@ -55,14 +54,6 @@ interface Props extends CommonLayoutProps {
     language?: string;
     /** 聊天模式：claw-简化模式, standard-标准模式 */
     mode?: ChatMode;
-    /** 已注册 skills 列表（用于把 user 消息中的 @skill:name 还原为蓝色 chip） */
-    mentionSkills?: NormalizedSkill[];
-    /** 已注册 knowledgeBase 列表 */
-    mentionKnowledge?: NormalizedSkill[];
-    /** 已注册 tools 列表 */
-    mentionTools?: NormalizedSkill[];
-    /** 已注册 connectors 列表 */
-    mentionConnectors?: NormalizedSkill[];
     /**
      * 是否为只读环境（如分享落地页）。
      * 为 true 时反问澄清卡片禁止访客操作。
@@ -92,10 +83,6 @@ const props = withDefaults(defineProps<Props>(), {
     ...commonLayoutPropsDefaults,
     i18n: () => ({}),
     chatI18n: () => ({}),
-    mentionSkills: () => [],
-    mentionKnowledge: () => [],
-    mentionTools: () => [],
-    mentionConnectors: () => [],
     readonly: false,
     hasSubsequentUserRecord: false,
     historyQuestionnaireSkipped: false,
@@ -873,10 +860,6 @@ const referenceDialogTitle = computed(() => {
                         :language="language"
                         :recordId="item.RecordId"
                         :enableScale="isMobile"
-                        :mentionSkills="mentionSkills"
-                        :mentionKnowledge="mentionKnowledge"
-                        :mentionTools="mentionTools"
-                        :mentionConnectors="mentionConnectors"
                         @widgetEvent="handleWidgetEvent"
                     />
                     <span>

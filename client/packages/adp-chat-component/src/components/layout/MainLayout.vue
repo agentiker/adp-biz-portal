@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref } from 'vue';
 import type { Application } from '../../model/application';
 import type { Record, Questionnaire } from '../../model/chat-v2';
 import type { FileProps } from '../../model/file';
@@ -7,13 +7,10 @@ import { ScoreValue } from '../../model/chat-v2';
 import { MessageCode } from '../../model/messages';
 import Chat from '../Chat/Index.vue';
 import AIWarning from '../AIWarning.vue';
-import SidebarToggle from '../SidebarToggle.vue';
-import CreateConversation from '../CreateConversation.vue';
-import { Avatar as TAvatar, Layout as TLayout, Content as TContent, Header as THeader, Footer as TFooter } from 'tdesign-vue-next';
+import { Layout as TLayout, Content as TContent, Footer as TFooter } from 'tdesign-vue-next';
 
-// TAvatar, TLayout, TContent, THeader, TFooter 已导入，模板中使用对应组件
 import type { ChatRelatedProps, ChatI18n, ChatItemI18n, SenderI18n } from '../../model/type';
-import { chatRelatedPropsDefaults, defaultChatI18n, defaultChatI18nEn } from '../../model/type';
+import { chatRelatedPropsDefaults } from '../../model/type';
 
 export interface Props extends ChatRelatedProps {
     /** 当前应用信息 */
@@ -36,8 +33,6 @@ export interface Props extends ChatRelatedProps {
     chatList?: Record[];
     /** 是否正在聊天中 */
     isChatting?: boolean;
-    /** 是否显示侧边栏切换按钮 */
-    showSidebarToggle?: boolean;
     /** AI警告文本 */
     aiWarningText?: string;
     /** 国际化文本 */
@@ -89,7 +84,6 @@ const props = withDefaults(defineProps<Props>(), {
     chatId: '',
     chatList: () => [],
     isChatting: false,
-    showSidebarToggle: true,
     aiWarningText: '',
     isUploading: false,
     channelInputDisabled: false,
@@ -106,27 +100,14 @@ const props = withDefaults(defineProps<Props>(), {
     suggestionApi: '/suggestions',
 });
 
-// 合并 i18n 配置，获取 createConversation 文本（外部传入 > 按 language 选中/英默认值）
-const createConversationText = computed(() => {
-    if (props.i18n?.createConversation) return props.i18n.createConversation;
-    const defaults = props.language?.startsWith('en') ? defaultChatI18nEn : defaultChatI18n;
-    return defaults.createConversation;
-});
-
 const emit = defineEmits<{
-    /** 切换侧边栏显示/隐藏 */
-    (e: 'toggleSidebar'): void;
-    /** 创建新会话 */
-    (e: 'createConversation'): void;
-    /** 关闭聊天面板 */
-    (e: 'close'): void;
     /** 发送消息
      * @param query - 消息内容
      * @param fileList - 文件列表
      * @param conversationId - 会话ID
      * @param applicationId - 应用ID
      */
-    (e: 'send', query: string, fileList: FileProps[], conversationId: string, applicationId: string): void;
+    (e: 'send', query: string, conversationId: string, applicationId: string): void;
     /** 停止生成回复 */
     (e: 'stop'): void;
     /** 加载更多历史消息
@@ -188,14 +169,6 @@ const emit = defineEmits<{
 
 const chatRef = ref<InstanceType<typeof Chat> | null>(null);
 
-const handleToggleSidebar = () => {
-    emit('toggleSidebar');
-};
-
-const handleCreateConversation = () => {
-    emit('createConversation');
-};
-
 /**
  * 通知无限加载已加载更多数据
  */
@@ -219,22 +192,6 @@ defineExpose({
 
 <template>
     <TLayout class="main-layout" :class="{ isMobile: isMobile }">
-        <THeader class="layout-header">
-            <div class="header-app-container">
-                    <SidebarToggle :theme="theme"  @toggle="handleToggleSidebar" />
-                    <CreateConversation :tooltipText="createConversationText" :theme="theme" :language="language" @create="handleCreateConversation" />
-                    <TAvatar :imageProps="{
-                            lazy: true,
-                            loading: ''
-                        }" class="header-app__avatar" shape="round" :image="currentApplicationAvatar" :size="isMobile ? 'var(--td-line-height-headline-small)' : 'large'"></TAvatar>
-                        <span class="header-app__title">{{ currentApplicationName }}</span>
-            </div>
-            <div class="header-app-settings">
-                <slot name="header-actions"></slot>
-                <slot name="header-overlay-content"></slot>
-                <slot name="header-close-content"></slot>
-            </div>
-        </THeader>
         <TContent class="layout-content">
             <Chat
                 ref="chatRef"
@@ -268,7 +225,7 @@ defineExpose({
                 :skillsSpaceId="skillsSpaceId"
                 :skillsApplicationId="skillsApplicationId"
                 :suggestionApi="suggestionApi"
-                @send="(query: string, fileList: FileProps[], conversationId: string, applicationId: string) => emit('send', query, fileList, conversationId, applicationId)"
+                @send="(query: string, conversationId: string, applicationId: string) => emit('send', query, conversationId, applicationId)"
                 @stop="emit('stop')"
                 @loadMore="(conversationId: string, lastRecordId: string) => emit('loadMore', conversationId, lastRecordId)"
                 @rate="(conversationId: string, recordId: string, score: typeof ScoreValue[keyof typeof ScoreValue]) => emit('rate', conversationId, recordId, score)"
@@ -307,45 +264,6 @@ defineExpose({
     background: var(--td-bg-color-container);
     overflow: hidden;
 }
-.isMobile .layout-header{
-    padding: 10px var(--td-size-6);
-}
-.layout-header {
-    flex-shrink: 0;
-    display: flex;
-    padding: var(--td-size-5) var(--td-size-7);
-    justify-content: space-between;
-    align-items: center;
-    height: 56px;
-}
-.header-app-settings{
-    display: flex;
-    align-items: center;
-    gap: var(--td-size-2);
-}
-
-.layout-header .header-app-settings svg {
-    cursor: pointer;
-    opacity: 0.65;
-    transition: opacity 0.15s ease;
-}
-
-.layout-header .header-app-settings svg:hover {
-    opacity: 1;
-}
-
-.layout-header .header-app__avatar{
-    border-radius: var(--td-radius-medium);
-    margin-left: var(--td-size-4);
-}
-.layout-header .header-app__title {
-    color: var(--td-text-color-primary);
-    font-size: 15px;
-    font-weight: 600;
-    margin-left: 10px;
-    letter-spacing: -0.01em;
-}
-
 .layout-content {
     flex: 1;
     overflow: auto;
@@ -354,13 +272,6 @@ defineExpose({
 .layout-footer {
     flex-shrink: 0;
     padding: var(--td-size-3) var(--td-size-6) 10px;
-}
-.header-app-driver{
-    margin: 0 var(--td-size-6) 0 var(--td-size-4);
-}
-.header-app-container{
-    display: flex;
-    align-items: center;
 }
 :deep(.t-chat__footer){
     position: relative;

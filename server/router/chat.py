@@ -8,7 +8,7 @@ from sanic.request.types import Request
 from sanic.response import ResponseStream
 from sanic.exceptions import SanicException
 
-from router import login_required, check_login
+from router.legacy_security import adp_admin_required
 from core.chat import CoreChat
 from core.conversation import CoreConversation
 from core.share import CoreShareConversation
@@ -23,7 +23,7 @@ app: TAgenticApp = TAgenticApp.get_app()
 
 
 class ChatMessageApi(HTTPMethodView):
-    @login_required
+    @adp_admin_required
     async def post(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("Contents", type=list, required=True, location="json")
@@ -116,6 +116,7 @@ class ChatMessageApi(HTTPMethodView):
 
 
 class ChatMessageListApi(HTTPMethodView):
+    @adp_admin_required
     async def get(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ConversationId", type=str, required=False, location="args")
@@ -124,7 +125,6 @@ class ChatMessageListApi(HTTPMethodView):
         args = parser.parse_args(request)
 
         if args["ConversationId"] is not None:
-            check_login(request)
             application_id = await CoreConversation.get_application_id(
                 request.ctx.db,
                 request.ctx.account_id,
@@ -215,7 +215,7 @@ class ChatMessageListApi(HTTPMethodView):
 
 
 class ChatConversationListApi(HTTPMethodView):
-    @login_required
+    @adp_admin_required
     async def get(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ApplicationId", type=str, required=False, location="args")
@@ -247,7 +247,7 @@ class ChatConversationListApi(HTTPMethodView):
 
 
 class ChatConversationDeleteApi(HTTPMethodView):
-    @login_required
+    @adp_admin_required
     async def post(self, request: Request):
         parser = reqparse.RequestParser()
         parser.add_argument("ConversationId", type=str, required=True, location="json")

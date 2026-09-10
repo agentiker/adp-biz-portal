@@ -1,26 +1,19 @@
 ---
 title: UI Components Overview
-description: Overview of all available UI components
+description: Overview of the internal debug component's building blocks
 ---
 
 # UI Components
 
-This section contains all UI components that can be used independently. These are lower-level building blocks that you can combine freely to create your own custom chat interface.
+> **Internal reference**: `adp-chat-component` has been narrowed to an internal component that only powers the platform admin debug page `/admin/adp-chat`, and the package entry exports only `ADPChat`. The components below are the internal building blocks of `ADPChat`. This section is an internal implementation reference; they are no longer offered as independently importable public SDK components.
 
-## When to Use UI Components
-
-Choose UI components when you need:
-- **Full Control**: Complete control over the layout and behavior
-- **Custom Integration**: Integration with existing applications
-- **Partial Functionality**: Use only specific components without the full chat layout
-- **Advanced Customization**: Highly customized user experience
+This section lists, by category, the UI components used inside `ADPChat`, so their Props/Events/Slots/Methods can be looked up when maintaining the debug page.
 
 ## Component Categories
 
 ### Layout Components
 Basic layout components for building the chat interface structure.
 - **MainLayout** - Main content area layout
-- **SideLayout** - Sidebar layout component
 
 ### Chat Components
 Core chat functionality components.
@@ -28,57 +21,31 @@ Core chat functionality components.
 - **ChatItem** - Individual chat message item
 - **Sender** - Message input and send component
 - **AppType** - Application type selector
+- **BackToBottom** - Back-to-bottom button
 
 ### Basic Components
 Supporting UI components for common functionality.
-- **ApplicationList** - Application selection list
-- **HistoryList** - Conversation history list
-- **Settings** - Settings panel
-- **Search** - Search input component
-- **PersonalAccount** - User account display
-- **LogoArea** - Logo display area
-- **CreateConversation** - New conversation button
 - **CustomizedIcon** - Custom icon component
-- **SidebarToggle** - Sidebar toggle button
 - **AIWarning** - AI disclaimer warning
 
 ### Common Components
 Utility components for various purposes.
-- **FileList** - File list display
 - **OptionCard** - Option selection card
-- **RecordIcon** - Voice recording icon
+- **MdContent** - Markdown content renderer
 
 ## Usage Demo
 
+The package entry exports only `ADPChat`; the debug page routes all chat capability through it, and the internal components above are composed by `ADPChat` without being imported separately.
+
 ```vue
 <template>
-  <div class="my-chat-app">
-    <SideLayout>
-      <LogoArea />
-      <ApplicationList :applications="apps" />
-      <HistoryList :conversations="conversations" />
-    </SideLayout>
-    <MainLayout>
-      <Chat :chat-list="messages">
-        <template #chat-item="{ item }">
-          <ChatItem :record="item" />
-        </template>
-      </Chat>
-      <Sender @send="handleSend" />
-    </MainLayout>
-  </div>
+  <ADPChat :api-config="apiConfig" />
 </template>
 
-<script setup>
-import {
-  SideLayout,
-  MainLayout,
-  LogoArea,
-  ApplicationList,
-  HistoryList,
-  Chat,
-  ChatItem,
-  Sender
-} from 'adp-chat-component';
+<script setup lang="ts">
+import { ADPChat, type ApiConfig } from 'adp-chat-component'
+import 'adp-chat-component/dist/es/adp-chat-component.css'
+
+const apiConfig: ApiConfig = { baseURL: '/api' }
 </script>
 ```
