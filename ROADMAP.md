@@ -433,7 +433,10 @@
   - 验证：迁移 15 在隔离/本地/测试 DB up 通过（列 + 部分唯一索引存在）；`test/integration/test_enterprise_admin_postgres.py`(5) 覆盖必填/唯一/格式/选填/更新；后端 `334 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
   - 未完成：生产部署（迁移 15，按 deploy skill 备份 + 回滚 + 验 `/readyz`）。
 - [ ] `M4-AUDIT-01` 拆分「历史对话」与「审计日志」两个管理页面，新增跨企业只读对话读接口。
-  - 状态：`TODO`（见计划 Phase B）。依赖现有 `PortalSessionDetailApi` 序列化复用与 `AdminAuditListApi`。
+  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署）。
+  - 已完成：新增跨企业只读接口 `GET /api/v1/admin/conversations`（分页 limit/offset + 可选 enterpriseId，附最新 run + 企业名 + 账号名）与 `GET /api/v1/admin/conversations/<id>`（按 id 取，复用 `_serialize_session`/`_serialize_run_result`/`_serialize_evidence`，附企业/账号）；`_latest_runs` 改 account_id 可选以支持跨企业；`AdminAuditListApi` 加可选 `limit/action/outcome` 过滤（默认仍最近 200，响应形状不变）。前端把「会话与审计」拆成 `历史对话`(/admin/conversations，列表+分页+详情弹窗) 与 `审计日志`(/admin/audit) 两页（`PlatformShell` 导航 + `router` + `Admin.vue` 视图/loadData + `platformService.listAdminConversations`/`getAdminConversation`）。OpenAPI 补 3 路径 + `AdminConversation*` schema（复用 `PortalSession/Message/ExecutionRun/ShipmentResult`，47 ops）并重生成类型。
+  - 验证：`test/integration/test_admin_conversations_postgres.py`(3) 覆盖跨企业列出/分页/`platform.manage` 拒绝 + 详情按 id 读；后端 `337 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
+  - 未完成：生产部署（无 schema 变更，app-only）。
 - [ ] `M4-ADP-CFG-01` ADP 应用配置化 + 多应用（按企业绑定、凭据 DB 加密、Admin 可编辑）。
   - 状态：`TODO`（见计划 Phase C）。迁移 **revision 16**（`platform_adp_app` 表 + `PlatformEnterprise.AdpAppId`）；`resolve_provider_for_enterprise` 替换单例 provider；复用 `channel_credentials` Fernet 加密。
 

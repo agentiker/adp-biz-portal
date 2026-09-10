@@ -22,7 +22,9 @@ import {
   disablePlatformUser,
   getAdminConfig,
   getAdminAdpConfig,
+  getAdminConversation,
   getAdminOverview,
+  listAdminConversations,
   listAuditEvents,
   listEnterprises,
   listPlatformUsers,
@@ -33,7 +35,7 @@ import {
   updateEnterprise,
   updatePlatformUserAccess,
 } from '@/platform/platformService'
-import type { AdpConfigStatus, AdminAuditEvent, AdminConfigState, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
+import type { AdpConfigStatus, AdminAuditEvent, AdminConfigState, AdminConversationSummary, AdminConversationDetail, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
 import { logout } from '@/service/login'
 import { usePlatformStore } from '@/stores/platform'
 
@@ -44,6 +46,13 @@ const configState = ref<AdminConfigState | null>(null)
 const enterprises = ref<AdminEnterprise[]>([])
 const users = ref<AdminUser[]>([])
 const auditEvents = ref<AdminAuditEvent[]>([])
+const conversations = ref<AdminConversationSummary[]>([])
+const conversationTotal = ref(0)
+const conversationOffset = ref(0)
+const conversationSearch = ref('')
+const conversationDetail = ref<AdminConversationDetail | null>(null)
+const conversationDetailLoading = ref(false)
+const CONVERSATION_PAGE = 50
 const loading = ref(false)
 const loadError = ref('')
 const toast = ref('')
@@ -97,7 +106,7 @@ const errorMessage = (error: unknown, fallback: string) => {
 
 const view = computed(() => route.name === 'admin' ? 'overview' : String(route.name || '').replace('admin-', ''))
 const pageTitle = computed(() => ({
-  overview: '运营概览', enterprises: '企业管理', users: '平台用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', audit: '会话与审计',
+  overview: '运营概览', enterprises: '企业管理', users: '平台用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', conversations: '历史对话', audit: '审计日志',
 } as Record<string, string>)[view.value] || '运营概览')
 
 const resourceMeta = computed(() => ({
@@ -106,7 +115,8 @@ const resourceMeta = computed(() => ({
   bindings: { eyebrow: '平台配置', title: 'ADP 应用配置', description: '一期平台只有一个 ADP 应用。应用凭据来自服务器 .env，企业和渠道均不参与 ADP 应用绑定。', icon: ApiIcon },
   channels: { eyebrow: '消息入口', title: '渠道管理', description: '配置渠道实例、凭据和渠道身份，查看每个接入的真实验证边界。', icon: ApiIcon },
   'agents-tools': { eyebrow: '能力编排', title: 'Agent 与工具', description: '登记的 Agent 与工具目录接口尚未接入，当前不展示演示数据。', icon: SettingIcon },
-  audit: { eyebrow: '可追溯性', title: '会话与审计', description: '查看脱敏事件、执行轮次与投递状态。业务正文不会在这里全量展示。', icon: HistoryIcon },
+  conversations: { eyebrow: '可追溯性', title: '历史对话', description: '跨企业查看对话、执行轮次与证据（只读）。业务正文不会在这里全量展示。', icon: HistoryIcon },
+  audit: { eyebrow: '可追溯性', title: '审计日志', description: '查看脱敏的管理与投递事件、动作与结果。', icon: HistoryIcon },
 } as Record<string, { eyebrow: string; title: string; description: string; icon: typeof UserIcon }>)[view.value])
 
 const filteredEnterprises = computed(() => {
@@ -120,6 +130,10 @@ const filteredUsers = computed(() => {
 const filteredAudit = computed(() => {
   const term = auditSearch.value.trim().toLowerCase()
   return auditEvents.value.filter((item) => !term || `${item.action} ${item.targetType} ${item.targetId || ''} ${item.traceId}`.toLowerCase().includes(term))
+})
+const filteredConversations = computed(() => {
+  const term = conversationSearch.value.trim().toLowerCase()
+  return conversations.value.filter((item) => !term || `${item.title} ${item.query || ''} ${item.enterpriseName || ''} ${item.accountName || ''} ${item.channel}`.toLowerCase().includes(term))
 })
 const publishedConfig = computed(() => configState.value?.published || overview.value?.config.published || null)
 const draftConfig = computed(() => configState.value?.draft || overview.value?.config.draft || null)
@@ -151,6 +165,11 @@ const loadData = async () => {
       adpConfig.value = await getAdminAdpConfig()
     }
     if (view.value === 'audit') auditEvents.value = await listAuditEvents()
+    if (view.value === 'conversations') {
+      const page = await listAdminConversations({ limit: CONVERSATION_PAGE, offset: conversationOffset.value })
+      conversations.value = page.items
+      conversationTotal.value = page.total
+    }
   } catch {
     loadError.value = '暂时无法加载管理数据，请稍后重试。'
   } finally {
@@ -163,6 +182,8 @@ watch(view, () => {
   enterpriseSearch.value = ''
   userSearch.value = ''
   auditSearch.value = ''
+  conversationSearch.value = ''
+  conversationOffset.value = 0
   void loadData()
 })
 
@@ -388,6 +409,29 @@ const enterpriseSummary = (item: AdminUser) => item.enterprises.length ? item.en
 const showUserDetail = (item: AdminUser) => { detail.value = { title: item.name, lines: [`手机号：${item.phone}`, `角色：${item.roleLabel}`, `所属企业：${enterpriseSummary(item)}`, `状态：${userStatusLabel(item.status)}`] } }
 const showAuditDetail = (item: AdminAuditEvent) => { detail.value = { title: item.action, lines: [`Trace ID：${item.traceId}`, `目标：${item.targetType} / ${item.targetId || '—'}`, `结果：${item.outcome}`, `时间：${item.createdAt}`] } }
 
+const conversationPageInfo = computed(() => {
+  const start = conversationTotal.value === 0 ? 0 : conversationOffset.value + 1
+  const end = Math.min(conversationOffset.value + conversations.value.length, conversationTotal.value)
+  return { start, end }
+})
+const changeConversationPage = async (direction: -1 | 1) => {
+  const next = conversationOffset.value + direction * CONVERSATION_PAGE
+  if (next < 0 || next >= conversationTotal.value) return
+  conversationOffset.value = next
+  await loadData()
+}
+const openConversationDetail = async (item: AdminConversationSummary) => {
+  conversationDetailLoading.value = true
+  conversationDetail.value = null
+  try {
+    conversationDetail.value = await getAdminConversation(item.id)
+  } catch (error) {
+    setToast(errorMessage(error, '无法加载会话详情'))
+  } finally {
+    conversationDetailLoading.value = false
+  }
+}
+
 const handleLogout = () => logout(() => router.replace({ name: 'login' }))
 </script>
 
@@ -413,6 +457,10 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('user')"><UserIcon />新增用户</button></div></section>
       <div v-if="secretMessage" class="secret-alert"><LockOnIcon /><span>{{ secretMessage }}</span><button type="button" aria-label="关闭" @click="secretMessage = ''">×</button></div>
       <section class="resource-panel admin-panel users-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="userSearch" placeholder="搜索用户姓名、手机号、角色或企业" /></div><span class="resource-count">{{ filteredUsers.length }} 位用户</span></div><div v-if="loading && !users.length" class="resource-loading">正在加载平台用户…</div><div v-else-if="!filteredUsers.length" class="panel-empty">暂无用户记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>用户</span><span>角色与企业范围</span><span>状态</span><span>操作</span></div><div v-for="item in filteredUsers" :key="item.id" class="resource-row user-row"><span class="resource-name"><UserIcon /><strong>{{ item.name }}<small>{{ item.phone }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.roleLabel }}</strong><small>{{ enterpriseSummary(item) }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ userStatusLabel(item.status) }}</span><span class="row-actions"><button class="row-more" aria-label="查看用户详情" @click="showUserDetail(item)"><ChevronRightIcon /></button><button class="text-action" :disabled="item.status !== 'active' || platformStore.user?.id === item.id || userActionLoading === item.id" @click="openAccessEditor(item)">调整范围</button><button class="text-action" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="resetPassword(item)">{{ userActionLoading === item.id ? '处理中…' : '重置' }}</button><button class="text-action text-action--danger" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="disableUser(item)">{{ userActionLoading === item.id ? '处理中…' : '停用' }}</button></span></div></div></section>
+    </template>
+    <template v-else-if="view === 'conversations'">
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
+      <section class="resource-panel admin-panel conversations-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="conversationSearch" placeholder="搜索标题、企业、账号或渠道" /></div><span class="resource-count">{{ conversationPageInfo.start }}–{{ conversationPageInfo.end }} / 共 {{ conversationTotal }} 条</span><span class="pager"><button class="text-action" :disabled="loading || conversationOffset === 0" @click="changeConversationPage(-1)">上一页</button><button class="text-action" :disabled="loading || conversationPageInfo.end >= conversationTotal" @click="changeConversationPage(1)">下一页</button></span></div><div v-if="loading && !conversations.length" class="resource-loading">正在加载历史对话…</div><div v-else-if="!filteredConversations.length" class="panel-empty">暂无对话记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>对话</span><span>企业 / 账号</span><span>更新时间</span><span>操作</span></div><div v-for="item in filteredConversations" :key="item.id" class="resource-row"><span class="resource-name"><HistoryIcon /><strong>{{ item.title }}<small>{{ item.channel }}{{ item.query ? ' · ' + item.query : '' }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.enterpriseName || '—' }}</strong><small>{{ item.accountName || '—' }}</small></span><span class="resource-detail">{{ item.updatedAt ? new Date(item.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '—' }}</span><span class="row-actions"><button class="text-action" @click="openConversationDetail(item)">查看</button></span></div></div></section>
     </template>
     <template v-else-if="view === 'audit'">
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
@@ -446,6 +494,7 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
       <form v-else-if="modal === 'config'" class="modal-card config-editor-card" @submit.prevent="submitConfigDraft"><div class="modal-heading"><div><p class="section-kicker">平台配置</p><h2>编辑配置草稿</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="modal = null">×</button></div><p class="modal-help">每行一项能力。保存后生成草稿，发布前仍可继续修改。</p><label>能力清单<textarea v-model="configForm.itemsText" required maxlength="1800" rows="7" placeholder="例如：客户登录与会话&#10;M3 只读工具"></textarea></label><fieldset class="flag-fieldset"><legend>功能开关</legend><label class="checkbox-row"><input v-model="configForm.portal" type="checkbox" /><span>客户门户</span></label><label class="checkbox-row"><input v-model="configForm.m3ReadOnly" type="checkbox" /><span>M3 只读工具</span></label><label class="checkbox-row"><input v-model="configForm.audit" type="checkbox" /><span>审计记录</span></label><label class="checkbox-row"><input v-model="configForm.webChannel" type="checkbox" /><span>官网渠道</span></label></fieldset><label>变更说明<textarea v-model="configForm.notes" maxlength="500" rows="3" placeholder="可选，说明本次配置变更原因"></textarea></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="configActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="configActionLoading">{{ configActionLoading ? '保存中…' : '保存草稿' }}</button></div></form>
     </div>
     <div v-if="detail" class="modal-backdrop" @click.self="detail = null"><section class="modal-card detail-card"><div class="modal-heading"><div><p class="section-kicker">详情</p><h2>{{ detail.title }}</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="detail = null">×</button></div><p v-for="line in detail.lines" :key="line" class="detail-line">{{ line }}</p><div class="modal-actions"><button type="button" class="primary-action" @click="detail = null">完成</button></div></section></div>
+    <div v-if="conversationDetailLoading || conversationDetail" class="modal-backdrop" @click.self="conversationDetail = null; conversationDetailLoading = false"><section class="modal-card conversation-detail-card"><div class="modal-heading"><div><p class="section-kicker">历史对话</p><h2>{{ conversationDetail?.conversation.title || '会话详情' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="conversationDetail = null; conversationDetailLoading = false">×</button></div><div v-if="conversationDetailLoading" class="resource-loading">正在加载会话详情…</div><template v-else-if="conversationDetail"><p class="conversation-meta">{{ conversationDetail.conversation.enterpriseName || '—' }} · {{ conversationDetail.conversation.accountName || '—' }} · {{ conversationDetail.conversation.channel }}</p><div class="conversation-thread"><div v-for="msg in conversationDetail.messages" :key="msg.id" class="conversation-msg" :class="`conversation-msg--${msg.direction}`"><span class="conversation-msg-role">{{ msg.direction === 'assistant' ? '助手' : '用户' }}</span><p>{{ msg.body || '（无正文）' }}</p><time>{{ msg.createdAt ? new Date(msg.createdAt).toLocaleString('zh-CN', { hour12: false }) : '' }}</time></div><div v-if="!conversationDetail.messages.length" class="panel-empty">该会话暂无消息</div></div><div v-if="conversationDetail.runs.length" class="conversation-runs"><strong>执行轮次</strong><div v-for="run in conversationDetail.runs" :key="run.runId" class="conversation-run"><span class="row-status" :class="`row-status--${run.status === 'found' || run.status === 'completed' ? 'success' : 'warning'}`"><i></i>{{ run.status }}</span><span>{{ run.title }}</span><small>{{ run.evidence.length }} 条证据</small></div></div></template><div class="modal-actions"><button type="button" class="primary-action" @click="conversationDetail = null">完成</button></div></section></div>
   </PlatformShell>
 </template>
 
@@ -481,6 +530,20 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
 .users-panel { margin-top: 18px; }
 .users-panel .resource-table-head, .users-panel .resource-row { grid-template-columns: minmax(170px, 1.1fr) minmax(180px, 1fr) minmax(100px, .7fr) minmax(250px, 1fr); }
 .enterprises-panel .resource-table-head, .enterprises-panel .resource-row { grid-template-columns: minmax(180px, 1.4fr) minmax(170px, 1fr) minmax(90px, .6fr) minmax(130px, auto); }
+.conversations-panel .resource-table-head, .conversations-panel .resource-row { grid-template-columns: minmax(200px, 1.6fr) minmax(160px, 1fr) minmax(140px, .9fr) minmax(90px, auto); }
+.pager { display: inline-flex; gap: 4px; margin-left: 12px; }
+.conversation-detail-card { width: min(640px, 100%); max-height: min(760px, calc(100vh - 32px)); overflow: auto; }
+.conversation-meta { margin: -4px 0 4px; color: #71847e; font-size: 11px; }
+.conversation-thread { display: grid; gap: 8px; }
+.conversation-msg { padding: 9px 11px; border: 1px solid #e6edea; background: #f7faf9; }
+.conversation-msg--assistant { background: #eff7f3; border-color: #d5e8e0; }
+.conversation-msg-role { color: #4e6b64; font-size: 10px; font-weight: 700; }
+.conversation-msg p { margin: 4px 0 3px; color: #2c4a43; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-msg time { color: #97a39f; font-size: 9px; }
+.conversation-runs { margin-top: 12px; display: grid; gap: 6px; }
+.conversation-runs > strong { color: #526b65; font-size: 11px; }
+.conversation-run { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #45615d; }
+.conversation-run small { margin-left: auto; color: #93a19d; font-size: 10px; }
 .field-hint { color: #93a19d; font-weight: 400; font-size: 10px; }
 .modal-card input:disabled { background: #f2f5f4; color: #8a9995; cursor: not-allowed; }
 .resource-name strong small { display: block; margin-top: 3px; color: #8a9995; font-size: 10px; font-weight: 400; }

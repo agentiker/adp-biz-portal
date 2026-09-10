@@ -42,7 +42,8 @@ const adminNav = [
   { label: '渠道管理', to: '/admin/channels', icon: ApiIcon },
   { label: 'ADP Chat 调试', to: '/admin/adp-chat', icon: ChatMessageIcon },
   { label: 'Agent 与工具', to: '/admin/agents-tools', icon: SettingIcon },
-  { label: '会话与审计', to: '/admin/audit', icon: HistoryIcon },
+  { label: '历史对话', to: '/admin/conversations', icon: FileSearchIcon },
+  { label: '审计日志', to: '/admin/audit', icon: HistoryIcon },
 ]
 
 const navItems = computed(() => (props.mode === 'admin' ? adminNav : portalNav))
