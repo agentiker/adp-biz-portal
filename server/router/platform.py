@@ -51,6 +51,7 @@ from core.platform import (
     publish_platform_config,
     serialize_enterprise,
     serialize_user,
+    update_enterprise,
     update_platform_user_access,
     _new_salt,
     utc_now,
@@ -1873,21 +1874,59 @@ class AdminConfigRollbackApi(HTTPMethodView):
         return json(await get_platform_config_state(request.ctx.db))
 
 
+def _serialize_admin_enterprise(row: PlatformEnterprise) -> dict[str, Any]:
+    return {
+        "id": str(row.Id),
+        "name": row.Name,
+        "customerCode": row.CustomerCode,
+        "unifiedSocialCreditCode": row.UnifiedSocialCreditCode,
+        "contactPerson": row.ContactPerson,
+        "contactPhone": row.ContactPhone,
+        "status": row.Status,
+    }
+
+
 class AdminEnterpriseListApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
         require_permission(_context(request), "platform.manage")
         rows = list((await request.ctx.db.execute(select(PlatformEnterprise).order_by(PlatformEnterprise.Name))).scalars().all())
-        return json([{"id": str(row.Id), "name": row.Name, "customerCode": row.CustomerCode, "status": row.Status} for row in rows])
+        return json([_serialize_admin_enterprise(row) for row in rows])
 
     @platform_required
     async def post(self, request: Request):
         context = _context(request)
         require_permission(context, "platform.manage")
         body = _body(request)
-        enterprise = await create_enterprise(db=request.ctx.db, name=body.get("name"), customer_code=body.get("customerCode"))
+        enterprise = await create_enterprise(
+            db=request.ctx.db,
+            name=body.get("name"),
+            customer_code=body.get("customerCode"),
+            unified_social_credit_code=body.get("unifiedSocialCreditCode"),
+            contact_person=body.get("contactPerson"),
+            contact_phone=body.get("contactPhone"),
+        )
         await _commit_audit(request, action="enterprise.create", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
-        return json({"id": str(enterprise.Id), "name": enterprise.Name, "customerCode": enterprise.CustomerCode, "status": enterprise.Status}, status=201)
+        return json(_serialize_admin_enterprise(enterprise), status=201)
+
+
+class AdminEnterpriseDetailApi(HTTPMethodView):
+    @platform_required
+    async def post(self, request: Request, enterprise_id: str):
+        context = _context(request)
+        require_permission(context, "platform.manage")
+        body = _body(request)
+        enterprise = await update_enterprise(
+            db=request.ctx.db,
+            enterprise_id=enterprise_id,
+            name=body.get("name"),
+            unified_social_credit_code=body.get("unifiedSocialCreditCode"),
+            contact_person=body.get("contactPerson"),
+            contact_phone=body.get("contactPhone"),
+        )
+        await _commit_audit(request, action="enterprise.update", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
+        return json(_serialize_admin_enterprise(enterprise))
+
 
 
 class AdminUserListApi(HTTPMethodView):
@@ -2387,6 +2426,7 @@ app.add_route(AdminConfigPublishApi.as_view(), "/api/v1/admin/config/publish")
 app.add_route(AdminConfigRollbackApi.as_view(), "/api/v1/admin/config/rollback")
 app.add_route(AdminAdpConfigApi.as_view(), "/api/v1/admin/adp-config")
 app.add_route(AdminEnterpriseListApi.as_view(), "/api/v1/admin/enterprises")
+app.add_route(AdminEnterpriseDetailApi.as_view(), "/api/v1/admin/enterprises/<enterprise_id:str>")
 app.add_route(AdminUserListApi.as_view(), "/api/v1/admin/users")
 app.add_route(AdminUserResetPasswordApi.as_view(), "/api/v1/admin/users/<user_id:str>/reset-password")
 app.add_route(AdminUserAccessApi.as_view(), "/api/v1/admin/users/<user_id:str>/access")

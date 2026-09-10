@@ -52,6 +52,9 @@ export interface AdminEnterprise {
   id: string
   name: string
   customerCode: string
+  unifiedSocialCreditCode?: string
+  contactPerson?: string
+  contactPhone?: string
   status: 'active' | 'suspended'
 }
 
@@ -165,6 +168,9 @@ export interface CreateChannelCredentialRequest {
 export interface CreateEnterpriseRequest {
   name: string
   customerCode: string
+  unifiedSocialCreditCode: string
+  contactPerson?: string
+  contactPhone?: string
 }
 
 export interface CreatePlatformUserRequest {
@@ -395,6 +401,13 @@ export interface StartChannelIdentityBindingRequest {
 
 export interface SuccessResponse {
   success: boolean
+}
+
+export interface UpdateEnterpriseRequest {
+  name?: string
+  unifiedSocialCreditCode?: string
+  contactPerson?: string
+  contactPhone?: string
 }
 
 export interface UpdatePlatformUserAccessRequest {

@@ -425,6 +425,18 @@
   - 验证命令与结果：`cd server && .venv/bin/pytest test/unit_test/test_platform_ops_status.py -q`（5 项聚焦测试）；`.venv/bin/python -m py_compile router/platform.py test/unit_test/test_platform_ops_status.py`；`git diff --check`。
   - 遗留风险：当前是后端只读入口，尚未接入生产运维机器人、告警系统和真实监控数据；真实 ADP/M3/微信/企微联调仍不在本项完成范围。
 
+### 平台优化（2026-09 迭代）
+
+- [ ] `M4-ENT-01` 多租户企业信息扩展 + 企业/用户页拆分。
+  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署）。
+  - 已完成：`PlatformEnterprise` 增 `UnifiedSocialCreditCode`（必填、非空唯一，18 位 GB32100 校验）/`ContactPerson`/`ContactPhone`（选填）+ 迁移 **revision 15**（`_apply_revision_15`：`ADD COLUMN IF NOT EXISTS` + `UnifiedSocialCreditCode` 部分唯一索引）；`core/platform.create_enterprise` 扩参 + 新增 `update_enterprise`；`AdminEnterpriseListApi` 序列化补字段、新增 `AdminEnterpriseDetailApi`（`POST /api/v1/admin/enterprises/<id>` 更新，CustomerCode 不可改）；OpenAPI 补 `updateEnterprise` 路径 + `AdminEnterprise`/`CreateEnterpriseRequest`/`UpdateEnterpriseRequest` schema（45 ops）并重生成类型。前端把合并的「企业与用户」拆成 `企业管理`(/admin/enterprises，含新字段增改) 与 `平台用户`(/admin/users) 两页（`PlatformShell` 导航 + `router` + `Admin.vue` 视图/表单/loadData + `platformService.createEnterprise({...})`/`updateEnterprise`）。
+  - 验证：迁移 15 在隔离/本地/测试 DB up 通过（列 + 部分唯一索引存在）；`test/integration/test_enterprise_admin_postgres.py`(5) 覆盖必填/唯一/格式/选填/更新；后端 `334 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
+  - 未完成：生产部署（迁移 15，按 deploy skill 备份 + 回滚 + 验 `/readyz`）。
+- [ ] `M4-AUDIT-01` 拆分「历史对话」与「审计日志」两个管理页面，新增跨企业只读对话读接口。
+  - 状态：`TODO`（见计划 Phase B）。依赖现有 `PortalSessionDetailApi` 序列化复用与 `AdminAuditListApi`。
+- [ ] `M4-ADP-CFG-01` ADP 应用配置化 + 多应用（按企业绑定、凭据 DB 加密、Admin 可编辑）。
+  - 状态：`TODO`（见计划 Phase C）。迁移 **revision 16**（`platform_adp_app` 表 + `PlatformEnterprise.AdpAppId`）；`resolve_provider_for_enterprise` 替换单例 provider；复用 `channel_credentials` Fernet 加密。
+
 ## 每个 TODO 的完成标准
 
 一个 TODO 只有同时满足以下条件才可以从 `TODO`/`IN PROGRESS` 改为 `DONE`：
