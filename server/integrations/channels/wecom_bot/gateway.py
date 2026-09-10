@@ -31,6 +31,7 @@ from core.platform_worker import (
 )
 from integrations.adp.provider import AgentRequest
 from integrations.channels.stream_sink import SnapshotStreamSink
+from integrations.channels.text_format import to_plain_text
 from model.account import Account, AccountStatus
 from model.platform import (
     EnterpriseStatus,
@@ -49,6 +50,30 @@ from sqlalchemy import select
 logger = logging.getLogger(__name__)
 
 WECOM_BOT_UNBOUND_REPLY = "你还没有绑定业务账号。请登录官网完成渠道绑定后再试，或联系销售/客服。"
+
+# WeCom renders a <think>…</think> block in the stream content as a collapsible,
+# persistent "thinking" section (verified against openclaw-china's ws gateway).
+# An empty pair is the native "思考中" placeholder shown before the answer.
+WECOM_BOT_THINKING_PLACEHOLDER = "<think></think>"
+
+
+def _wecom_think_render(answer: str, reasoning: str) -> str:
+    """Compose the WeCom stream content: reasoning folds into a <think> block.
+
+    ADP streams reasoning first (thought messages) then the answer (reply), so a
+    growing ``<think>…</think>`` shows the thinking as it arrives and the answer
+    appends below it; the thinking stays folded and persistent. With no reasoning
+    it is just the answer, and with neither it is the native 思考中 placeholder.
+    """
+    a = to_plain_text(answer)
+    r = to_plain_text(reasoning).strip()
+    if r and a:
+        return f"<think>{r}</think>\n{a}"
+    if r:
+        return f"<think>{r}</think>"
+    if a:
+        return a
+    return WECOM_BOT_THINKING_PLACEHOLDER
 
 
 class _MsgidGuard:
@@ -150,8 +175,8 @@ async def run_wecom_bot_turn(
             visitor_id=f"platform:{enterprise.Id}:{account.Id}",
         )
 
-        sink = SnapshotStreamSink(reply_stream)
-        await reply_stream("", is_final=False)  # loading frame
+        sink = SnapshotStreamSink(reply_stream, render=_wecom_think_render)
+        await reply_stream(WECOM_BOT_THINKING_PLACEHOLDER, is_final=False)  # native 思考中 placeholder
         try:
             raw = await _execute_provider(provider, request, sink=sink)
         finally:

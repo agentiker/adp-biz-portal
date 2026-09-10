@@ -122,6 +122,47 @@ async def test_adp_provider_accumulates_text_and_allowlists_evidence():
 
 
 @pytest.mark.asyncio
+async def test_adp_provider_splits_thought_from_reply():
+    """Reasoning (thought message) must stream separately and stay out of the answer."""
+
+    class Vendor:
+        async def chat(self, **kwargs):
+            # A thought message streams first, then the reply message.
+            yield b'data: {"Type":"message.added","Message":{"MessageId":"m-t","Type":"thought"}}\n\n'
+            yield 'data: {"Type":"text.delta","MessageId":"m-t","Text":"先分析提单"}\n\n'.encode()
+            yield b'data: {"Type":"message.added","Message":{"MessageId":"m-r","Type":"reply"}}\n\n'
+            yield 'data: {"Type":"text.delta","MessageId":"m-r","Text":"已到港。"}\n\n'.encode()
+
+    class Sink:
+        def __init__(self):
+            self.answer = ""
+            self.reasoning = ""
+            self.closed = False
+
+        async def emit(self, text):
+            self.answer += text
+
+        async def emit_reasoning(self, text):
+            self.reasoning += text
+
+        async def close(self):
+            self.closed = True
+
+    sink = Sink()
+    response = await ADPAgentProvider(
+        agent_id="shipment-agent", application_id="app-42", vendor=Vendor()
+    ).execute(replace(_request(), agent_id="shipment-agent"), sink=sink)
+
+    # The stored answer is the reply only; the thought never leaks into it.
+    assert response.summary == "已到港。"
+    assert "先分析提单" not in response.summary
+    # The sink saw them on separate channels.
+    assert sink.answer == "已到港。"
+    assert sink.reasoning == "先分析提单"
+    assert sink.closed is True
+
+
+@pytest.mark.asyncio
 async def test_adp_provider_error_and_missing_mapping_fail_closed():
     class ErrorVendor:
         async def chat(self, **_kwargs):
