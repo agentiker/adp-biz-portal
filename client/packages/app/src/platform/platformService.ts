@@ -375,13 +375,42 @@ export async function listEnterprises(): Promise<AdminEnterprise[]> {
   return httpService.get<AdminEnterprise[]>('/api/v1/admin/enterprises')
 }
 
-export async function createEnterprise(name: string, customerCode: string): Promise<AdminEnterprise> {
+export type EnterpriseInput = {
+  name: string
+  customerCode?: string
+  unifiedSocialCreditCode?: string
+  contactPerson?: string
+  contactPhone?: string
+}
+
+export async function createEnterprise(input: EnterpriseInput): Promise<AdminEnterprise> {
   if (useMock) {
-    const enterprise: AdminEnterprise = { id: `ent_demo_${Date.now()}`, name: name.trim(), customerCode: customerCode.trim(), status: 'active' }
+    const enterprise: AdminEnterprise = {
+      id: `ent_demo_${Date.now()}`,
+      name: input.name.trim(),
+      customerCode: (input.customerCode || '').trim(),
+      unifiedSocialCreditCode: input.unifiedSocialCreditCode?.trim() || undefined,
+      contactPerson: input.contactPerson?.trim() || undefined,
+      contactPhone: input.contactPhone?.trim() || undefined,
+      status: 'active',
+    }
     mockEnterprises.unshift(enterprise)
     return cloneEnterprise(enterprise)
   }
-  return httpService.post<AdminEnterprise>('/api/v1/admin/enterprises', { name, customerCode })
+  return httpService.post<AdminEnterprise>('/api/v1/admin/enterprises', input)
+}
+
+export async function updateEnterprise(id: string, input: Omit<EnterpriseInput, 'customerCode'>): Promise<AdminEnterprise> {
+  if (useMock) {
+    const enterprise = mockEnterprises.find((item) => item.id === id)
+    if (!enterprise) throw new Error('企业不存在')
+    if (input.name !== undefined) enterprise.name = input.name.trim()
+    if (input.unifiedSocialCreditCode !== undefined) enterprise.unifiedSocialCreditCode = input.unifiedSocialCreditCode.trim() || undefined
+    if (input.contactPerson !== undefined) enterprise.contactPerson = input.contactPerson.trim() || undefined
+    if (input.contactPhone !== undefined) enterprise.contactPhone = input.contactPhone.trim() || undefined
+    return cloneEnterprise(enterprise)
+  }
+  return httpService.post<AdminEnterprise>(`/api/v1/admin/enterprises/${id}`, input)
 }
 
 export async function listPlatformUsers(): Promise<AdminUser[]> {

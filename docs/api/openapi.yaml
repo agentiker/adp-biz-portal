@@ -641,6 +641,32 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/enterprises/{enterprise_id}:
+    post:
+      tags: [Administration]
+      operationId: updateEnterprise
+      summary: Update a platform enterprise
+      parameters:
+        - name: enterprise_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEnterpriseRequest'
+      responses:
+        '200':
+          description: Updated enterprise
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminEnterprise' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/admin/users:
     get:
       tags: [Administration]
@@ -1492,6 +1518,9 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         customerCode: { type: string }
+        unifiedSocialCreditCode: { type: string, nullable: true }
+        contactPerson: { type: string, nullable: true }
+        contactPhone: { type: string, nullable: true }
         status: { type: string, enum: [active, suspended] }
     AdminUserEnterprise:
       type: object
@@ -1641,10 +1670,20 @@ components:
         credential: { $ref: '#/components/schemas/ChannelCredentialValue' }
     CreateEnterpriseRequest:
       type: object
-      required: [name, customerCode]
+      required: [name, customerCode, unifiedSocialCreditCode]
       properties:
         name: { type: string, minLength: 1, maxLength: 255 }
         customerCode: { type: string, minLength: 1, maxLength: 128 }
+        unifiedSocialCreditCode: { type: string, minLength: 18, maxLength: 18 }
+        contactPerson: { type: string, maxLength: 128, nullable: true }
+        contactPhone: { type: string, maxLength: 32, nullable: true }
+    UpdateEnterpriseRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        unifiedSocialCreditCode: { type: string, minLength: 18, maxLength: 18 }
+        contactPerson: { type: string, maxLength: 128, nullable: true }
+        contactPhone: { type: string, maxLength: 32, nullable: true }
     CreatePlatformUserRequest:
       type: object
       required: [name, phone, role]

@@ -77,7 +77,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 14
+    CURRENT_PLATFORM_SCHEMA_VERSION = 15
     REVISIONS = (
         MigrationRevision(
             1,
@@ -171,6 +171,11 @@ class Migration:
             14,
             "platform_channel_cursor_schema",
             (PlatformChannelCursor.__tablename__,),
+        ),
+        MigrationRevision(
+            15,
+            "platform_enterprise_contact_schema",
+            (),
         ),
     )
 
@@ -521,6 +526,33 @@ class Migration:
         )
 
     @classmethod
+    async def _apply_revision_15(cls, db: AsyncSession) -> None:
+        """Add enterprise contact/identity fields.
+
+        社会统一识别码 (UnifiedSocialCreditCode) is unique when present — a legal
+        entity identifier should not be shared — so a partial unique index is used
+        rather than a plain UNIQUE constraint (many enterprises may leave it empty
+        during backfill). Contact person/phone are free-form optional columns.
+        """
+        enterprise_table = PlatformEnterprise.__tablename__
+        await db.execute(
+            text(f'ALTER TABLE "{enterprise_table}" ADD COLUMN IF NOT EXISTS "UnifiedSocialCreditCode" VARCHAR(32)')
+        )
+        await db.execute(
+            text(f'ALTER TABLE "{enterprise_table}" ADD COLUMN IF NOT EXISTS "ContactPerson" VARCHAR(128)')
+        )
+        await db.execute(
+            text(f'ALTER TABLE "{enterprise_table}" ADD COLUMN IF NOT EXISTS "ContactPhone" VARCHAR(32)')
+        )
+        await db.execute(
+            text(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_platform_enterprise_uscc" '
+                f'ON "{enterprise_table}" ("UnifiedSocialCreditCode") '
+                f'WHERE "UnifiedSocialCreditCode" IS NOT NULL'
+            )
+        )
+
+    @classmethod
     async def _drop_revision_tables(
         cls,
         db: AsyncSession,
@@ -587,6 +619,8 @@ class Migration:
                     await cls._apply_revision_11(db)
                 elif revision.version == 12:
                     await cls._apply_revision_12(db)
+                elif revision.version == 15:
+                    await cls._apply_revision_15(db)
                 record = records.get(revision.version)
                 if record is None:
                     record = PlatformMigration(

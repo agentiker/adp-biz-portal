@@ -30,6 +30,7 @@ import {
   rollbackAdminConfig,
   saveAdminConfigDraft,
   publishAdminConfig,
+  updateEnterprise,
   updatePlatformUserAccess,
 } from '@/platform/platformService'
 import type { AdpConfigStatus, AdminAuditEvent, AdminConfigState, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
@@ -52,7 +53,7 @@ const auditSearch = ref('')
 const modal = ref<'enterprise' | 'user' | 'config' | 'access' | null>(null)
 const detail = ref<{ title: string; lines: string[] } | null>(null)
 const secretMessage = ref('')
-const enterpriseForm = ref({ name: '', customerCode: '' })
+const enterpriseForm = ref({ id: '', name: '', customerCode: '', unifiedSocialCreditCode: '', contactPerson: '', contactPhone: '' })
 const userForm = ref({ name: '', phone: '', role: 'customer' as PlatformRole, enterpriseId: '' })
 const configForm = ref({ itemsText: '', portal: true, m3ReadOnly: true, audit: true, webChannel: true, notes: '' })
 const configActionLoading = ref(false)
@@ -96,11 +97,12 @@ const errorMessage = (error: unknown, fallback: string) => {
 
 const view = computed(() => route.name === 'admin' ? 'overview' : String(route.name || '').replace('admin-', ''))
 const pageTitle = computed(() => ({
-  overview: '运营概览', enterprises: '企业与用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', audit: '会话与审计',
+  overview: '运营概览', enterprises: '企业管理', users: '平台用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', audit: '会话与审计',
 } as Record<string, string>)[view.value] || '运营概览')
 
 const resourceMeta = computed(() => ({
-  enterprises: { eyebrow: '客户目录', title: '企业与用户', description: '建立企业并为企业成员分配账号与可见业务范围。', icon: UsergroupIcon },
+  enterprises: { eyebrow: '客户目录', title: '企业管理', description: '登记入驻企业的名称、社会统一识别码与联系人信息；企业成员账号在「平台用户」维护。', icon: UsergroupIcon },
+  users: { eyebrow: '身份治理', title: '平台用户', description: '为企业成员分配账号、角色与可见业务范围。', icon: UserIcon },
   bindings: { eyebrow: '平台配置', title: 'ADP 应用配置', description: '一期平台只有一个 ADP 应用。应用凭据来自服务器 .env，企业和渠道均不参与 ADP 应用绑定。', icon: ApiIcon },
   channels: { eyebrow: '消息入口', title: '渠道管理', description: '配置渠道实例、凭据和渠道身份，查看每个接入的真实验证边界。', icon: ApiIcon },
   'agents-tools': { eyebrow: '能力编排', title: 'Agent 与工具', description: '登记的 Agent 与工具目录接口尚未接入，当前不展示演示数据。', icon: SettingIcon },
@@ -138,9 +140,12 @@ const loadData = async () => {
       configState.value = configData
     }
     if (view.value === 'enterprises') {
-      const [enterpriseRows, userRows] = await Promise.all([listEnterprises(), listPlatformUsers()])
-      enterprises.value = enterpriseRows
+      enterprises.value = await listEnterprises()
+    }
+    if (view.value === 'users') {
+      const [userRows, enterpriseRows] = await Promise.all([listPlatformUsers(), listEnterprises()])
       users.value = userRows
+      enterprises.value = enterpriseRows
     }
     if (view.value === 'bindings') {
       adpConfig.value = await getAdminAdpConfig()
@@ -169,12 +174,25 @@ const refresh = async () => {
 const openCreate = (target?: 'enterprise' | 'user') => {
   secretMessage.value = ''
   if ((target || 'enterprise') === 'enterprise') {
-    enterpriseForm.value = { name: '', customerCode: '' }
+    enterpriseForm.value = { id: '', name: '', customerCode: '', unifiedSocialCreditCode: '', contactPerson: '', contactPhone: '' }
     modal.value = 'enterprise'
   } else {
     userForm.value = { name: '', phone: '', role: 'customer', enterpriseId: enterprises.value[0]?.id || '' }
     modal.value = 'user'
   }
+}
+
+const openEditEnterprise = (item: AdminEnterprise) => {
+  secretMessage.value = ''
+  enterpriseForm.value = {
+    id: item.id,
+    name: item.name,
+    customerCode: item.customerCode,
+    unifiedSocialCreditCode: item.unifiedSocialCreditCode || '',
+    contactPerson: item.contactPerson || '',
+    contactPhone: item.contactPhone || '',
+  }
+  modal.value = 'enterprise'
 }
 
 const openConfigEditor = () => {
@@ -247,12 +265,29 @@ const rollbackConfig = async (version: number) => {
 const submitEnterprise = async () => {
   createActionLoading.value = true
   try {
-    await createEnterprise(enterpriseForm.value.name, enterpriseForm.value.customerCode)
+    const form = enterpriseForm.value
+    if (form.id) {
+      await updateEnterprise(form.id, {
+        name: form.name,
+        unifiedSocialCreditCode: form.unifiedSocialCreditCode,
+        contactPerson: form.contactPerson,
+        contactPhone: form.contactPhone,
+      })
+      setToast('企业已更新')
+    } else {
+      await createEnterprise({
+        name: form.name,
+        customerCode: form.customerCode,
+        unifiedSocialCreditCode: form.unifiedSocialCreditCode,
+        contactPerson: form.contactPerson,
+        contactPhone: form.contactPhone,
+      })
+      setToast('企业已创建')
+    }
     modal.value = null
-    setToast('企业已创建')
     await loadData()
   } catch (error) {
-    setToast(errorMessage(error, '企业创建失败'))
+    setToast(errorMessage(error, enterpriseForm.value.id ? '企业更新失败' : '企业创建失败'))
   } finally {
     createActionLoading.value = false
   }
@@ -348,7 +383,7 @@ const disableUser = async (user: AdminUser) => {
   }
 }
 
-const showEnterpriseDetail = (item: AdminEnterprise) => { detail.value = { title: item.name, lines: [`M3 客户编码：${item.customerCode}`, `状态：${item.status === 'active' ? '正常' : '已停用'}`] } }
+const showEnterpriseDetail = (item: AdminEnterprise) => { detail.value = { title: item.name, lines: [`M3 客户编码：${item.customerCode}`, `社会统一识别码：${item.unifiedSocialCreditCode || '—'}`, `企业联系人：${item.contactPerson || '—'}`, `联系电话：${item.contactPhone || '—'}`, `状态：${item.status === 'active' ? '正常' : '已停用'}`] } }
 const enterpriseSummary = (item: AdminUser) => item.enterprises.length ? item.enterprises.map((enterprise) => enterprise.name).join('、') : '未绑定企业'
 const showUserDetail = (item: AdminUser) => { detail.value = { title: item.name, lines: [`手机号：${item.phone}`, `角色：${item.roleLabel}`, `所属企业：${enterpriseSummary(item)}`, `状态：${userStatusLabel(item.status)}`] } }
 const showAuditDetail = (item: AdminAuditEvent) => { detail.value = { title: item.action, lines: [`Trace ID：${item.traceId}`, `目标：${item.targetType} / ${item.targetId || '—'}`, `结果：${item.outcome}`, `时间：${item.createdAt}`] } }
@@ -371,10 +406,13 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
       </template>
     </template>
     <template v-else-if="view === 'enterprises'">
-      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('enterprise')"><UsergroupIcon />新增企业</button><button class="primary-action" @click="openCreate('user')"><UserIcon />新增用户</button></div></section>
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('enterprise')"><UsergroupIcon />新增企业</button></div></section>
+      <section class="resource-panel admin-panel enterprises-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="enterpriseSearch" placeholder="搜索企业名称或客户编码" /></div><span class="resource-count">{{ filteredEnterprises.length }} 家企业</span></div><div v-if="loading && !enterprises.length" class="resource-loading">正在加载企业目录…</div><div v-else-if="!filteredEnterprises.length" class="panel-empty">暂无企业记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>企业</span><span>客户编码 / 社会统一识别码</span><span>状态</span><span>操作</span></div><div v-for="item in filteredEnterprises" :key="item.id" class="resource-row"><span class="resource-name"><UsergroupIcon /><strong>{{ item.name }}</strong></span><span class="resource-detail user-scope"><strong>{{ item.customerCode }}</strong><small>{{ item.unifiedSocialCreditCode || '未填写识别码' }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ item.status === 'active' ? '正常' : '已停用' }}</span><span class="row-actions"><button class="text-action" @click="openEditEnterprise(item)">编辑</button><button class="row-more" aria-label="查看企业详情" @click="showEnterpriseDetail(item)"><ChevronRightIcon /></button></span></div></div></section>
+    </template>
+    <template v-else-if="view === 'users'">
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('user')"><UserIcon />新增用户</button></div></section>
       <div v-if="secretMessage" class="secret-alert"><LockOnIcon /><span>{{ secretMessage }}</span><button type="button" aria-label="关闭" @click="secretMessage = ''">×</button></div>
-      <section class="resource-panel admin-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="enterpriseSearch" placeholder="搜索企业名称或客户编码" /></div><span class="resource-count">{{ filteredEnterprises.length }} 家企业</span></div><div v-if="loading && !enterprises.length" class="resource-loading">正在加载企业目录…</div><div v-else-if="!filteredEnterprises.length" class="panel-empty">暂无企业记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>企业</span><span>M3 客户编码</span><span>状态</span><span></span></div><div v-for="item in filteredEnterprises" :key="item.id" class="resource-row"><span class="resource-name"><UsergroupIcon /><strong>{{ item.name }}</strong></span><span class="resource-detail">{{ item.customerCode }}</span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ item.status === 'active' ? '正常' : '已停用' }}</span><button class="row-more" aria-label="查看企业详情" @click="showEnterpriseDetail(item)"><ChevronRightIcon /></button></div></div></section>
-      <section class="resource-panel admin-panel users-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="userSearch" placeholder="搜索用户姓名、手机号、角色或企业" /></div><span class="resource-count">{{ filteredUsers.length }} 位用户</span></div><div v-if="!filteredUsers.length" class="panel-empty">暂无用户记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>用户</span><span>角色与企业范围</span><span>状态</span><span>操作</span></div><div v-for="item in filteredUsers" :key="item.id" class="resource-row user-row"><span class="resource-name"><UserIcon /><strong>{{ item.name }}<small>{{ item.phone }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.roleLabel }}</strong><small>{{ enterpriseSummary(item) }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ userStatusLabel(item.status) }}</span><span class="row-actions"><button class="row-more" aria-label="查看用户详情" @click="showUserDetail(item)"><ChevronRightIcon /></button><button class="text-action" :disabled="item.status !== 'active' || platformStore.user?.id === item.id || userActionLoading === item.id" @click="openAccessEditor(item)">调整范围</button><button class="text-action" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="resetPassword(item)">{{ userActionLoading === item.id ? '处理中…' : '重置' }}</button><button class="text-action text-action--danger" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="disableUser(item)">{{ userActionLoading === item.id ? '处理中…' : '停用' }}</button></span></div></div></section>
+      <section class="resource-panel admin-panel users-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="userSearch" placeholder="搜索用户姓名、手机号、角色或企业" /></div><span class="resource-count">{{ filteredUsers.length }} 位用户</span></div><div v-if="loading && !users.length" class="resource-loading">正在加载平台用户…</div><div v-else-if="!filteredUsers.length" class="panel-empty">暂无用户记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>用户</span><span>角色与企业范围</span><span>状态</span><span>操作</span></div><div v-for="item in filteredUsers" :key="item.id" class="resource-row user-row"><span class="resource-name"><UserIcon /><strong>{{ item.name }}<small>{{ item.phone }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.roleLabel }}</strong><small>{{ enterpriseSummary(item) }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ userStatusLabel(item.status) }}</span><span class="row-actions"><button class="row-more" aria-label="查看用户详情" @click="showUserDetail(item)"><ChevronRightIcon /></button><button class="text-action" :disabled="item.status !== 'active' || platformStore.user?.id === item.id || userActionLoading === item.id" @click="openAccessEditor(item)">调整范围</button><button class="text-action" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="resetPassword(item)">{{ userActionLoading === item.id ? '处理中…' : '重置' }}</button><button class="text-action text-action--danger" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="disableUser(item)">{{ userActionLoading === item.id ? '处理中…' : '停用' }}</button></span></div></div></section>
     </template>
     <template v-else-if="view === 'audit'">
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
@@ -402,7 +440,7 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
     </template>
 
     <div v-if="modal" class="modal-backdrop" @click.self="!createActionLoading && !accessActionLoading && !configActionLoading ? modal = null : undefined">
-      <form v-if="modal === 'enterprise'" class="modal-card" @submit.prevent="submitEnterprise"><div class="modal-heading"><div><p class="section-kicker">客户目录</p><h2>新增企业</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>企业名称<input v-model="enterpriseForm.name" required maxlength="255" /></label><label>M3 客户编码<input v-model="enterpriseForm.customerCode" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" /></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建企业' }}</button></div></form>
+      <form v-if="modal === 'enterprise'" class="modal-card" @submit.prevent="submitEnterprise"><div class="modal-heading"><div><p class="section-kicker">客户目录</p><h2>{{ enterpriseForm.id ? '编辑企业' : '新增企业' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>企业名称<input v-model="enterpriseForm.name" required maxlength="255" /></label><label>M3 客户编码<input v-model="enterpriseForm.customerCode" :required="!enterpriseForm.id" :disabled="!!enterpriseForm.id" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" /><small v-if="enterpriseForm.id" class="field-hint">客户编码创建后不可修改</small></label><label>社会统一识别码<input v-model="enterpriseForm.unifiedSocialCreditCode" required minlength="18" maxlength="18" placeholder="18 位统一社会信用代码" /></label><label>企业联系人（选填）<input v-model="enterpriseForm.contactPerson" maxlength="128" /></label><label>联系电话（选填）<input v-model="enterpriseForm.contactPhone" maxlength="32" /></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '保存中…' : (enterpriseForm.id ? '保存' : '创建企业') }}</button></div></form>
       <form v-else-if="modal === 'user'" class="modal-card" @submit.prevent="submitUser"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>新增平台用户</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>姓名<input v-model="userForm.name" required maxlength="255" /></label><label>手机号<input v-model="userForm.phone" required inputmode="numeric" pattern="1[0-9]{10}" /></label><label>角色<select v-model="userForm.role"><option value="customer">客户员工</option><option value="staff">客服 / 销售</option><option value="ops">运维人员</option><option value="admin">平台管理员</option></select></label><label>所属企业<select v-model="userForm.enterpriseId" :required="userForm.role === 'customer'"><option value="">{{ userForm.role === 'customer' ? '请选择企业' : '不绑定企业' }}</option><option v-for="item in enterprises" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建用户' }}</button></div></form>
       <form v-else-if="modal === 'access'" class="modal-card access-editor-card" @submit.prevent="submitAccess"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>调整访问范围</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="accessActionLoading" @click="modal = null">×</button></div><div v-if="accessUser" class="access-user-summary"><UserIcon /><div><strong>{{ accessUser.name }}</strong><small>{{ accessUser.phone }} · 当前绑定 {{ accessUser.enterprises.length }} 家企业</small></div></div><p class="modal-help">角色和企业范围会同时生效，保存后该用户已有的执行上下文会立即撤销。</p><label>角色<select v-model="accessRole" :disabled="accessActionLoading"><option v-for="option in roleOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><fieldset class="scope-fieldset"><legend>企业访问范围</legend><p class="scope-help">停用企业不能新选；已在范围中的停用企业需要取消勾选后才能保存。</p><label v-for="item in enterprises" :key="item.id" class="scope-option" :class="{ 'scope-option--suspended': item.status === 'suspended' }"><input v-model="accessEnterpriseIds" type="checkbox" :value="item.id" :disabled="accessActionLoading || (item.status === 'suspended' && !accessEnterpriseIds.includes(item.id))" /><span><strong>{{ item.name }}</strong><small>{{ item.customerCode }} · {{ item.status === 'active' ? '正常' : '已停用' }}</small></span></label><span v-if="!enterprises.length" class="scope-empty">暂无可用企业</span></fieldset><div v-if="accessFormError" class="form-error" role="alert"><ErrorCircleIcon /><span>{{ accessFormError }}</span></div><div class="modal-actions"><button type="button" class="outline-action" :disabled="accessActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="accessActionLoading">{{ accessActionLoading ? '保存中…' : '保存访问范围' }}</button></div></form>
       <form v-else-if="modal === 'config'" class="modal-card config-editor-card" @submit.prevent="submitConfigDraft"><div class="modal-heading"><div><p class="section-kicker">平台配置</p><h2>编辑配置草稿</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="modal = null">×</button></div><p class="modal-help">每行一项能力。保存后生成草稿，发布前仍可继续修改。</p><label>能力清单<textarea v-model="configForm.itemsText" required maxlength="1800" rows="7" placeholder="例如：客户登录与会话&#10;M3 只读工具"></textarea></label><fieldset class="flag-fieldset"><legend>功能开关</legend><label class="checkbox-row"><input v-model="configForm.portal" type="checkbox" /><span>客户门户</span></label><label class="checkbox-row"><input v-model="configForm.m3ReadOnly" type="checkbox" /><span>M3 只读工具</span></label><label class="checkbox-row"><input v-model="configForm.audit" type="checkbox" /><span>审计记录</span></label><label class="checkbox-row"><input v-model="configForm.webChannel" type="checkbox" /><span>官网渠道</span></label></fieldset><label>变更说明<textarea v-model="configForm.notes" maxlength="500" rows="3" placeholder="可选，说明本次配置变更原因"></textarea></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="configActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="configActionLoading">{{ configActionLoading ? '保存中…' : '保存草稿' }}</button></div></form>
@@ -442,6 +480,9 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
 .row-more :deep(svg) { width: 15px; }
 .users-panel { margin-top: 18px; }
 .users-panel .resource-table-head, .users-panel .resource-row { grid-template-columns: minmax(170px, 1.1fr) minmax(180px, 1fr) minmax(100px, .7fr) minmax(250px, 1fr); }
+.enterprises-panel .resource-table-head, .enterprises-panel .resource-row { grid-template-columns: minmax(180px, 1.4fr) minmax(170px, 1fr) minmax(90px, .6fr) minmax(130px, auto); }
+.field-hint { color: #93a19d; font-weight: 400; font-size: 10px; }
+.modal-card input:disabled { background: #f2f5f4; color: #8a9995; cursor: not-allowed; }
 .resource-name strong small { display: block; margin-top: 3px; color: #8a9995; font-size: 10px; font-weight: 400; }
 .user-scope strong, .user-scope small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-scope strong { color: #3d5d55; font-size: 11px; font-weight: 650; }.user-scope small { margin-top: 3px; color: #879792; font-size: 10px; }
