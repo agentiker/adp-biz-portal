@@ -23,6 +23,7 @@ from model.platform import (
     PlatformChannelIdentity,
     PlatformChannelIdentityStatus,
     PlatformDeliveryTask,
+    PlatformEnterprise,
     PlatformInboundMessage,
     PlatformRole,
     PlatformStatus,
@@ -54,7 +55,8 @@ async def kf_sessionmaker():
         connect_args={"server_settings": {"search_path": f'"{schema}",public'}},
     )
     tables = [
-        Account.__table__, PlatformUser.__table__, PlatformChannelIdentity.__table__,
+        Account.__table__, PlatformEnterprise.__table__, PlatformUser.__table__,
+        PlatformChannelIdentity.__table__,
         PlatformChannelCursor.__table__, PlatformInboundMessage.__table__,
         PlatformDeliveryTask.__table__, PlatformAuditEvent.__table__,
     ]
