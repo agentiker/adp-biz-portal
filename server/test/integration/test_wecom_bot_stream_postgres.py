@@ -134,10 +134,10 @@ async def test_bound_message_streams_cumulative_frames_and_records(bot_sessionma
         provider=_StreamingProvider(), reply_stream=rec.push, guard=_MsgidGuard(),
     )
     assert result["status"] == "streamed"
-    # Loading frame first, then cumulative snapshots, then a final frame.
-    assert rec.frames[0] == ("", False)
+    # Native 思考中 placeholder first, then cumulative snapshots, then a final frame.
+    assert rec.frames[0] == ("<think></think>", False)
     assert rec.frames[-1][1] is True
-    contents = [c for c, _ in rec.frames if c]
+    contents = [c for c, _ in rec.frames if c and c != "<think></think>"]
     assert contents == sorted(contents, key=len)  # monotonically growing (cumulative)
     assert "已到港" in rec.frames[-1][0]
     async with bot_sessionmaker() as db:
@@ -176,6 +176,45 @@ async def test_duplicate_msgid_is_dropped(bot_sessionmaker):
     )
     assert result["status"] == "duplicate"
     assert rec2.frames == []
+
+
+class _ThinkingProvider:
+    capabilities = frozenset({"shipment.lookup"})
+    agent_id = "app-123"
+
+    async def execute(self, request, *, sink=None):
+        if sink is not None:
+            await sink.emit_reasoning("先核对提单号")   # reasoning first (thought message)
+            await sink.emit_reasoning("，查询到港状态")
+            await sink.emit("提单 BL-1 已到港。")        # then the answer (reply message)
+        return AgentResponse(
+            status="found", query=request.query, title="提单 BL-1",
+            summary="提单 BL-1 已到港。",
+            evidence=[{"label": "状态", "value": "已到港", "source": "m3", "known": True}],
+            provider_trace_id="tr", audit_outcome="success",
+        )
+
+
+@pytest.mark.asyncio
+async def test_reasoning_folds_into_think_block_before_answer(bot_sessionmaker):
+    await _seed_identity(bot_sessionmaker, bind=True)
+    rec = _Recorder()
+    result = await run_wecom_bot_turn(
+        bot_sessionmaker, channel=WECOM_BOT, channel_instance_id="bot-1", envelope=_envelope(),
+        provider=_ThinkingProvider(), reply_stream=rec.push, guard=_MsgidGuard(),
+    )
+    assert result["status"] == "streamed"
+    finals = [c for c, is_final in rec.frames if is_final]
+    final = finals[-1]
+    # Thinking is folded in a <think> block; the answer follows and is clean.
+    assert final.startswith("<think>") and "</think>" in final
+    assert "先核对提单号" in final and "查询到港状态" in final
+    answer_part = final.split("</think>", 1)[1]
+    assert "已到港" in answer_part and "<think>" not in answer_part
+    # The stored answer (DB/summary) must not contain the reasoning.
+    async with bot_sessionmaker() as db:
+        msg = (await db.execute(select(PlatformMessage))).scalars().first()
+        assert "先核对提单号" not in (msg.Body or "") and "已到港" in (msg.Body or "")
 
 
 class _FakeWs:
@@ -233,7 +272,7 @@ async def test_ws_gateway_subscribes_and_streams_replies(bot_sessionmaker):
         finals.append(stream["finish"])
     # Cumulative snapshots (growing text), last frame marks the bubble finished.
     assert finals[-1] is True
-    nonempty = [c for c in contents if c]
+    nonempty = [c for c in contents if c and c != "<think></think>"]
     assert nonempty == sorted(nonempty, key=len)
     assert "已到港" in contents[-1]
 

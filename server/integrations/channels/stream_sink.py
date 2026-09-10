@@ -57,11 +57,17 @@ class SnapshotStreamSink:
         *,
         min_interval: float = DEFAULT_SNAPSHOT_MIN_INTERVAL,
         max_chars: int = DEFAULT_SNAPSHOT_MAX_CHARS,
+        render: Callable[[str, str], str] | None = None,
     ):
         self._push = push
         self._min_interval = max(0.0, min_interval)
         self._max_chars = max_chars
-        self._buffer = ""
+        # A channel that separates thinking from the answer (WeCom smart robot)
+        # supplies a render(answer, reasoning) -> content formatter; the default
+        # streams the answer only.
+        self._render = render
+        self._answer = ""
+        self._reasoning = ""
         self._last_pushed: str | None = None
         self._last_push_at = 0.0
         self._failed = False
@@ -70,7 +76,14 @@ class SnapshotStreamSink:
     async def emit(self, text: str) -> None:
         if not isinstance(text, str) or not text or self._failed:
             return
-        self._buffer += text
+        self._answer += text
+        if (time.monotonic() - self._last_push_at) >= self._min_interval:
+            await self._flush(is_final=False)
+
+    async def emit_reasoning(self, text: str) -> None:
+        if not isinstance(text, str) or not text or self._failed:
+            return
+        self._reasoning += text
         if (time.monotonic() - self._last_push_at) >= self._min_interval:
             await self._flush(is_final=False)
 
@@ -79,8 +92,15 @@ class SnapshotStreamSink:
             return
         await self._flush(is_final=True)
 
+    def _compose(self) -> str:
+        if self._render is not None:
+            content = self._render(self._answer, self._reasoning)
+        else:
+            content = to_plain_text(self._answer)
+        return content[: self._max_chars]
+
     async def _flush(self, *, is_final: bool) -> None:
-        content = to_plain_text(self._buffer)[: self._max_chars]
+        content = self._compose()
         # A non-final frame identical to the last one is a no-op; a final frame
         # is always sent so the bubble is marked finished.
         if not is_final and content == self._last_pushed:

@@ -65,3 +65,38 @@ async def test_push_failure_stops_streaming_without_raising():
     await sink.emit("more")  # sink is now disabled, no further attempts
     await sink.close()
     assert rec.frames == []  # nothing recorded; the run is never broken
+
+
+def _think_render(answer: str, reasoning: str) -> str:
+    r, a = reasoning.strip(), answer
+    if r and a:
+        return f"<think>{r}</think>\n{a}"
+    if r:
+        return f"<think>{r}</think>"
+    return a
+
+
+@pytest.mark.asyncio
+async def test_render_separates_reasoning_from_answer():
+    rec = _Recorder()
+    sink = SnapshotStreamSink(rec.push, min_interval=0.0, render=_think_render)
+    await sink.emit_reasoning("先分析")      # reasoning arrives first
+    await sink.emit_reasoning("提单状态")
+    await sink.emit("已到港。")               # then the answer
+    await sink.close()
+    # Reasoning folds into <think>; the answer appends below and stays clean.
+    assert rec.frames[0] == ("<think>先分析</think>", False)
+    assert rec.frames[-1] == ("<think>先分析提单状态</think>\n已到港。", True)
+    # Every frame keeps reasoning folded.
+    assert all(c.startswith("<think>") for c, _ in rec.frames)
+
+
+@pytest.mark.asyncio
+async def test_render_answer_only_when_no_reasoning():
+    rec = _Recorder()
+    sink = SnapshotStreamSink(rec.push, min_interval=0.0, render=_think_render)
+    await sink.emit("直接回答")
+    await sink.close()
+    assert rec.frames[-1] == ("直接回答", True)
+    assert "<think>" not in rec.frames[-1][0]
+

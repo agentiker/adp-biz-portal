@@ -326,7 +326,12 @@ class ADPAgentProvider:
             title=normalized_query,
         )
         contents = [{"Type": "text", "Text": normalized_query}]
-        text_parts: list[str] = []
+        answer_parts: list[str] = []
+        # ADP streams reasoning as text.delta under a separate message whose
+        # Type is "thought"; the answer is the "reply" message. We classify each
+        # delta by its message id so the answer stays clean and (for a channel
+        # that supports it) the thinking is streamed separately.
+        message_types: dict[str, str] = {}
         evidence: list[dict[str, Any]] = []
         trace_id = ""
         try:
@@ -349,21 +354,47 @@ class ADPAgentProvider:
                     if not trace_id:
                         trace_id = _safe_trace_id(payload)
                     evidence.extend(_event_evidence(payload))
-                    if event_type.lower() == "text.delta":
+                    lowered = event_type.lower()
+                    if lowered in ("message.added", "message.processing", "message.done"):
+                        message = _event_value(payload, "Message", "message")
+                        if isinstance(message, Mapping):
+                            mid = message.get("MessageId") or message.get("message_id")
+                            mtype = message.get("Type") or message.get("type")
+                            if mid is not None:
+                                message_types[str(mid)] = str(mtype or "")
+                    elif lowered == "text.delta":
                         delta = _event_value(payload, "Text", "text")
                         if isinstance(delta, str):
-                            text_parts.append(delta[:4000])
-                            if sink is not None:
-                                # Forward upstream text as it arrives. A channel
-                                # send must never abort the run: the full answer
-                                # is still persisted for the portal.
-                                try:
-                                    await sink.emit(delta[:4000])
-                                except Exception as exc:
-                                    logger.warning(
-                                        "streaming sink failed: %s", type(exc).__name__
-                                    )
-                                    sink = None
+                            mid = str(_event_value(payload, "MessageId", "message_id") or "")
+                            mtype = message_types.get(mid, "")
+                            chunk = delta[:4000]
+                            if mtype == "thought":
+                                # Reasoning: stream separately when the channel
+                                # supports it; never part of the stored answer.
+                                if sink is not None and hasattr(sink, "emit_reasoning"):
+                                    try:
+                                        await sink.emit_reasoning(chunk)
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "streaming sink failed: %s", type(exc).__name__
+                                        )
+                                        sink = None
+                            elif mtype in ("tool_call", "notice"):
+                                # Process noise; not shown to the customer.
+                                continue
+                            else:
+                                # "reply" (or an unknown/default) is the answer.
+                                answer_parts.append(chunk)
+                                if sink is not None:
+                                    # A channel send must never abort the run: the
+                                    # full answer is still persisted for the portal.
+                                    try:
+                                        await sink.emit(chunk)
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "streaming sink failed: %s", type(exc).__name__
+                                        )
+                                        sink = None
         except DeliveryRetryableError:
             raise
         except Exception as exc:
@@ -378,7 +409,7 @@ class ADPAgentProvider:
             except Exception as exc:
                 logger.warning("streaming sink close failed: %s", type(exc).__name__)
 
-        summary = "".join(text_parts).strip()[:2000]
+        summary = "".join(answer_parts).strip()[:2000]
         if not summary:
             return AgentResponse.upstream_error(normalized_query.upper())
         return AgentResponse(
