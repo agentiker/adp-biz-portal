@@ -4,6 +4,8 @@ import type {
   AdminConfigState,
   AdminConfigVersion,
   AdminAuditEvent,
+  AdminConversationList,
+  AdminConversationDetail,
   AdminEnterprise,
   AdminPasswordResetResult,
   AdminUser,
@@ -473,6 +475,22 @@ export async function disablePlatformUser(userId: string): Promise<{ userId: str
 
 export async function listAuditEvents(): Promise<AdminAuditEvent[]> {
   return requestOrMock('/api/v1/admin/audit', [])
+}
+
+export async function listAdminConversations(
+  params: { limit?: number; offset?: number; enterpriseId?: string } = {},
+): Promise<AdminConversationList> {
+  if (useMock) return { items: [], total: 0, limit: params.limit ?? 50, offset: params.offset ?? 0 }
+  const query = new URLSearchParams()
+  if (params.limit != null) query.set('limit', String(params.limit))
+  if (params.offset != null) query.set('offset', String(params.offset))
+  if (params.enterpriseId) query.set('enterpriseId', params.enterpriseId)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return httpService.get<AdminConversationList>(`/api/v1/admin/conversations${suffix}`)
+}
+
+export async function getAdminConversation(conversationId: string): Promise<AdminConversationDetail> {
+  return httpService.get<AdminConversationDetail>(`/api/v1/admin/conversations/${conversationId}`)
 }
 
 export async function listAdminBindings(): Promise<IntegrationBinding[]> {

@@ -48,6 +48,27 @@ export interface AdminConfigVersion {
   rollbackSourceVersion: number | null
 }
 
+export interface AdminConversationDetail {
+  conversation: AdminConversationSummary
+  messages: Array<PortalMessage>
+  runs: Array<PortalExecutionRun>
+  result: ShipmentResult | null
+}
+
+export interface AdminConversationList {
+  items: Array<AdminConversationSummary>
+  total: number
+  limit: number
+  offset: number
+}
+
+export type AdminConversationSummary = PortalSession & {
+    enterpriseId?: string
+    enterpriseName?: string
+    accountId?: string
+    accountName?: string
+  }
+
 export interface AdminEnterprise {
   id: string
   name: string

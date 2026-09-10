@@ -68,6 +68,11 @@ const router = createRouter({
       component: () => import('@/pages/Admin.vue'),
     },
     {
+      path: '/admin/conversations',
+      name: 'admin-conversations',
+      component: () => import('@/pages/Admin.vue'),
+    },
+    {
       path: '/admin/audit',
       name: 'admin-audit',
       component: () => import('@/pages/Admin.vue'),

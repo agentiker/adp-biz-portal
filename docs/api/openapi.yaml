@@ -764,6 +764,19 @@ paths:
       tags: [Administration]
       operationId: listAuditEvents
       summary: List recent platform audit events
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+        - name: action
+          in: query
+          required: false
+          schema: { type: string }
+        - name: outcome
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         '200':
           description: Most recent audit events
@@ -774,6 +787,51 @@ paths:
                 items: { $ref: '#/components/schemas/AdminAuditEvent' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/conversations:
+    get:
+      tags: [Administration]
+      operationId: listAdminConversations
+      summary: List conversations across enterprises (admin)
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: enterpriseId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Paginated conversation directory
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConversationList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/conversations/{conversation_id}:
+    get:
+      tags: [Administration]
+      operationId: getAdminConversation
+      summary: Read one conversation with runs/evidence (admin)
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Conversation detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConversationDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/admin/channel-identities:
     get:
       tags: [Administration]
@@ -1248,6 +1306,40 @@ components:
       required: [conversation, messages, runs, result]
       properties:
         conversation: { $ref: '#/components/schemas/PortalSession' }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/PortalMessage' }
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/PortalExecutionRun' }
+        result:
+          oneOf:
+            - { $ref: '#/components/schemas/ShipmentResult' }
+            - { type: 'null' }
+    AdminConversationSummary:
+      allOf:
+        - { $ref: '#/components/schemas/PortalSession' }
+        - type: object
+          properties:
+            enterpriseId: { type: string, nullable: true }
+            enterpriseName: { type: string, nullable: true }
+            accountId: { type: string, nullable: true }
+            accountName: { type: string, nullable: true }
+    AdminConversationList:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminConversationSummary' }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    AdminConversationDetail:
+      type: object
+      required: [conversation, messages, runs, result]
+      properties:
+        conversation: { $ref: '#/components/schemas/AdminConversationSummary' }
         messages:
           type: array
           items: { $ref: '#/components/schemas/PortalMessage' }
