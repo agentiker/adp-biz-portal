@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import os
 import uuid
 
@@ -14,13 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from integrations.adp.provider import AgentResponse
-from integrations.channels._wechat.crypto import (
-    compute_msg_signature,
-    decode_aes_key,
-    decrypt_envelope,
-    encrypt_payload,
-    verify_msg_signature,
-)
 from integrations.channels.wecom_bot.adapter import WECOM_BOT, WecomBotAdapter
 from integrations.channels.wecom_bot.gateway import _MsgidGuard, run_wecom_bot_turn
 from integrations.channels.wecom_bot.ws_client import WecomBotWsConfig, WecomBotWsGateway
@@ -42,7 +34,6 @@ from model.platform import (
 
 
 AES_KEY_B64 = base64.b64encode(bytes(range(32))).decode().rstrip("=")
-AES_KEY = decode_aes_key(AES_KEY_B64)
 
 
 def _database_url() -> str:
@@ -202,21 +193,15 @@ class _FakeWs:
         pass
 
 
-def _encrypted_callback_frame(msg: dict) -> dict:
-    plain = json.dumps(msg, ensure_ascii=False)
-    encrypt = encrypt_payload(aes_key=AES_KEY, receiver_id="corp-1", plain=plain)
-    ts, nonce = "1700000000", "abcdef01"
-    sig = compute_msg_signature(token="tok", timestamp=ts, nonce=nonce, encrypt=encrypt)
-    return {
-        "cmd": "aibot_msg_callback", "encrypt": encrypt, "msgsignature": sig,
-        "timestamp": ts, "nonce": nonce, "req_id": "r1",
-    }
+def _callback_frame(msg: dict) -> dict:
+    """A plaintext aibot_msg_callback frame (WS long-connection carries no crypto)."""
+    return {"cmd": "aibot_msg_callback", "headers": {"req_id": "r1"}, "body": msg}
 
 
 @pytest.mark.asyncio
-async def test_ws_gateway_subscribes_and_streams_encrypted_replies(bot_sessionmaker):
+async def test_ws_gateway_subscribes_and_streams_replies(bot_sessionmaker):
     await _seed_identity(bot_sessionmaker, bind=True)
-    frame = _encrypted_callback_frame(
+    frame = _callback_frame(
         {"msgtype": "text", "msgid": "wm1", "chattype": "single",
          "from": {"userid": "u1"}, "text": {"content": "BL-1"}, "stream": {"id": "s9"}}
     )
@@ -225,35 +210,27 @@ async def test_ws_gateway_subscribes_and_streams_encrypted_replies(bot_sessionma
     async def _connect():
         return ws
 
-    config = WecomBotWsConfig(
-        channel_instance_id="bot-1", bot_id="b-1", secret="sec",
-        corp_id="corp-1", token="tok", encoding_aes_key=AES_KEY_B64,
-    )
+    config = WecomBotWsConfig(channel_instance_id="bot-1", bot_id="b-1", secret="sec")
     gw = WecomBotWsGateway(
         config=config, provider=_StreamingProvider(), sessionmaker=bot_sessionmaker,
         connect=_connect, guard=_MsgidGuard(), now=lambda: 1700000000.0,
     )
     await gw.serve_once()
 
-    # The session opens with a subscribe carrying bot_id + secret.
+    # The session opens with an aibot_subscribe carrying bot_id + secret.
     assert ws.sent[0]["cmd"] == "aibot_subscribe"
-    assert ws.sent[0]["bot_id"] == "b-1" and ws.sent[0]["secret"] == "sec"
+    assert ws.sent[0]["body"] == {"bot_id": "b-1", "secret": "sec"}
+    assert "req_id" in ws.sent[0]["headers"]
 
-    replies = [f for f in ws.sent if f.get("cmd") == "reply_stream"]
+    replies = [f for f in ws.sent if f.get("cmd") == "aibot_respond_msg"]
     assert replies, ws.sent
     contents, finals = [], []
     for f in replies:
-        assert f["req_id"] == "r1" and f["stream_id"] == "s9"
-        assert verify_msg_signature(
-            token="tok", timestamp=f["timestamp"], nonce=f["nonce"],
-            encrypt=f["encrypt"], msg_signature=f["msgsignature"],
-        )
-        plain = decrypt_envelope(
-            aes_key=AES_KEY, encrypt=f["encrypt"], expected_receiver_id="corp-1", receiver_label="CorpID"
-        ).decode("utf-8")
-        data = json.loads(plain)
-        contents.append(data["stream"]["content"])
-        finals.append(data["stream"]["finish"])
+        assert f["headers"]["req_id"] == "r1"  # reuse the callback's req_id
+        stream = f["body"]["stream"]
+        assert f["body"]["msgtype"] == "stream" and stream["id"] == "s9"
+        contents.append(stream["content"])
+        finals.append(stream["finish"])
     # Cumulative snapshots (growing text), last frame marks the bubble finished.
     assert finals[-1] is True
     nonempty = [c for c in contents if c]
@@ -262,25 +239,19 @@ async def test_ws_gateway_subscribes_and_streams_encrypted_replies(bot_sessionma
 
 
 @pytest.mark.asyncio
-async def test_ws_gateway_rejects_bad_signature_without_replying(bot_sessionmaker):
+async def test_ws_gateway_ignores_event_callback(bot_sessionmaker):
     await _seed_identity(bot_sessionmaker, bind=True)
-    frame = _encrypted_callback_frame(
-        {"msgtype": "text", "msgid": "wm2", "chattype": "single",
-         "from": {"userid": "u1"}, "text": {"content": "BL-1"}, "stream": {"id": "s9"}}
-    )
-    frame["msgsignature"] = "deadbeef"  # tampered
+    frame = {"cmd": "aibot_event_callback", "headers": {"req_id": "r2"},
+             "body": {"event": {"eventtype": "enter_chat"}}}
     ws = _FakeWs([frame])
 
     async def _connect():
         return ws
 
-    config = WecomBotWsConfig(
-        channel_instance_id="bot-1", bot_id="b-1", secret="sec",
-        corp_id="corp-1", token="tok", encoding_aes_key=AES_KEY_B64,
-    )
+    config = WecomBotWsConfig(channel_instance_id="bot-1", bot_id="b-1", secret="sec")
     gw = WecomBotWsGateway(
         config=config, provider=_StreamingProvider(), sessionmaker=bot_sessionmaker,
         connect=_connect, guard=_MsgidGuard(), now=lambda: 1700000000.0,
     )
     await gw.serve_once()
-    assert [f for f in ws.sent if f.get("cmd") == "reply_stream"] == []
+    assert [f for f in ws.sent if f.get("cmd") == "aibot_respond_msg"] == []

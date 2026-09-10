@@ -1,56 +1,69 @@
 """企业微信智能机器人 WS long-connection client (real streaming).
 
-The AI bot pushes inbound messages over a WebSocket (``wss://openws.work.weixin.qq.com``)
-and expects the reply to stream back on the *same* socket as cumulative
-snapshot frames. That rules out the durable worker (which cannot push to a held
+The AI bot delivers inbound messages over a WebSocket to
+``wss://openws.work.weixin.qq.com`` and expects the reply to stream back on the
+*same* socket. That rules out the durable worker (which cannot push to a held
 socket): this client holds the connection and runs each turn inline via
-``run_wecom_bot_turn``, whose ``reply_stream`` closure encrypts each snapshot
-into a reply frame and sends it straight back.
+``run_wecom_bot_turn``, whose ``reply_stream`` closure sends each cumulative
+snapshot straight back as an ``aibot_respond_msg`` frame.
 
-Connection lifecycle here (subscribe / heartbeat / reconnect) and the callback
-crypto (``_wechat.crypto_json``) are protocol-verified against the reference
-impls and docs. The exact *reply* frame field names cannot be confirmed without
-a live bot, so they are centralized as constants (``REPLY_*``) — real 联调
-(M0-CHANNEL-01) may need to adjust only those. The transport is injected as a
-``connect`` callable returning a :class:`WsConnection`, so the whole dispatch
-path is exercised by a fake ws in tests without any network.
+Protocol (verified against three reference impls — AstrBot ``wecomai_long_connection.py``,
+LangBot ``wecom_ai_bot_api/ws_client.py`` and openclaw-china's long-connection
+spec — which all agree):
+
+- Bare URL ``wss://openws.work.weixin.qq.com``; on connect send ``aibot_subscribe``
+  with ``{"bot_id","secret"}``. One bot holds at most one live connection; a new
+  one evicts the old.
+- Every frame is ``{"cmd", "headers": {"req_id"}, "body": {...}}``. Heartbeat is
+  ``ping``; inbound is ``aibot_msg_callback`` / ``aibot_event_callback``.
+- In long-connection mode the callback ``body`` is **plaintext** (TLS secures
+  the socket) — there is no per-frame AES/signature. AES only applies to the
+  separate HTTPS-webhook mode and to per-URL media keys, neither of which this
+  client uses. So no ``crypto_json`` here.
+- A streaming reply is ``aibot_respond_msg`` reusing the callback's ``req_id``,
+  with ``body.stream = {"id", "content", "finish"}``; every frame carries the
+  full text so far and the last frame sets ``finish=true``.
+
+The transport is injected as a ``connect`` callable returning a
+:class:`WsConnection`, so the whole dispatch path is exercised by a fake ws in
+tests without any network.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import secrets
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from integrations.channels._wechat.crypto import WechatProtocolError
-from integrations.channels._wechat.crypto_json import build_reply_json, verify_and_decrypt_json
 from integrations.channels.wecom_bot.adapter import WecomBotAdapter
 from integrations.channels.wecom_bot.gateway import _MsgidGuard, run_wecom_bot_turn
 
 
 logger = logging.getLogger(__name__)
 
-# Outbound command names on the socket.
+DEFAULT_WS_URL = "wss://openws.work.weixin.qq.com"
+
+# Outbound command names.
 CMD_SUBSCRIBE = "aibot_subscribe"
 CMD_PING = "ping"
-CMD_REPLY = "reply_stream"
-# Inbound frame markers.
-CMD_CALLBACK = "aibot_msg_callback"
-# Reply-frame field names (see module docstring — adjust here after 联调).
-REPLY_STREAM_ID = "stream_id"
-REPLY_REQ_ID = "req_id"
-REPLY_FINISH = "finish"
-REPLY_CONTENT = "content"
+CMD_RESPOND_MSG = "aibot_respond_msg"
+# Inbound command names.
+CMD_MSG_CALLBACK = "aibot_msg_callback"
+CMD_EVENT_CALLBACK = "aibot_event_callback"
 
 DEFAULT_HEARTBEAT_INTERVAL = 30.0
-# errcode 6000 = a subscribe for this bot already holds the socket elsewhere.
-CONFLICT_ERRCODE = 6000
+# errcode 6000 = another subscriber already holds this bot's socket.
+SUBSCRIBE_CONFLICT_ERRCODE = 6000
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 30.0
+
+
+def _gen_req_id() -> str:
+    return uuid.uuid4().hex
 
 
 class WsSubscribeConflict(RuntimeError):
@@ -58,7 +71,7 @@ class WsSubscribeConflict(RuntimeError):
 
 
 class WsConnection(Protocol):
-    """Minimal duplex text-frame connection (aiohttp ws or a test fake)."""
+    """Minimal duplex JSON-frame connection (aiohttp ws or a test fake)."""
 
     async def send_json(self, data: Mapping[str, Any]) -> None: ...
 
@@ -74,9 +87,6 @@ class WecomBotWsConfig:
     channel_instance_id: str
     bot_id: str
     secret: str
-    corp_id: str
-    token: str
-    encoding_aes_key: str
 
 
 class WecomBotWsGateway:
@@ -100,12 +110,7 @@ class WecomBotWsGateway:
         self._heartbeat_interval = max(1.0, heartbeat_interval)
         self._guard = guard or _MsgidGuard()
         self._now = now
-        self._adapter = WecomBotAdapter(
-            channel_instance_id=config.channel_instance_id,
-            corp_id=config.corp_id,
-            token=config.token,
-            encoding_aes_key=config.encoding_aes_key,
-        )
+        self._adapter = WecomBotAdapter(channel_instance_id=config.channel_instance_id)
 
     async def run_forever(self, *, max_sessions: int | None = None) -> None:
         """Serve sessions, reconnecting with capped exponential backoff."""
@@ -141,6 +146,8 @@ class WecomBotWsGateway:
                     break
                 try:
                     await self._dispatch(conn, frame)
+                except WsSubscribeConflict:
+                    raise
                 except Exception:  # noqa: BLE001 - one bad frame must not drop the socket
                     logger.exception("wecom bot ws frame dispatch failed")
         finally:
@@ -154,7 +161,11 @@ class WecomBotWsGateway:
 
     async def _subscribe(self, conn: WsConnection) -> None:
         await conn.send_json(
-            {"cmd": CMD_SUBSCRIBE, "bot_id": self._config.bot_id, "secret": self._config.secret}
+            {
+                "cmd": CMD_SUBSCRIBE,
+                "headers": {"req_id": _gen_req_id()},
+                "body": {"bot_id": self._config.bot_id, "secret": self._config.secret},
+            }
         )
 
     async def _heartbeat(self, conn: WsConnection, stop: asyncio.Event) -> None:
@@ -165,50 +176,37 @@ class WecomBotWsGateway:
             except asyncio.TimeoutError:
                 pass
             try:
-                await conn.send_json({"cmd": CMD_PING})
+                await conn.send_json({"cmd": CMD_PING, "headers": {"req_id": _gen_req_id()}})
             except Exception:  # noqa: BLE001 - the receive loop will observe the close
                 return
 
     async def _dispatch(self, conn: WsConnection, frame: Mapping[str, Any]) -> None:
         errcode = frame.get("errcode")
-        if isinstance(errcode, int) and errcode not in (0, None):
-            if errcode == CONFLICT_ERRCODE:
+        if isinstance(errcode, int) and errcode != 0:
+            if errcode == SUBSCRIBE_CONFLICT_ERRCODE:
                 raise WsSubscribeConflict("aibot_subscribe conflict (errcode 6000)")
-            logger.warning("wecom bot ws control frame errcode=%s", errcode)
+            logger.warning(
+                "wecom bot ws error frame errcode=%s errmsg=%s",
+                errcode, frame.get("errmsg"),
+            )
             return
-        encrypt = frame.get("encrypt") or frame.get("Encrypt")
-        if not encrypt:
-            # subscribe ack / pong / other control frame — nothing to answer.
-            return
-        await self._handle_callback(conn, frame)
+        if frame.get("cmd") == CMD_MSG_CALLBACK:
+            await self._handle_callback(conn, frame)
+        # aibot_event_callback / subscribe-ack / pong carry nothing to answer.
 
     async def _handle_callback(self, conn: WsConnection, frame: Mapping[str, Any]) -> None:
-        msg_signature = str(frame.get("msgsignature") or frame.get("msg_signature") or "")
-        timestamp = str(frame.get("timestamp") or "")
-        nonce = str(frame.get("nonce") or "")
-        req_id = str(frame.get(REPLY_REQ_ID) or frame.get("reqid") or "")
-        body = json.dumps({"encrypt": frame.get("encrypt") or frame.get("Encrypt")}).encode("utf-8")
-        try:
-            message = verify_and_decrypt_json(
-                aes_key=self._adapter.aes_key,
-                corp_id=self._config.corp_id,
-                token=self._config.token,
-                body=body,
-                msg_signature=msg_signature,
-                timestamp=timestamp,
-                nonce=nonce,
-            )
-        except WechatProtocolError as exc:
-            logger.warning("wecom bot callback rejected: %s", exc)
+        headers = frame.get("headers") or {}
+        req_id = str(headers.get("req_id") or "")
+        body = frame.get("body")
+        if not isinstance(body, Mapping):
             return
-
-        trace_id = str(message.get("msgid") or f"wecom-bot-{secrets.token_hex(6)}")
-        envelope = self._adapter.normalize_message(message, trace_id=trace_id, now=self._now())
+        trace_id = str(body.get("msgid") or f"wecom-bot-{secrets.token_hex(6)}")
+        envelope = self._adapter.normalize_message(dict(body), trace_id=trace_id, now=self._now())
         if envelope is None:
             return  # non-text or empty — nothing to stream back
-
-        stream_id = envelope.stream_id or req_id or trace_id
-        reply_stream = self._reply_stream(conn, stream_id=stream_id, req_id=req_id)
+        # We own the reply stream id; reuse the inbound one if the bot supplied it.
+        stream_id = envelope.stream_id or f"{req_id or trace_id}:{secrets.token_hex(5)}"
+        reply_stream = self._reply_stream(conn, req_id=req_id, stream_id=stream_id)
         await run_wecom_bot_turn(
             self._sessionmaker,
             channel=self._adapter.channel,
@@ -221,30 +219,18 @@ class WecomBotWsGateway:
         )
 
     def _reply_stream(
-        self, conn: WsConnection, *, stream_id: str, req_id: str
+        self, conn: WsConnection, *, req_id: str, stream_id: str
     ) -> Callable[..., Awaitable[None]]:
-        cfg = self._config
-        adapter = self._adapter
-
         async def reply_stream(content: str, *, is_final: bool) -> None:
-            ts = str(int(self._now()))
-            nonce = secrets.token_hex(8)
-            plain = json.dumps(
+            await conn.send_json(
                 {
-                    "msgtype": "stream",
-                    "stream": {
-                        REPLY_STREAM_ID: stream_id,
-                        REPLY_FINISH: bool(is_final),
-                        REPLY_CONTENT: content,
+                    "cmd": CMD_RESPOND_MSG,
+                    "headers": {"req_id": req_id},
+                    "body": {
+                        "msgtype": "stream",
+                        "stream": {"id": stream_id, "content": content, "finish": bool(is_final)},
                     },
-                },
-                ensure_ascii=False,
+                }
             )
-            envelope = build_reply_json(
-                aes_key=adapter.aes_key, corp_id=cfg.corp_id, token=cfg.token,
-                plain=plain, timestamp=ts, nonce=nonce,
-            )
-            frame = {"cmd": CMD_REPLY, REPLY_REQ_ID: req_id, REPLY_STREAM_ID: stream_id, **envelope}
-            await conn.send_json(frame)
 
         return reply_stream

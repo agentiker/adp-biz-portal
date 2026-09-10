@@ -50,20 +50,26 @@ class WecomBotAdapter:
         reply_window_seconds=WECOM_BOT_REPLY_WINDOW_SECONDS,
     )
 
-    def __init__(self, *, channel_instance_id: str, corp_id: str, token: str, encoding_aes_key: str):
+    def __init__(
+        self,
+        *,
+        channel_instance_id: str,
+        corp_id: str | None = None,
+        token: str | None = None,
+        encoding_aes_key: str | None = None,
+    ):
         if not isinstance(channel_instance_id, str) or not channel_instance_id.strip():
             raise ValueError("channel_instance_id is required")
-        if not isinstance(corp_id, str) or not corp_id.strip():
-            raise ValueError("corp_id is required")
-        if not isinstance(token, str) or not token.strip():
-            raise ValueError("token is required")
-        # Import here so a missing crypto dependency surfaces at construction.
-        from integrations.channels._wechat.crypto import decode_aes_key
-
         self.channel_instance_id = channel_instance_id.strip()
-        self.corp_id = corp_id.strip()
-        self.token = token
-        self.aes_key = decode_aes_key(encoding_aes_key)
+        self.corp_id = (corp_id or "").strip()
+        self.token = token or ""
+        # WS long-connection carries plaintext bodies, so crypto material is
+        # optional here; it is only needed for the HTTPS-webhook / media path.
+        self.aes_key: bytes | None = None
+        if encoding_aes_key:
+            from integrations.channels._wechat.crypto import decode_aes_key
+
+            self.aes_key = decode_aes_key(encoding_aes_key)
 
     def normalize_message(
         self, msg: Mapping[str, Any], *, trace_id: str, now: float | None = None
