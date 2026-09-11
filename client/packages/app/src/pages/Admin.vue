@@ -16,13 +16,19 @@ import {
 } from 'tdesign-icons-vue-next'
 import PlatformShell from '@/components/PlatformShell.vue'
 import AdminChannelManagement from '@/components/AdminChannelManagement.vue'
+import PlatformSelect from '@/components/PlatformSelect.vue'
 import {
   createEnterprise,
   createPlatformUser,
+  createAdpApp,
+  deleteAdpApp,
   disablePlatformUser,
   getAdminConfig,
   getAdminAdpConfig,
+  getAdminConversation,
   getAdminOverview,
+  listAdpApps,
+  listAdminConversations,
   listAuditEvents,
   listEnterprises,
   listPlatformUsers,
@@ -30,9 +36,11 @@ import {
   rollbackAdminConfig,
   saveAdminConfigDraft,
   publishAdminConfig,
+  updateAdpApp,
+  updateEnterprise,
   updatePlatformUserAccess,
 } from '@/platform/platformService'
-import type { AdpConfigStatus, AdminAuditEvent, AdminConfigState, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
+import type { AdpConfigStatus, AdpApp, AdminAuditEvent, AdminConfigState, AdminConversationSummary, AdminConversationDetail, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
 import { logout } from '@/service/login'
 import { usePlatformStore } from '@/stores/platform'
 
@@ -43,16 +51,27 @@ const configState = ref<AdminConfigState | null>(null)
 const enterprises = ref<AdminEnterprise[]>([])
 const users = ref<AdminUser[]>([])
 const auditEvents = ref<AdminAuditEvent[]>([])
+const conversations = ref<AdminConversationSummary[]>([])
+const conversationTotal = ref(0)
+const conversationOffset = ref(0)
+const conversationSearch = ref('')
+const conversationDetail = ref<AdminConversationDetail | null>(null)
+const conversationDetailLoading = ref(false)
+const CONVERSATION_PAGE = 50
 const loading = ref(false)
 const loadError = ref('')
 const toast = ref('')
 const enterpriseSearch = ref('')
 const userSearch = ref('')
+const userEnterpriseFilter = ref('')
 const auditSearch = ref('')
-const modal = ref<'enterprise' | 'user' | 'config' | 'access' | null>(null)
+const modal = ref<'enterprise' | 'user' | 'config' | 'access' | 'adpApp' | null>(null)
 const detail = ref<{ title: string; lines: string[] } | null>(null)
 const secretMessage = ref('')
-const enterpriseForm = ref({ name: '', customerCode: '' })
+const enterpriseForm = ref({ id: '', name: '', customerCode: '', unifiedSocialCreditCode: '', contactPerson: '', contactPhone: '', adpAppId: '' })
+const adpApps = ref<AdpApp[]>([])
+const adpAppForm = ref({ id: '', name: '', applicationId: '', appKey: '', vendor: 'Tencent', serviceVendor: 'ChinaTencentCloud', agentId: 'platform-default', privateUrl: '', isDefault: false })
+const adpAppActionId = ref<string | null>(null)
 const userForm = ref({ name: '', phone: '', role: 'customer' as PlatformRole, enterpriseId: '' })
 const configForm = ref({ itemsText: '', portal: true, m3ReadOnly: true, audit: true, webChannel: true, notes: '' })
 const configActionLoading = ref(false)
@@ -60,7 +79,7 @@ const createActionLoading = ref(false)
 const userActionLoading = ref<string | null>(null)
 const accessUser = ref<AdminUser | null>(null)
 const accessRole = ref<PlatformRole>('customer')
-const accessEnterpriseIds = ref<string[]>([])
+const accessEnterpriseId = ref<string>('')
 const accessActionLoading = ref(false)
 const accessFormError = ref('')
 const adpConfig = ref<AdpConfigStatus | null>(null)
@@ -72,6 +91,10 @@ const roleOptions: Array<{ value: PlatformRole; label: string }> = [
   { value: 'ops', label: '运维人员' },
   { value: 'admin', label: '平台管理员' },
 ]
+const roleSelectOptions = computed(() => roleOptions.map((item) => ({ value: item.value, label: item.label })))
+const enterpriseSelectOptions = computed(() => enterprises.value.map((item) => ({ value: item.id, label: item.name + (item.status === 'active' ? '' : '（已停用）'), disabled: item.status !== 'active' })))
+const enterpriseFilterOptions = computed(() => [{ value: '', label: '全部企业' }, ...enterprises.value.map((item) => ({ value: item.id, label: item.name }))])
+const adpAppSelectOptions = computed(() => [{ value: '', label: '平台默认' }, ...adpApps.value.map((item) => ({ value: item.id, label: item.name + (item.status === 'active' ? '' : '（已停用）'), disabled: item.status !== 'active' }))])
 
 const userStatusLabel = (status: AdminUser['status']) => status === 'active' ? '正常' : '已停用'
 
@@ -96,15 +119,17 @@ const errorMessage = (error: unknown, fallback: string) => {
 
 const view = computed(() => route.name === 'admin' ? 'overview' : String(route.name || '').replace('admin-', ''))
 const pageTitle = computed(() => ({
-  overview: '运营概览', enterprises: '企业与用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', audit: '会话与审计',
+  overview: '运营概览', enterprises: '企业管理', users: '平台用户', bindings: 'ADP 应用配置', channels: '渠道管理', 'agents-tools': 'Agent 与工具', conversations: '历史对话', audit: '审计日志',
 } as Record<string, string>)[view.value] || '运营概览')
 
 const resourceMeta = computed(() => ({
-  enterprises: { eyebrow: '客户目录', title: '企业与用户', description: '建立企业并为企业成员分配账号与可见业务范围。', icon: UsergroupIcon },
+  enterprises: { eyebrow: '客户目录', title: '企业管理', description: '登记入驻企业的名称、社会统一识别码与联系人信息；企业成员账号在「平台用户」维护。', icon: UsergroupIcon },
+  users: { eyebrow: '身份治理', title: '平台用户', description: '为企业成员分配账号、角色与可见业务范围。', icon: UserIcon },
   bindings: { eyebrow: '平台配置', title: 'ADP 应用配置', description: '一期平台只有一个 ADP 应用。应用凭据来自服务器 .env，企业和渠道均不参与 ADP 应用绑定。', icon: ApiIcon },
   channels: { eyebrow: '消息入口', title: '渠道管理', description: '配置渠道实例、凭据和渠道身份，查看每个接入的真实验证边界。', icon: ApiIcon },
   'agents-tools': { eyebrow: '能力编排', title: 'Agent 与工具', description: '登记的 Agent 与工具目录接口尚未接入，当前不展示演示数据。', icon: SettingIcon },
-  audit: { eyebrow: '可追溯性', title: '会话与审计', description: '查看脱敏事件、执行轮次与投递状态。业务正文不会在这里全量展示。', icon: HistoryIcon },
+  conversations: { eyebrow: '可追溯性', title: '历史对话', description: '跨企业查看对话、执行轮次与证据（只读）。业务正文不会在这里全量展示。', icon: HistoryIcon },
+  audit: { eyebrow: '可追溯性', title: '审计日志', description: '查看脱敏的管理与投递事件、动作与结果。', icon: HistoryIcon },
 } as Record<string, { eyebrow: string; title: string; description: string; icon: typeof UserIcon }>)[view.value])
 
 const filteredEnterprises = computed(() => {
@@ -113,11 +138,19 @@ const filteredEnterprises = computed(() => {
 })
 const filteredUsers = computed(() => {
   const term = userSearch.value.trim().toLowerCase()
-  return users.value.filter((item) => !term || `${item.name} ${item.phone} ${item.roleLabel} ${enterpriseSummary(item)}`.toLowerCase().includes(term))
+  const enterpriseId = userEnterpriseFilter.value
+  return users.value.filter((item) => {
+    if (enterpriseId && !item.enterprises.some((enterprise) => enterprise.id === enterpriseId)) return false
+    return !term || `${item.name} ${item.phone} ${item.roleLabel} ${enterpriseSummary(item)}`.toLowerCase().includes(term)
+  })
 })
 const filteredAudit = computed(() => {
   const term = auditSearch.value.trim().toLowerCase()
   return auditEvents.value.filter((item) => !term || `${item.action} ${item.targetType} ${item.targetId || ''} ${item.traceId}`.toLowerCase().includes(term))
+})
+const filteredConversations = computed(() => {
+  const term = conversationSearch.value.trim().toLowerCase()
+  return conversations.value.filter((item) => !term || `${item.title} ${item.query || ''} ${item.enterpriseName || ''} ${item.accountName || ''} ${item.channel}`.toLowerCase().includes(term))
 })
 const publishedConfig = computed(() => configState.value?.published || overview.value?.config.published || null)
 const draftConfig = computed(() => configState.value?.draft || overview.value?.config.draft || null)
@@ -138,14 +171,26 @@ const loadData = async () => {
       configState.value = configData
     }
     if (view.value === 'enterprises') {
-      const [enterpriseRows, userRows] = await Promise.all([listEnterprises(), listPlatformUsers()])
+      const [enterpriseRows, appRows] = await Promise.all([listEnterprises(), listAdpApps()])
       enterprises.value = enterpriseRows
+      adpApps.value = appRows
+    }
+    if (view.value === 'users') {
+      const [userRows, enterpriseRows] = await Promise.all([listPlatformUsers(), listEnterprises()])
       users.value = userRows
+      enterprises.value = enterpriseRows
     }
     if (view.value === 'bindings') {
-      adpConfig.value = await getAdminAdpConfig()
+      const [appRows, config] = await Promise.all([listAdpApps(), getAdminAdpConfig()])
+      adpApps.value = appRows
+      adpConfig.value = config
     }
     if (view.value === 'audit') auditEvents.value = await listAuditEvents()
+    if (view.value === 'conversations') {
+      const page = await listAdminConversations({ limit: CONVERSATION_PAGE, offset: conversationOffset.value })
+      conversations.value = page.items
+      conversationTotal.value = page.total
+    }
   } catch {
     loadError.value = '暂时无法加载管理数据，请稍后重试。'
   } finally {
@@ -157,7 +202,10 @@ onMounted(loadData)
 watch(view, () => {
   enterpriseSearch.value = ''
   userSearch.value = ''
+  userEnterpriseFilter.value = ''
   auditSearch.value = ''
+  conversationSearch.value = ''
+  conversationOffset.value = 0
   void loadData()
 })
 
@@ -169,11 +217,109 @@ const refresh = async () => {
 const openCreate = (target?: 'enterprise' | 'user') => {
   secretMessage.value = ''
   if ((target || 'enterprise') === 'enterprise') {
-    enterpriseForm.value = { name: '', customerCode: '' }
+    enterpriseForm.value = { id: '', name: '', customerCode: '', unifiedSocialCreditCode: '', contactPerson: '', contactPhone: '', adpAppId: '' }
     modal.value = 'enterprise'
   } else {
     userForm.value = { name: '', phone: '', role: 'customer', enterpriseId: enterprises.value[0]?.id || '' }
     modal.value = 'user'
+  }
+}
+
+const openEditEnterprise = (item: AdminEnterprise) => {
+  secretMessage.value = ''
+  enterpriseForm.value = {
+    id: item.id,
+    name: item.name,
+    customerCode: item.customerCode,
+    unifiedSocialCreditCode: item.unifiedSocialCreditCode || '',
+    contactPerson: item.contactPerson || '',
+    contactPhone: item.contactPhone || '',
+    adpAppId: item.adpAppId || '',
+  }
+  modal.value = 'enterprise'
+}
+
+const adpAppName = (id: string | null | undefined) => id ? (adpApps.value.find((app) => app.id === id)?.name || id) : '平台默认'
+
+const openCreateAdpApp = () => {
+  adpAppForm.value = { id: '', name: '', applicationId: '', appKey: '', vendor: 'Tencent', serviceVendor: 'ChinaTencentCloud', agentId: 'platform-default', privateUrl: '', isDefault: false }
+  modal.value = 'adpApp'
+}
+const openEditAdpApp = (app: AdpApp) => {
+  adpAppForm.value = { id: app.id, name: app.name, applicationId: app.applicationId, appKey: '', vendor: app.vendor, serviceVendor: app.serviceVendor, agentId: app.agentId, privateUrl: '', isDefault: app.isDefault }
+  modal.value = 'adpApp'
+}
+const submitAdpApp = async () => {
+  createActionLoading.value = true
+  try {
+    const form = adpAppForm.value
+    if (form.id) {
+      await updateAdpApp(form.id, {
+        name: form.name,
+        ...(form.appKey.trim() ? { appKey: form.appKey.trim() } : {}),
+        vendor: form.vendor,
+        serviceVendor: form.serviceVendor,
+        agentId: form.agentId,
+        ...(form.privateUrl.trim() ? { privateUrl: form.privateUrl.trim() } : {}),
+        isDefault: form.isDefault,
+      })
+      setToast('ADP 应用已更新')
+    } else {
+      await createAdpApp({
+        name: form.name,
+        applicationId: form.applicationId,
+        appKey: form.appKey,
+        vendor: form.vendor,
+        serviceVendor: form.serviceVendor,
+        agentId: form.agentId,
+        ...(form.privateUrl.trim() ? { privateUrl: form.privateUrl.trim() } : {}),
+        isDefault: form.isDefault,
+      })
+      setToast('ADP 应用已创建')
+    }
+    modal.value = null
+    await loadData()
+  } catch (error) {
+    setToast(errorMessage(error, adpAppForm.value.id ? 'ADP 应用更新失败' : 'ADP 应用创建失败'))
+  } finally {
+    createActionLoading.value = false
+  }
+}
+const setDefaultAdpApp = async (app: AdpApp) => {
+  adpAppActionId.value = app.id
+  try {
+    await updateAdpApp(app.id, { isDefault: true })
+    setToast(`已将「${app.name}」设为默认 ADP 应用`)
+    await loadData()
+  } catch (error) {
+    setToast(errorMessage(error, '设置默认失败'))
+  } finally {
+    adpAppActionId.value = null
+  }
+}
+const toggleAdpAppStatus = async (app: AdpApp) => {
+  adpAppActionId.value = app.id
+  try {
+    await updateAdpApp(app.id, { status: app.status === 'active' ? 'disabled' : 'active' })
+    setToast(app.status === 'active' ? 'ADP 应用已停用' : 'ADP 应用已启用')
+    await loadData()
+  } catch (error) {
+    setToast(errorMessage(error, '状态更新失败'))
+  } finally {
+    adpAppActionId.value = null
+  }
+}
+const removeAdpApp = async (app: AdpApp) => {
+  if (!window.confirm(`确定删除 ADP 应用「${app.name}」吗？绑定它的企业将回退到平台默认应用。`)) return
+  adpAppActionId.value = app.id
+  try {
+    await deleteAdpApp(app.id)
+    setToast('ADP 应用已删除')
+    await loadData()
+  } catch (error) {
+    setToast(errorMessage(error, '删除失败'))
+  } finally {
+    adpAppActionId.value = null
   }
 }
 
@@ -247,12 +393,31 @@ const rollbackConfig = async (version: number) => {
 const submitEnterprise = async () => {
   createActionLoading.value = true
   try {
-    await createEnterprise(enterpriseForm.value.name, enterpriseForm.value.customerCode)
+    const form = enterpriseForm.value
+    if (form.id) {
+      await updateEnterprise(form.id, {
+        name: form.name,
+        unifiedSocialCreditCode: form.unifiedSocialCreditCode,
+        contactPerson: form.contactPerson,
+        contactPhone: form.contactPhone,
+        adpAppId: form.adpAppId,
+      })
+      setToast('企业已更新')
+    } else {
+      await createEnterprise({
+        name: form.name,
+        customerCode: form.customerCode,
+        unifiedSocialCreditCode: form.unifiedSocialCreditCode,
+        contactPerson: form.contactPerson,
+        contactPhone: form.contactPhone,
+        adpAppId: form.adpAppId || undefined,
+      })
+      setToast('企业已创建')
+    }
     modal.value = null
-    setToast('企业已创建')
     await loadData()
   } catch (error) {
-    setToast(errorMessage(error, '企业创建失败'))
+    setToast(errorMessage(error, enterpriseForm.value.id ? '企业更新失败' : '企业创建失败'))
   } finally {
     createActionLoading.value = false
   }
@@ -275,12 +440,12 @@ const submitUser = async () => {
 
 const openAccessEditor = (user: AdminUser) => {
   if (platformStore.user?.id === user.id) {
-    setToast('不能修改当前登录账号的角色或企业范围')
+    setToast('不能修改当前登录账号的角色或所属企业')
     return
   }
   accessUser.value = user
   accessRole.value = user.role
-  accessEnterpriseIds.value = user.enterprises.map((enterprise) => enterprise.id)
+  accessEnterpriseId.value = user.enterprises[0]?.id || ''
   accessFormError.value = ''
   modal.value = 'access'
 }
@@ -288,16 +453,16 @@ const openAccessEditor = (user: AdminUser) => {
 const submitAccess = async () => {
   if (!accessUser.value) return
   if (platformStore.user?.id === accessUser.value.id) {
-    accessFormError.value = '不能修改当前登录账号的角色或企业范围'
+    accessFormError.value = '不能修改当前登录账号的角色或所属企业'
     return
   }
-  if (accessRole.value === 'customer' && accessEnterpriseIds.value.length === 0) {
-    accessFormError.value = '客户员工至少需要绑定一家企业。'
+  if (!accessEnterpriseId.value) {
+    accessFormError.value = '请为该用户选择所属企业。'
     return
   }
-  const suspendedSelection = enterprises.value.some((enterprise) => enterprise.status === 'suspended' && accessEnterpriseIds.value.includes(enterprise.id))
-  if (suspendedSelection) {
-    accessFormError.value = '已停用企业不能继续保留在访问范围中，请取消勾选后再保存。'
+  const selected = enterprises.value.find((enterprise) => enterprise.id === accessEnterpriseId.value)
+  if (selected && selected.status === 'suspended') {
+    accessFormError.value = '不能绑定已停用企业。'
     return
   }
   accessActionLoading.value = true
@@ -305,7 +470,7 @@ const submitAccess = async () => {
   try {
     const response = await updatePlatformUserAccess(accessUser.value.id, {
       role: accessRole.value,
-      enterpriseIds: [...accessEnterpriseIds.value],
+      enterpriseId: accessEnterpriseId.value,
     })
     const index = users.value.findIndex((item) => item.id === response.user.id)
     if (index >= 0) users.value.splice(index, 1, response.user)
@@ -348,10 +513,33 @@ const disableUser = async (user: AdminUser) => {
   }
 }
 
-const showEnterpriseDetail = (item: AdminEnterprise) => { detail.value = { title: item.name, lines: [`M3 客户编码：${item.customerCode}`, `状态：${item.status === 'active' ? '正常' : '已停用'}`] } }
-const enterpriseSummary = (item: AdminUser) => item.enterprises.length ? item.enterprises.map((enterprise) => enterprise.name).join('、') : '未绑定企业'
+const showEnterpriseDetail = (item: AdminEnterprise) => { detail.value = { title: item.name, lines: [`M3 客户编码：${item.customerCode}`, `社会统一识别码：${item.unifiedSocialCreditCode || '—'}`, `企业联系人：${item.contactPerson || '—'}`, `联系电话：${item.contactPhone || '—'}`, `ADP 应用：${adpAppName(item.adpAppId)}`, `状态：${item.status === 'active' ? '正常' : '已停用'}`] } }
+const enterpriseSummary = (item: AdminUser) => item.enterprises[0]?.name || '未绑定企业'
 const showUserDetail = (item: AdminUser) => { detail.value = { title: item.name, lines: [`手机号：${item.phone}`, `角色：${item.roleLabel}`, `所属企业：${enterpriseSummary(item)}`, `状态：${userStatusLabel(item.status)}`] } }
 const showAuditDetail = (item: AdminAuditEvent) => { detail.value = { title: item.action, lines: [`Trace ID：${item.traceId}`, `目标：${item.targetType} / ${item.targetId || '—'}`, `结果：${item.outcome}`, `时间：${item.createdAt}`] } }
+
+const conversationPageInfo = computed(() => {
+  const start = conversationTotal.value === 0 ? 0 : conversationOffset.value + 1
+  const end = Math.min(conversationOffset.value + conversations.value.length, conversationTotal.value)
+  return { start, end }
+})
+const changeConversationPage = async (direction: -1 | 1) => {
+  const next = conversationOffset.value + direction * CONVERSATION_PAGE
+  if (next < 0 || next >= conversationTotal.value) return
+  conversationOffset.value = next
+  await loadData()
+}
+const openConversationDetail = async (item: AdminConversationSummary) => {
+  conversationDetailLoading.value = true
+  conversationDetail.value = null
+  try {
+    conversationDetail.value = await getAdminConversation(item.id)
+  } catch (error) {
+    setToast(errorMessage(error, '无法加载会话详情'))
+  } finally {
+    conversationDetailLoading.value = false
+  }
+}
 
 const handleLogout = () => logout(() => router.replace({ name: 'login' }))
 </script>
@@ -371,26 +559,29 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
       </template>
     </template>
     <template v-else-if="view === 'enterprises'">
-      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('enterprise')"><UsergroupIcon />新增企业</button><button class="primary-action" @click="openCreate('user')"><UserIcon />新增用户</button></div></section>
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('enterprise')"><UsergroupIcon />新增企业</button></div></section>
+      <section class="resource-panel admin-panel enterprises-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="enterpriseSearch" placeholder="搜索企业名称或客户编码" /></div><span class="resource-count">{{ filteredEnterprises.length }} 家企业</span></div><div v-if="loading && !enterprises.length" class="resource-loading">正在加载企业目录…</div><div v-else-if="!filteredEnterprises.length" class="panel-empty">暂无企业记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>企业</span><span>客户编码 / 社会统一识别码</span><span>状态</span><span>操作</span></div><div v-for="item in filteredEnterprises" :key="item.id" class="resource-row"><span class="resource-name"><UsergroupIcon /><strong>{{ item.name }}</strong></span><span class="resource-detail user-scope"><strong>{{ item.customerCode }}</strong><small>{{ item.unifiedSocialCreditCode || '未填写识别码' }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ item.status === 'active' ? '正常' : '已停用' }}</span><span class="row-actions"><button class="text-action" @click="openEditEnterprise(item)">编辑</button><button class="row-more" aria-label="查看企业详情" @click="showEnterpriseDetail(item)"><ChevronRightIcon /></button></span></div></div></section>
+    </template>
+    <template v-else-if="view === 'users'">
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreate('user')"><UserIcon />新增用户</button></div></section>
       <div v-if="secretMessage" class="secret-alert"><LockOnIcon /><span>{{ secretMessage }}</span><button type="button" aria-label="关闭" @click="secretMessage = ''">×</button></div>
-      <section class="resource-panel admin-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="enterpriseSearch" placeholder="搜索企业名称或客户编码" /></div><span class="resource-count">{{ filteredEnterprises.length }} 家企业</span></div><div v-if="loading && !enterprises.length" class="resource-loading">正在加载企业目录…</div><div v-else-if="!filteredEnterprises.length" class="panel-empty">暂无企业记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>企业</span><span>M3 客户编码</span><span>状态</span><span></span></div><div v-for="item in filteredEnterprises" :key="item.id" class="resource-row"><span class="resource-name"><UsergroupIcon /><strong>{{ item.name }}</strong></span><span class="resource-detail">{{ item.customerCode }}</span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ item.status === 'active' ? '正常' : '已停用' }}</span><button class="row-more" aria-label="查看企业详情" @click="showEnterpriseDetail(item)"><ChevronRightIcon /></button></div></div></section>
-      <section class="resource-panel admin-panel users-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="userSearch" placeholder="搜索用户姓名、手机号、角色或企业" /></div><span class="resource-count">{{ filteredUsers.length }} 位用户</span></div><div v-if="!filteredUsers.length" class="panel-empty">暂无用户记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>用户</span><span>角色与企业范围</span><span>状态</span><span>操作</span></div><div v-for="item in filteredUsers" :key="item.id" class="resource-row user-row"><span class="resource-name"><UserIcon /><strong>{{ item.name }}<small>{{ item.phone }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.roleLabel }}</strong><small>{{ enterpriseSummary(item) }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ userStatusLabel(item.status) }}</span><span class="row-actions"><button class="row-more" aria-label="查看用户详情" @click="showUserDetail(item)"><ChevronRightIcon /></button><button class="text-action" :disabled="item.status !== 'active' || platformStore.user?.id === item.id || userActionLoading === item.id" @click="openAccessEditor(item)">调整范围</button><button class="text-action" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="resetPassword(item)">{{ userActionLoading === item.id ? '处理中…' : '重置' }}</button><button class="text-action text-action--danger" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="disableUser(item)">{{ userActionLoading === item.id ? '处理中…' : '停用' }}</button></span></div></div></section>
+      <section class="resource-panel admin-panel users-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="userSearch" placeholder="搜索用户姓名、手机号、角色或企业" /></div><div class="toolbar-filter"><PlatformSelect v-model="userEnterpriseFilter" :options="enterpriseFilterOptions" placeholder="全部企业" aria-label="按企业筛选" /></div><span class="resource-count">{{ filteredUsers.length }} 位用户</span></div><div v-if="loading && !users.length" class="resource-loading">正在加载平台用户…</div><div v-else-if="!filteredUsers.length" class="panel-empty">暂无用户记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>用户</span><span>角色与所属企业</span><span>状态</span><span>操作</span></div><div v-for="item in filteredUsers" :key="item.id" class="resource-row user-row"><span class="resource-name"><UserIcon /><strong>{{ item.name }}<small>{{ item.phone }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.roleLabel }}</strong><small>{{ enterpriseSummary(item) }}</small></span><span class="row-status" :class="`row-status--${item.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ userStatusLabel(item.status) }}</span><span class="row-actions"><button class="row-more" aria-label="查看用户详情" @click="showUserDetail(item)"><ChevronRightIcon /></button><button class="text-action" :disabled="item.status !== 'active' || platformStore.user?.id === item.id || userActionLoading === item.id" @click="openAccessEditor(item)">调整</button><button class="text-action" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="resetPassword(item)">{{ userActionLoading === item.id ? '处理中…' : '重置' }}</button><button class="text-action text-action--danger" :disabled="item.status !== 'active' || userActionLoading === item.id" @click="disableUser(item)">{{ userActionLoading === item.id ? '处理中…' : '停用' }}</button></span></div></div></section>
+    </template>
+    <template v-else-if="view === 'conversations'">
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
+      <section class="resource-panel admin-panel conversations-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="conversationSearch" placeholder="搜索标题、企业、账号或渠道" /></div><span class="resource-count">{{ conversationPageInfo.start }}–{{ conversationPageInfo.end }} / 共 {{ conversationTotal }} 条</span><span class="pager"><button class="text-action" :disabled="loading || conversationOffset === 0" @click="changeConversationPage(-1)">上一页</button><button class="text-action" :disabled="loading || conversationPageInfo.end >= conversationTotal" @click="changeConversationPage(1)">下一页</button></span></div><div v-if="loading && !conversations.length" class="resource-loading">正在加载历史对话…</div><div v-else-if="!filteredConversations.length" class="panel-empty">暂无对话记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>对话</span><span>企业 / 账号</span><span>更新时间</span><span>操作</span></div><div v-for="item in filteredConversations" :key="item.id" class="resource-row"><span class="resource-name"><HistoryIcon /><strong>{{ item.title }}<small>{{ item.channel }}{{ item.query ? ' · ' + item.query : '' }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ item.enterpriseName || '—' }}</strong><small>{{ item.accountName || '—' }}</small></span><span class="resource-detail">{{ item.updatedAt ? new Date(item.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '—' }}</span><span class="row-actions"><button class="text-action" @click="openConversationDetail(item)">查看</button></span></div></div></section>
     </template>
     <template v-else-if="view === 'audit'">
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
       <section class="resource-panel admin-panel"><div class="resource-toolbar"><div class="resource-search"><SearchIcon /><input v-model="auditSearch" placeholder="搜索动作、目标或 Trace ID" /></div><span class="resource-count">{{ filteredAudit.length }} 条记录</span></div><div v-if="loading && !auditEvents.length" class="resource-loading">正在加载审计记录…</div><div v-else-if="!filteredAudit.length" class="panel-empty">暂无审计记录</div><div v-else class="resource-table"><div class="resource-table-head"><span>动作</span><span>目标</span><span>结果</span><span></span></div><div v-for="item in filteredAudit" :key="item.id" class="resource-row"><span class="resource-name"><HistoryIcon /><strong>{{ item.action }}</strong></span><span class="resource-detail">{{ item.targetType }} / {{ item.targetId || '—' }}</span><span class="row-status" :class="`row-status--${item.outcome === 'success' || item.outcome === 'found' ? 'success' : 'warning'}`"><i></i>{{ item.outcome }}</span><button class="row-more" aria-label="查看审计详情" @click="showAuditDetail(item)"><ChevronRightIcon /></button></div></div></section>
     </template>
     <template v-else-if="view === 'bindings'">
-      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button></section>
-      <section class="resource-panel admin-panel adp-config-panel">
-        <div v-if="loading && !adpConfig" class="resource-loading">正在读取服务器 .env 配置状态…</div>
-        <template v-else-if="adpConfig">
-          <div class="admin-panel-heading"><div><p class="section-kicker">平台唯一实例</p><h2>腾讯云 ADP 应用</h2></div><span class="row-status" :class="`row-status--${adpConfig.configured ? 'success' : 'warning'}`"><i></i>{{ adpConfig.configured ? '配置完整' : '配置不完整' }}</span></div>
-          <div class="adp-config-summary"><div><span>应用标识</span><strong>{{ adpConfig.applicationId || '未配置' }}</strong></div><div><span>供应商</span><strong>{{ adpConfig.vendor || '未配置' }}</strong></div><div><span>APP_CONFIGS</span><strong>{{ adpConfig.applicationCount }} 个应用</strong></div><div><span>配置来源</span><strong>{{ adpConfig.source }}</strong></div></div>
-          <div class="adp-config-checks"><div v-for="item in [{ label: 'TC_SECRET_APPID', ok: adpConfig.tcSecretAppIdConfigured }, { label: 'TC_SECRET_ID', ok: adpConfig.tcSecretIdConfigured }, { label: 'TC_SECRET_KEY', ok: adpConfig.tcSecretKeyConfigured }, { label: 'APP_CONFIGS / AppKey', ok: adpConfig.appKeyConfigured } ]" :key="item.label" class="adp-config-check"><CheckCircleIcon v-if="item.ok" /><ErrorCircleIcon v-else /><span>{{ item.label }}</span><strong>{{ item.ok ? '已配置' : '未配置' }}</strong></div></div>
-          <p class="adp-config-note">ADP 应用是平台级单例，密钥只从服务器 `.env` 读取。企业和渠道不会绑定到此配置；消息进入平台后，才按渠道身份、企业访问范围和业务权限鉴权。</p>
-        </template>
-        <div v-else class="panel-empty">暂时无法读取 ADP 配置状态，请刷新重试。</div>
+      <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreateAdpApp"><ApiIcon />新增 ADP 应用</button></div></section>
+      <section class="resource-panel admin-panel adp-apps-panel"><div class="resource-toolbar"><div><p class="section-kicker">应用注册表</p><h2 class="toolbar-title">ADP 应用</h2></div><span class="resource-count">{{ adpApps.length }} 个应用</span></div><div v-if="loading && !adpApps.length" class="resource-loading">正在加载 ADP 应用…</div><div v-else-if="!adpApps.length" class="panel-empty">还没有配置 ADP 应用。未配置时，平台回退到服务器 .env 中的单一应用。</div><div v-else class="resource-table"><div class="resource-table-head"><span>应用</span><span>Vendor / AgentId</span><span>状态</span><span>操作</span></div><div v-for="app in adpApps" :key="app.id" class="resource-row"><span class="resource-name"><ApiIcon /><strong>{{ app.name }}<small>{{ app.applicationId }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ app.vendor }} · {{ app.serviceVendor }}</strong><small>{{ app.agentId }} · Key ****{{ app.appKeyFingerprint }}</small></span><span class="row-status" :class="`row-status--${app.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ app.status === 'active' ? '启用' : '停用' }}<em v-if="app.isDefault" class="default-badge">默认</em></span><span class="row-actions"><button class="text-action" :disabled="adpAppActionId === app.id || app.isDefault || app.status !== 'active'" @click="setDefaultAdpApp(app)">设为默认</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="openEditAdpApp(app)">编辑</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="toggleAdpAppStatus(app)">{{ app.status === 'active' ? '停用' : '启用' }}</button><button class="text-action text-action--danger" :disabled="adpAppActionId === app.id" @click="removeAdpApp(app)">删除</button></span></div></div></section>
+      <section v-if="adpConfig" class="resource-panel admin-panel adp-config-panel">
+        <div class="admin-panel-heading"><div><p class="section-kicker">回退配置</p><h2>服务器 .env 默认应用</h2></div><span class="row-status" :class="`row-status--${adpConfig.configured ? 'success' : 'warning'}`"><i></i>{{ adpConfig.configured ? '配置完整' : '配置不完整' }}</span></div>
+        <div class="adp-config-summary"><div><span>应用标识</span><strong>{{ adpConfig.applicationId || '未配置' }}</strong></div><div><span>供应商</span><strong>{{ adpConfig.vendor || '未配置' }}</strong></div><div><span>APP_CONFIGS</span><strong>{{ adpConfig.applicationCount }} 个应用</strong></div><div><span>配置来源</span><strong>{{ adpConfig.source }}</strong></div></div>
+        <p class="adp-config-note">未配置数据库 ADP 应用、或企业未绑定、且无默认应用时，平台回退到此 .env 应用。企业可在「企业管理」中绑定上方注册表中的应用。</p>
       </section>
     </template>
     <template v-else-if="view === 'channels'">
@@ -402,12 +593,14 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
     </template>
 
     <div v-if="modal" class="modal-backdrop" @click.self="!createActionLoading && !accessActionLoading && !configActionLoading ? modal = null : undefined">
-      <form v-if="modal === 'enterprise'" class="modal-card" @submit.prevent="submitEnterprise"><div class="modal-heading"><div><p class="section-kicker">客户目录</p><h2>新增企业</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>企业名称<input v-model="enterpriseForm.name" required maxlength="255" /></label><label>M3 客户编码<input v-model="enterpriseForm.customerCode" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" /></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建企业' }}</button></div></form>
-      <form v-else-if="modal === 'user'" class="modal-card" @submit.prevent="submitUser"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>新增平台用户</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>姓名<input v-model="userForm.name" required maxlength="255" /></label><label>手机号<input v-model="userForm.phone" required inputmode="numeric" pattern="1[0-9]{10}" /></label><label>角色<select v-model="userForm.role"><option value="customer">客户员工</option><option value="staff">客服 / 销售</option><option value="ops">运维人员</option><option value="admin">平台管理员</option></select></label><label>所属企业<select v-model="userForm.enterpriseId" :required="userForm.role === 'customer'"><option value="">{{ userForm.role === 'customer' ? '请选择企业' : '不绑定企业' }}</option><option v-for="item in enterprises" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建用户' }}</button></div></form>
-      <form v-else-if="modal === 'access'" class="modal-card access-editor-card" @submit.prevent="submitAccess"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>调整访问范围</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="accessActionLoading" @click="modal = null">×</button></div><div v-if="accessUser" class="access-user-summary"><UserIcon /><div><strong>{{ accessUser.name }}</strong><small>{{ accessUser.phone }} · 当前绑定 {{ accessUser.enterprises.length }} 家企业</small></div></div><p class="modal-help">角色和企业范围会同时生效，保存后该用户已有的执行上下文会立即撤销。</p><label>角色<select v-model="accessRole" :disabled="accessActionLoading"><option v-for="option in roleOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><fieldset class="scope-fieldset"><legend>企业访问范围</legend><p class="scope-help">停用企业不能新选；已在范围中的停用企业需要取消勾选后才能保存。</p><label v-for="item in enterprises" :key="item.id" class="scope-option" :class="{ 'scope-option--suspended': item.status === 'suspended' }"><input v-model="accessEnterpriseIds" type="checkbox" :value="item.id" :disabled="accessActionLoading || (item.status === 'suspended' && !accessEnterpriseIds.includes(item.id))" /><span><strong>{{ item.name }}</strong><small>{{ item.customerCode }} · {{ item.status === 'active' ? '正常' : '已停用' }}</small></span></label><span v-if="!enterprises.length" class="scope-empty">暂无可用企业</span></fieldset><div v-if="accessFormError" class="form-error" role="alert"><ErrorCircleIcon /><span>{{ accessFormError }}</span></div><div class="modal-actions"><button type="button" class="outline-action" :disabled="accessActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="accessActionLoading">{{ accessActionLoading ? '保存中…' : '保存访问范围' }}</button></div></form>
+      <form v-if="modal === 'enterprise'" class="modal-card" @submit.prevent="submitEnterprise"><div class="modal-heading"><div><p class="section-kicker">客户目录</p><h2>{{ enterpriseForm.id ? '编辑企业' : '新增企业' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>企业名称<input v-model="enterpriseForm.name" required maxlength="255" /></label><label>M3 客户编码<input v-model="enterpriseForm.customerCode" :required="!enterpriseForm.id" :disabled="!!enterpriseForm.id" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,127}" /><small v-if="enterpriseForm.id" class="field-hint">客户编码创建后不可修改</small></label><label>社会统一识别码<input v-model="enterpriseForm.unifiedSocialCreditCode" required minlength="18" maxlength="18" placeholder="18 位统一社会信用代码" /></label><label>企业联系人（选填）<input v-model="enterpriseForm.contactPerson" maxlength="128" /></label><label>联系电话（选填）<input v-model="enterpriseForm.contactPhone" maxlength="32" /></label><label>ADP 应用<PlatformSelect v-model="enterpriseForm.adpAppId" :options="adpAppSelectOptions" placeholder="平台默认" aria-label="ADP 应用" /><small class="field-hint">留空则使用平台默认 ADP 应用</small></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '保存中…' : (enterpriseForm.id ? '保存' : '创建企业') }}</button></div></form>
+      <form v-else-if="modal === 'user'" class="modal-card" @submit.prevent="submitUser"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>新增平台用户</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>姓名<input v-model="userForm.name" required maxlength="255" /></label><label>手机号<input v-model="userForm.phone" required inputmode="numeric" pattern="1[0-9]{10}" /></label><label>角色<PlatformSelect :model-value="userForm.role" :options="roleSelectOptions" aria-label="角色" @update:model-value="userForm.role = $event as PlatformRole" /></label><label>所属企业<PlatformSelect v-model="userForm.enterpriseId" :options="enterpriseSelectOptions" placeholder="请选择企业" aria-label="所属企业" /><small class="field-hint">每个平台用户关联一个企业</small></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建用户' }}</button></div></form>
+      <form v-else-if="modal === 'access'" class="modal-card access-editor-card" @submit.prevent="submitAccess"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>调整角色与企业</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="accessActionLoading" @click="modal = null">×</button></div><div v-if="accessUser" class="access-user-summary"><UserIcon /><div><strong>{{ accessUser.name }}</strong><small>{{ accessUser.phone }} · 当前所属：{{ enterpriseSummary(accessUser) }}</small></div></div><p class="modal-help">每个平台用户只关联一个企业。角色与所属企业保存后立即生效，该用户已有的执行上下文会被撤销。</p><label>角色<PlatformSelect :model-value="accessRole" :options="roleSelectOptions" :disabled="accessActionLoading" aria-label="角色" @update:model-value="accessRole = $event as PlatformRole" /></label><label>所属企业<PlatformSelect v-model="accessEnterpriseId" :options="enterpriseSelectOptions" :disabled="accessActionLoading" placeholder="请选择企业" aria-label="所属企业" /></label><div v-if="accessFormError" class="form-error" role="alert"><ErrorCircleIcon /><span>{{ accessFormError }}</span></div><div class="modal-actions"><button type="button" class="outline-action" :disabled="accessActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="accessActionLoading">{{ accessActionLoading ? '保存中…' : '保存' }}</button></div></form>
       <form v-else-if="modal === 'config'" class="modal-card config-editor-card" @submit.prevent="submitConfigDraft"><div class="modal-heading"><div><p class="section-kicker">平台配置</p><h2>编辑配置草稿</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="modal = null">×</button></div><p class="modal-help">每行一项能力。保存后生成草稿，发布前仍可继续修改。</p><label>能力清单<textarea v-model="configForm.itemsText" required maxlength="1800" rows="7" placeholder="例如：客户登录与会话&#10;M3 只读工具"></textarea></label><fieldset class="flag-fieldset"><legend>功能开关</legend><label class="checkbox-row"><input v-model="configForm.portal" type="checkbox" /><span>客户门户</span></label><label class="checkbox-row"><input v-model="configForm.m3ReadOnly" type="checkbox" /><span>M3 只读工具</span></label><label class="checkbox-row"><input v-model="configForm.audit" type="checkbox" /><span>审计记录</span></label><label class="checkbox-row"><input v-model="configForm.webChannel" type="checkbox" /><span>官网渠道</span></label></fieldset><label>变更说明<textarea v-model="configForm.notes" maxlength="500" rows="3" placeholder="可选，说明本次配置变更原因"></textarea></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="configActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="configActionLoading">{{ configActionLoading ? '保存中…' : '保存草稿' }}</button></div></form>
+      <form v-else-if="modal === 'adpApp'" class="modal-card" @submit.prevent="submitAdpApp"><div class="modal-heading"><div><p class="section-kicker">应用注册表</p><h2>{{ adpAppForm.id ? '编辑 ADP 应用' : '新增 ADP 应用' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><div class="modal-notice"><LockOnIcon /><span>AppKey 加密保存，提交后不再回显；编辑时留空表示不修改密钥。</span></div><label>应用名称<input v-model="adpAppForm.name" required maxlength="128" /></label><label>ApplicationId<input v-model="adpAppForm.applicationId" :required="!adpAppForm.id" :disabled="!!adpAppForm.id" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,63}" /><small v-if="adpAppForm.id" class="field-hint">ApplicationId 创建后不可修改</small></label><label>AppKey<input v-model="adpAppForm.appKey" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>Vendor<input v-model="adpAppForm.vendor" maxlength="32" placeholder="Tencent" /></label><label>ServiceVendor<input v-model="adpAppForm.serviceVendor" maxlength="32" placeholder="ChinaTencentCloud" /></label><label>AgentId<input v-model="adpAppForm.agentId" maxlength="128" placeholder="platform-default" /></label><label>PrivateUrl（选填）<input v-model="adpAppForm.privateUrl" maxlength="512" /></label><label class="checkbox-row"><input v-model="adpAppForm.isDefault" type="checkbox" /><span>设为平台默认应用</span></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '保存中…' : (adpAppForm.id ? '保存' : '创建应用') }}</button></div></form>
     </div>
     <div v-if="detail" class="modal-backdrop" @click.self="detail = null"><section class="modal-card detail-card"><div class="modal-heading"><div><p class="section-kicker">详情</p><h2>{{ detail.title }}</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="detail = null">×</button></div><p v-for="line in detail.lines" :key="line" class="detail-line">{{ line }}</p><div class="modal-actions"><button type="button" class="primary-action" @click="detail = null">完成</button></div></section></div>
+    <div v-if="conversationDetailLoading || conversationDetail" class="modal-backdrop" @click.self="conversationDetail = null; conversationDetailLoading = false"><section class="modal-card conversation-detail-card"><div class="modal-heading"><div><p class="section-kicker">历史对话</p><h2>{{ conversationDetail?.conversation.title || '会话详情' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="conversationDetail = null; conversationDetailLoading = false">×</button></div><div v-if="conversationDetailLoading" class="resource-loading">正在加载会话详情…</div><template v-else-if="conversationDetail"><p class="conversation-meta">{{ conversationDetail.conversation.enterpriseName || '—' }} · {{ conversationDetail.conversation.accountName || '—' }} · {{ conversationDetail.conversation.channel }}</p><div class="conversation-thread"><div v-for="msg in conversationDetail.messages" :key="msg.id" class="conversation-msg" :class="`conversation-msg--${msg.direction}`"><span class="conversation-msg-role">{{ msg.direction === 'assistant' ? '助手' : '用户' }}</span><p>{{ msg.body || '（无正文）' }}</p><time>{{ msg.createdAt ? new Date(msg.createdAt).toLocaleString('zh-CN', { hour12: false }) : '' }}</time></div><div v-if="!conversationDetail.messages.length" class="panel-empty">该会话暂无消息</div></div><div v-if="conversationDetail.runs.length" class="conversation-runs"><strong>执行轮次</strong><div v-for="run in conversationDetail.runs" :key="run.runId" class="conversation-run"><span class="row-status" :class="`row-status--${run.status === 'found' || run.status === 'completed' ? 'success' : 'warning'}`"><i></i>{{ run.status }}</span><span>{{ run.title }}</span><small>{{ run.evidence.length }} 条证据</small></div></div></template><div class="modal-actions"><button type="button" class="primary-action" @click="conversationDetail = null">完成</button></div></section></div>
   </PlatformShell>
 </template>
 
@@ -442,6 +635,30 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
 .row-more :deep(svg) { width: 15px; }
 .users-panel { margin-top: 18px; }
 .users-panel .resource-table-head, .users-panel .resource-row { grid-template-columns: minmax(170px, 1.1fr) minmax(180px, 1fr) minmax(100px, .7fr) minmax(250px, 1fr); }
+.enterprises-panel .resource-table-head, .enterprises-panel .resource-row { grid-template-columns: minmax(180px, 1.4fr) minmax(170px, 1fr) minmax(90px, .6fr) minmax(130px, auto); }
+.conversations-panel .resource-table-head, .conversations-panel .resource-row { grid-template-columns: minmax(200px, 1.6fr) minmax(160px, 1fr) minmax(140px, .9fr) minmax(90px, auto); }
+.adp-apps-panel .resource-table-head, .adp-apps-panel .resource-row { grid-template-columns: minmax(180px, 1.3fr) minmax(180px, 1.1fr) minmax(120px, .8fr) minmax(220px, auto); }
+.adp-apps-panel .resource-toolbar { justify-content: space-between; }
+.toolbar-title { margin: 0; color: #17312e; font-size: 18px; }
+.toolbar-filter { width: min(220px, 45%); flex: 0 0 auto; }
+.default-badge { margin-left: 6px; padding: 1px 6px; border-radius: 4px; background: #e8f5ef; color: #2e6b58; font-size: 9px; font-style: normal; }
+.modal-notice { display: flex; align-items: center; gap: 8px; padding: 9px 11px; background: #f3f8f5; color: #3a6a5e; font-size: 11px; }
+.modal-notice :deep(svg) { flex: 0 0 auto; width: 15px; }
+.pager { display: inline-flex; gap: 4px; margin-left: 12px; }
+.conversation-detail-card { width: min(640px, 100%); max-height: min(760px, calc(100vh - 32px)); overflow: auto; }
+.conversation-meta { margin: -4px 0 4px; color: #71847e; font-size: 11px; }
+.conversation-thread { display: grid; gap: 8px; }
+.conversation-msg { padding: 9px 11px; border: 1px solid #e6edea; background: #f7faf9; }
+.conversation-msg--assistant { background: #eff7f3; border-color: #d5e8e0; }
+.conversation-msg-role { color: #4e6b64; font-size: 10px; font-weight: 700; }
+.conversation-msg p { margin: 4px 0 3px; color: #2c4a43; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-msg time { color: #97a39f; font-size: 9px; }
+.conversation-runs { margin-top: 12px; display: grid; gap: 6px; }
+.conversation-runs > strong { color: #526b65; font-size: 11px; }
+.conversation-run { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #45615d; }
+.conversation-run small { margin-left: auto; color: #93a19d; font-size: 10px; }
+.field-hint { color: #93a19d; font-weight: 400; font-size: 10px; }
+.modal-card input:disabled { background: #f2f5f4; color: #8a9995; cursor: not-allowed; }
 .resource-name strong small { display: block; margin-top: 3px; color: #8a9995; font-size: 10px; font-weight: 400; }
 .user-scope strong, .user-scope small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-scope strong { color: #3d5d55; font-size: 11px; font-weight: 650; }.user-scope small { margin-top: 3px; color: #879792; font-size: 10px; }

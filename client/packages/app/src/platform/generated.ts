@@ -48,10 +48,35 @@ export interface AdminConfigVersion {
   rollbackSourceVersion: number | null
 }
 
+export interface AdminConversationDetail {
+  conversation: AdminConversationSummary
+  messages: Array<PortalMessage>
+  runs: Array<PortalExecutionRun>
+  result: ShipmentResult | null
+}
+
+export interface AdminConversationList {
+  items: Array<AdminConversationSummary>
+  total: number
+  limit: number
+  offset: number
+}
+
+export type AdminConversationSummary = PortalSession & {
+    enterpriseId?: string
+    enterpriseName?: string
+    accountId?: string
+    accountName?: string
+  }
+
 export interface AdminEnterprise {
   id: string
   name: string
   customerCode: string
+  unifiedSocialCreditCode?: string
+  contactPerson?: string
+  contactPhone?: string
+  adpAppId?: string
   status: 'active' | 'suspended'
 }
 
@@ -96,6 +121,19 @@ export interface AdminUserEnterprise {
   name: string
   customerCode: string
   status: 'active' | 'suspended'
+}
+
+export interface AdpApp {
+  id: string
+  name: string
+  applicationId: string
+  vendor: string
+  serviceVendor: string
+  agentId: string
+  status: 'active' | 'disabled'
+  isDefault: boolean
+  appKeyFingerprint: string
+  updatedAt: string
 }
 
 export interface AdpConfigStatus {
@@ -156,6 +194,17 @@ export interface ChannelIdentity {
 
 export type ChannelIdentityStatus = 'pending' | 'active' | 'revoked' | 'expired'
 
+export interface CreateAdpAppRequest {
+  name: string
+  applicationId: string
+  appKey: string
+  vendor?: string
+  serviceVendor?: string
+  agentId?: string
+  privateUrl?: string
+  isDefault?: boolean
+}
+
 export interface CreateChannelCredentialRequest {
   channel: string
   channelInstanceId: string
@@ -165,13 +214,17 @@ export interface CreateChannelCredentialRequest {
 export interface CreateEnterpriseRequest {
   name: string
   customerCode: string
+  unifiedSocialCreditCode: string
+  contactPerson?: string
+  contactPhone?: string
+  adpAppId?: string
 }
 
 export interface CreatePlatformUserRequest {
   name: string
   phone: string
   role: PlatformRole
-  enterpriseId?: string | null
+  enterpriseId: string
 }
 
 export interface EnterpriseScope {
@@ -397,9 +450,28 @@ export interface SuccessResponse {
   success: boolean
 }
 
+export interface UpdateAdpAppRequest {
+  name?: string
+  appKey?: string
+  vendor?: string
+  serviceVendor?: string
+  agentId?: string
+  privateUrl?: string
+  status?: 'active' | 'disabled'
+  isDefault?: boolean
+}
+
+export interface UpdateEnterpriseRequest {
+  name?: string
+  unifiedSocialCreditCode?: string
+  contactPerson?: string
+  contactPhone?: string
+  adpAppId?: string
+}
+
 export interface UpdatePlatformUserAccessRequest {
   role?: PlatformRole
-  enterpriseIds?: Array<string>
+  enterpriseId?: string | '' | null
 }
 
 export interface UpsertBindingRequest {

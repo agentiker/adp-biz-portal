@@ -156,6 +156,14 @@ async def run_wecom_bot_turn(
         )
         require_permission(context, "shipment.read")
 
+        # Resolve the ADP application for this enterprise; the process-level
+        # provider (from .env) is the fallback when no DB app is configured.
+        from integrations.adp.registry import resolve_provider_for_enterprise
+
+        resolved_provider = await resolve_provider_for_enterprise(
+            db, enterprise, fallback=lambda: provider
+        )
+
         query = (message.text or "").strip()
         conversation = PlatformConversation(
             AccountId=account.Id, EnterpriseId=enterprise.Id, Channel=channel,
@@ -165,7 +173,7 @@ async def run_wecom_bot_turn(
         await db.flush()
         run_id = f"run_{uuid.uuid4().hex}"
         request = AgentRequest(
-            agent_id=_provider_agent_id(provider),
+            agent_id=_provider_agent_id(resolved_provider),
             conversation_id=str(conversation.Id),
             run_id=run_id,
             channel=channel,
@@ -178,7 +186,7 @@ async def run_wecom_bot_turn(
         sink = SnapshotStreamSink(reply_stream, render=_wecom_think_render)
         await reply_stream(WECOM_BOT_THINKING_PLACEHOLDER, is_final=False)  # native 思考中 placeholder
         try:
-            raw = await _execute_provider(provider, request, sink=sink)
+            raw = await _execute_provider(resolved_provider, request, sink=sink)
         finally:
             await sink.close()
         result = _result_payload(raw, query=query.upper())

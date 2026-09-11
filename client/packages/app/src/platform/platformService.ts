@@ -4,7 +4,12 @@ import type {
   AdminConfigState,
   AdminConfigVersion,
   AdminAuditEvent,
+  AdminConversationList,
+  AdminConversationDetail,
   AdminEnterprise,
+  AdpApp,
+  CreateAdpAppRequest,
+  UpdateAdpAppRequest,
   AdminPasswordResetResult,
   AdminUser,
   AdminUserCreateResult,
@@ -375,13 +380,43 @@ export async function listEnterprises(): Promise<AdminEnterprise[]> {
   return httpService.get<AdminEnterprise[]>('/api/v1/admin/enterprises')
 }
 
-export async function createEnterprise(name: string, customerCode: string): Promise<AdminEnterprise> {
+export type EnterpriseInput = {
+  name: string
+  customerCode?: string
+  unifiedSocialCreditCode?: string
+  contactPerson?: string
+  contactPhone?: string
+  adpAppId?: string
+}
+
+export async function createEnterprise(input: EnterpriseInput): Promise<AdminEnterprise> {
   if (useMock) {
-    const enterprise: AdminEnterprise = { id: `ent_demo_${Date.now()}`, name: name.trim(), customerCode: customerCode.trim(), status: 'active' }
+    const enterprise: AdminEnterprise = {
+      id: `ent_demo_${Date.now()}`,
+      name: input.name.trim(),
+      customerCode: (input.customerCode || '').trim(),
+      unifiedSocialCreditCode: input.unifiedSocialCreditCode?.trim() || undefined,
+      contactPerson: input.contactPerson?.trim() || undefined,
+      contactPhone: input.contactPhone?.trim() || undefined,
+      status: 'active',
+    }
     mockEnterprises.unshift(enterprise)
     return cloneEnterprise(enterprise)
   }
-  return httpService.post<AdminEnterprise>('/api/v1/admin/enterprises', { name, customerCode })
+  return httpService.post<AdminEnterprise>('/api/v1/admin/enterprises', input)
+}
+
+export async function updateEnterprise(id: string, input: Omit<EnterpriseInput, 'customerCode'>): Promise<AdminEnterprise> {
+  if (useMock) {
+    const enterprise = mockEnterprises.find((item) => item.id === id)
+    if (!enterprise) throw new Error('企业不存在')
+    if (input.name !== undefined) enterprise.name = input.name.trim()
+    if (input.unifiedSocialCreditCode !== undefined) enterprise.unifiedSocialCreditCode = input.unifiedSocialCreditCode.trim() || undefined
+    if (input.contactPerson !== undefined) enterprise.contactPerson = input.contactPerson.trim() || undefined
+    if (input.contactPhone !== undefined) enterprise.contactPhone = input.contactPhone.trim() || undefined
+    return cloneEnterprise(enterprise)
+  }
+  return httpService.post<AdminEnterprise>(`/api/v1/admin/enterprises/${id}`, input)
 }
 
 export async function listPlatformUsers(): Promise<AdminUser[]> {
@@ -410,19 +445,21 @@ export async function createPlatformUser(data: { name: string; phone: string; ro
 
 export async function updatePlatformUserAccess(
   userId: string,
-  data: { role: PlatformRole; enterpriseIds: string[] },
+  data: { role: PlatformRole; enterpriseId: string },
 ): Promise<{ user: AdminUser }> {
   if (useMock) {
     const user = mockUsers.find((item) => item.id === userId)
     if (!user) throw new Error('用户不存在')
-    if (data.role === 'customer' && data.enterpriseIds.length === 0) throw new Error('客户账号必须绑定至少一家企业')
-    if (new Set(data.enterpriseIds).size !== data.enterpriseIds.length) throw new Error('企业范围不能包含重复项')
-    const selected = data.enterpriseIds.map((id) => mockEnterprises.find((item) => item.id === id))
-    if (selected.some((item) => !item)) throw new Error('企业不存在')
-    if (selected.some((item) => item?.status !== 'active')) throw new Error('不能绑定已停用企业')
     user.role = data.role
     user.roleLabel = roleLabelFor(data.role)
-    user.enterprises = selected.filter((item): item is AdminEnterprise => Boolean(item)).map(cloneEnterprise)
+    if (data.enterpriseId) {
+      const enterprise = mockEnterprises.find((item) => item.id === data.enterpriseId)
+      if (!enterprise) throw new Error('企业不存在')
+      if (enterprise.status !== 'active') throw new Error('不能绑定已停用企业')
+      user.enterprises = [cloneEnterprise(enterprise)]
+    } else {
+      user.enterprises = []
+    }
     return { user: cloneAdminUser(user) }
   }
   return httpService.post<{ user: AdminUser }>(`/api/v1/admin/users/${encodeURIComponent(userId)}/access`, data)
@@ -446,6 +483,22 @@ export async function listAuditEvents(): Promise<AdminAuditEvent[]> {
   return requestOrMock('/api/v1/admin/audit', [])
 }
 
+export async function listAdminConversations(
+  params: { limit?: number; offset?: number; enterpriseId?: string } = {},
+): Promise<AdminConversationList> {
+  if (useMock) return { items: [], total: 0, limit: params.limit ?? 50, offset: params.offset ?? 0 }
+  const query = new URLSearchParams()
+  if (params.limit != null) query.set('limit', String(params.limit))
+  if (params.offset != null) query.set('offset', String(params.offset))
+  if (params.enterpriseId) query.set('enterpriseId', params.enterpriseId)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return httpService.get<AdminConversationList>(`/api/v1/admin/conversations${suffix}`)
+}
+
+export async function getAdminConversation(conversationId: string): Promise<AdminConversationDetail> {
+  return httpService.get<AdminConversationDetail>(`/api/v1/admin/conversations/${conversationId}`)
+}
+
 export async function listAdminBindings(): Promise<IntegrationBinding[]> {
   if (useMock) return mockBindings.map((item) => ({ ...item }))
   return httpService.get<IntegrationBinding[]>('/api/v1/admin/bindings')
@@ -453,6 +506,23 @@ export async function listAdminBindings(): Promise<IntegrationBinding[]> {
 
 export async function getAdminAdpConfig(): Promise<AdpConfigStatus> {
   return httpService.get<AdpConfigStatus>('/api/v1/admin/adp-config')
+}
+
+export async function listAdpApps(): Promise<AdpApp[]> {
+  if (useMock) return []
+  return httpService.get<AdpApp[]>('/api/v1/admin/adp-apps')
+}
+
+export async function createAdpApp(input: CreateAdpAppRequest): Promise<AdpApp> {
+  return httpService.post<AdpApp>('/api/v1/admin/adp-apps', input)
+}
+
+export async function updateAdpApp(id: string, input: UpdateAdpAppRequest): Promise<AdpApp> {
+  return httpService.post<AdpApp>(`/api/v1/admin/adp-apps/${id}`, input)
+}
+
+export async function deleteAdpApp(id: string): Promise<{ deleted: boolean }> {
+  return httpService.delete<{ deleted: boolean }>(`/api/v1/admin/adp-apps/${id}`)
 }
 
 export async function createAdminBinding(data: {

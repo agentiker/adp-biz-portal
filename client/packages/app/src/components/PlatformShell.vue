@@ -13,6 +13,7 @@ import {
   SearchIcon,
   SettingIcon,
   UsergroupIcon,
+  UserIcon,
 } from 'tdesign-icons-vue-next'
 import { useUserStore } from '@/stores/user'
 import { usePlatformStore } from '@/stores/platform'
@@ -35,12 +36,14 @@ const portalNav = [
 
 const adminNav = [
   { label: '运营概览', to: '/admin', icon: DashboardIcon },
-  { label: '企业与用户', to: '/admin/enterprises', icon: UsergroupIcon },
+  { label: '企业管理', to: '/admin/enterprises', icon: UsergroupIcon },
+  { label: '平台用户', to: '/admin/users', icon: UserIcon },
   { label: 'ADP 应用配置', to: '/admin/bindings', icon: ApiIcon },
   { label: '渠道管理', to: '/admin/channels', icon: ApiIcon },
   { label: 'ADP Chat 调试', to: '/admin/adp-chat', icon: ChatMessageIcon },
   { label: 'Agent 与工具', to: '/admin/agents-tools', icon: SettingIcon },
-  { label: '会话与审计', to: '/admin/audit', icon: HistoryIcon },
+  { label: '历史对话', to: '/admin/conversations', icon: FileSearchIcon },
+  { label: '审计日志', to: '/admin/audit', icon: HistoryIcon },
 ]
 
 const navItems = computed(() => (props.mode === 'admin' ? adminNav : portalNav))

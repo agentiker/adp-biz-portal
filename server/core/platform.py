@@ -64,6 +64,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 
 PLATFORM_CONFIG_STATUSES = frozenset({"draft", "published", "rolled_back"})
 PLATFORM_CONFIG_FEATURES = ("portal", "m3ReadOnly", "audit", "webChannel")
+# Sentinel for "argument not provided" so callers can distinguish leave-unchanged
+# from an explicit clear.
+_UNSET = object()
 DEFAULT_PLATFORM_CONFIG: dict[str, Any] = {
     "items": ["客户登录与会话", "M3 只读工具", "企业隔离", "审计记录"],
     "featureFlags": {
@@ -463,8 +466,8 @@ async def create_platform_user(
         raise PlatformBadRequest("姓名不能为空")
     normalized = normalize_phone(phone)
     role = _validate_role(role)
-    if role == PlatformRole.CUSTOMER and not enterprise_id:
-        raise PlatformBadRequest("客户账号必须绑定企业")
+    if not enterprise_id:
+        raise PlatformBadRequest("平台用户必须绑定一个企业")
 
     duplicate = (
         await db.execute(select(PlatformUser).where(PlatformUser.PhoneNormalized == normalized))
@@ -527,14 +530,15 @@ async def update_platform_user_access(
     *,
     user_id: str,
     role: Any = None,
-    enterprise_ids: Any = None,
+    enterprise_id: Any = _UNSET,
 ) -> tuple[PlatformUser, list[PlatformMembership]]:
-    """Update a user's role and enterprise scope as one revocable change.
+    """Update a user's role and single enterprise as one revocable change.
 
-    ``enterprise_ids=None`` preserves the current scope; an explicit empty
-    list clears it (which is only valid for non-customer roles). Every active
-    membership receives the new role, and existing execution contexts are
-    revoked so a narrowed scope takes effect immediately.
+    A platform user is associated with at most one enterprise. ``enterprise_id``
+    ``_UNSET`` leaves the current enterprise unchanged; a uuid replaces it (any
+    other active membership is deactivated); ``""``/``None`` unbinds the user
+    (self-service). Execution contexts are revoked so the change takes effect
+    immediately.
     """
     normalized_user_id = _validate_uuid_text(user_id, field="用户 ID")
     user = (
@@ -548,85 +552,110 @@ async def update_platform_user_access(
 
     target_role = _validate_role(role) if role is not None else user.Role
     memberships = list(
-        (
-            await db.execute(
-                select(PlatformMembership).where(PlatformMembership.UserId == user.Id)
-            )
-        ).scalars().all()
+        (await db.execute(select(PlatformMembership).where(PlatformMembership.UserId == user.Id))).scalars().all()
     )
 
-    selected_ids: list[str] | None = None
-    if enterprise_ids is not None:
-        if not isinstance(enterprise_ids, list):
-            raise PlatformBadRequest("enterpriseIds 必须是 JSON 数组")
-        if len(enterprise_ids) > 50:
-            raise PlatformBadRequest("企业范围不能超过 50 家")
-        selected_ids = []
-        for enterprise_id in enterprise_ids:
-            normalized_id = _validate_uuid_text(enterprise_id, field="企业 ID")
-            if normalized_id in selected_ids:
-                raise PlatformBadRequest("企业范围不能包含重复项")
-            selected_ids.append(normalized_id)
-
-        enterprises = list(
-            (
-                await db.execute(
-                    select(PlatformEnterprise).where(PlatformEnterprise.Id.in_(selected_ids))
-                )
-            ).scalars().all()
-        )
-        enterprise_by_id = {str(item.Id): item for item in enterprises}
-        if len(enterprise_by_id) != len(selected_ids):
-            raise PlatformBadRequest("企业不存在")
-        if any(item.Status != EnterpriseStatus.ACTIVE for item in enterprises):
-            raise PlatformBadRequest("不能绑定已停用企业")
-
-    current_active_ids = {
-        str(item.EnterpriseId) for item in memberships if item.Active
-    }
-    effective_ids = set(selected_ids) if selected_ids is not None else current_active_ids
-    if target_role == PlatformRole.CUSTOMER and not effective_ids:
-        raise PlatformBadRequest("客户账号必须绑定至少一家企业")
+    selected_id: str | None | object = _UNSET
+    if enterprise_id is not _UNSET:
+        if enterprise_id in (None, ""):
+            selected_id = None  # unbind
+        else:
+            selected_id = _validate_uuid_text(enterprise_id, field="企业 ID")
+            enterprise = await db.get(PlatformEnterprise, selected_id)
+            if enterprise is None:
+                raise PlatformBadRequest("企业不存在")
+            if enterprise.Status != EnterpriseStatus.ACTIVE:
+                raise PlatformBadRequest("不能绑定已停用企业")
 
     user.Role = target_role
     account.Role = AccountRole.ADMIN if target_role == PlatformRole.ADMIN else AccountRole.NORMAL
     db.add(user)
     db.add(account)
 
-    existing_ids: set[str] = set()
-    for membership in memberships:
-        membership_id = str(membership.EnterpriseId)
-        existing_ids.add(membership_id)
-        if selected_ids is not None:
-            membership.Active = membership_id in effective_ids
-        if membership.Active:
-            membership.MembershipRole = target_role
-        db.add(membership)
-
-    if selected_ids is not None:
-        for enterprise_id in selected_ids:
-            if enterprise_id not in existing_ids:
-                db.add(
-                    PlatformMembership(
-                        UserId=user.Id,
-                        EnterpriseId=enterprise_id,
-                        MembershipRole=target_role,
-                        Active=True,
-                    )
-                )
+    if selected_id is _UNSET:
+        # Only the role changed; keep the single active membership in sync.
+        for membership in memberships:
+            if membership.Active:
+                membership.MembershipRole = target_role
+                db.add(membership)
+        active = [m for m in memberships if m.Active]
+    else:
+        # Enforce a single (or zero) active membership.
+        active = []
+        matched = False
+        for membership in memberships:
+            if selected_id is not None and str(membership.EnterpriseId) == selected_id:
+                membership.Active = True
+                membership.MembershipRole = target_role
+                matched = True
+                active.append(membership)
+            else:
+                membership.Active = False
+            db.add(membership)
+        if selected_id is not None and not matched:
+            created = PlatformMembership(
+                UserId=user.Id, EnterpriseId=selected_id, MembershipRole=target_role, Active=True,
+            )
+            db.add(created)
+            active.append(created)
 
     await revoke_account_execution_contexts(db, str(account.Id))
     await db.flush()
-    return user, [item for item in memberships if item.Active]
+    return user, active
+
+
+_USCC_PATTERN = re.compile(r"[0-9A-HJ-NPQRTUWXY]{18}")
+
+
+def _validate_uscc(value: str) -> str:
+    """Validate a 统一社会信用代码 (18 chars, GB32100 charset)."""
+    candidate = value.strip().upper()
+    if not _USCC_PATTERN.fullmatch(candidate):
+        raise PlatformBadRequest("社会统一识别码格式不正确（应为 18 位统一社会信用代码）")
+    return candidate
+
+
+def _optional_contact(value: Any, *, field: str, max_length: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise PlatformBadRequest(f"{field}格式不正确")
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if len(trimmed) > max_length:
+        raise PlatformBadRequest(f"{field}过长")
+    return trimmed
+
+
+async def _assert_uscc_unique(db: AsyncSession, uscc: str, *, exclude_id: str | None = None) -> None:
+    query = select(PlatformEnterprise).where(PlatformEnterprise.UnifiedSocialCreditCode == uscc)
+    if exclude_id is not None:
+        query = query.where(PlatformEnterprise.Id != exclude_id)
+    if (await db.execute(query)).scalar_one_or_none() is not None:
+        raise PlatformBadRequest("社会统一识别码已存在")
 
 
 async def create_enterprise(
-    db: AsyncSession, *, name: str, customer_code: str
+    db: AsyncSession,
+    *,
+    name: str,
+    customer_code: str,
+    unified_social_credit_code: str,
+    contact_person: Any = None,
+    contact_phone: Any = None,
+    adp_app_id: Any = None,
 ) -> PlatformEnterprise:
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 255:
         raise PlatformBadRequest("企业名称不能为空")
     if not isinstance(customer_code, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", customer_code.strip()):
         raise PlatformBadRequest("M3 客户编码格式不正确")
+    if not isinstance(unified_social_credit_code, str) or not unified_social_credit_code.strip():
+        raise PlatformBadRequest("社会统一识别码不能为空")
+    uscc = _validate_uscc(unified_social_credit_code)
+    person = _optional_contact(contact_person, field="企业联系人", max_length=128)
+    phone = _optional_contact(contact_phone, field="联系电话", max_length=32)
+    adp_app = _validate_uuid_text(adp_app_id, field="ADP 应用") if adp_app_id not in (None, "") else None
     duplicate = (
         await db.execute(
             select(PlatformEnterprise).where(PlatformEnterprise.CustomerCode == customer_code.strip())
@@ -634,8 +663,52 @@ async def create_enterprise(
     ).scalar_one_or_none()
     if duplicate is not None:
         raise PlatformBadRequest("M3 客户编码已存在")
-    enterprise = PlatformEnterprise(Name=name.strip(), CustomerCode=customer_code.strip())
+    await _assert_uscc_unique(db, uscc)
+    enterprise = PlatformEnterprise(
+        Name=name.strip(),
+        CustomerCode=customer_code.strip(),
+        UnifiedSocialCreditCode=uscc,
+        ContactPerson=person,
+        ContactPhone=phone,
+        AdpAppId=adp_app,
+    )
     db.add(enterprise)
+    await db.flush()
+    return enterprise
+
+
+async def update_enterprise(
+    db: AsyncSession,
+    *,
+    enterprise_id: str,
+    name: Any = None,
+    unified_social_credit_code: Any = None,
+    contact_person: Any = None,
+    contact_phone: Any = None,
+    adp_app_id: Any = _UNSET,
+) -> PlatformEnterprise:
+    """Update mutable enterprise fields. CustomerCode is immutable (M3 key)."""
+    enterprise = await db.get(PlatformEnterprise, enterprise_id)
+    if enterprise is None:
+        raise PlatformNotFound("企业不存在")
+    if name is not None:
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 255:
+            raise PlatformBadRequest("企业名称不能为空")
+        enterprise.Name = name.strip()
+    if unified_social_credit_code is not None:
+        if not isinstance(unified_social_credit_code, str) or not unified_social_credit_code.strip():
+            raise PlatformBadRequest("社会统一识别码不能为空")
+        uscc = _validate_uscc(unified_social_credit_code)
+        await _assert_uscc_unique(db, uscc, exclude_id=str(enterprise.Id))
+        enterprise.UnifiedSocialCreditCode = uscc
+    # Contact fields: pass "" to clear, omit (None) to leave unchanged.
+    if contact_person is not None:
+        enterprise.ContactPerson = _optional_contact(contact_person, field="企业联系人", max_length=128)
+    if contact_phone is not None:
+        enterprise.ContactPhone = _optional_contact(contact_phone, field="联系电话", max_length=32)
+    # adp_app_id: _UNSET = leave unchanged, "" / None = unbind (use default), uuid = bind.
+    if adp_app_id is not _UNSET:
+        enterprise.AdpAppId = _validate_uuid_text(adp_app_id, field="ADP 应用") if adp_app_id not in (None, "") else None
     await db.flush()
     return enterprise
 

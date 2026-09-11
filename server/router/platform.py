@@ -51,6 +51,7 @@ from core.platform import (
     publish_platform_config,
     serialize_enterprise,
     serialize_user,
+    update_enterprise,
     update_platform_user_access,
     _new_salt,
     utc_now,
@@ -58,6 +59,14 @@ from core.platform import (
 from core.delivery import InboundMessageInput, record_inbound_message
 from core.delivery import enqueue_delivery_task
 from core.channel_ingress import resolve_and_enqueue_inbound
+from core.adp_app import (
+    create_adp_app,
+    delete_adp_app,
+    list_adp_apps,
+    serialize_adp_app,
+    update_adp_app,
+)
+from integrations.adp.registry import clear_provider_cache
 from integrations.channels.wechat_kf import WECHAT_KF, WechatKfAdapter
 from integrations.channels.sender_registry import (
     CREDENTIAL_CORP_ID_KEYS,
@@ -278,18 +287,18 @@ def _serialize_run_result(run: PlatformExecutionRun, evidence: list[PlatformEvid
 async def _latest_runs(
     db,
     *,
-    account_id: Any,
+    account_id: Any = None,
     conversation_ids: list[str],
 ) -> dict[str, PlatformExecutionRun]:
     if not conversation_ids:
         return {}
+    query = select(PlatformExecutionRun).where(
+        PlatformExecutionRun.ConversationId.in_(conversation_ids),
+    )
+    if account_id is not None:
+        query = query.where(PlatformExecutionRun.AccountId == account_id)
     rows = list((await db.execute(
-        select(PlatformExecutionRun)
-        .where(
-            PlatformExecutionRun.AccountId == account_id,
-            PlatformExecutionRun.ConversationId.in_(conversation_ids),
-        )
-        .order_by(PlatformExecutionRun.StartedAt.desc())
+        query.order_by(PlatformExecutionRun.StartedAt.desc())
     )).scalars().all())
     return {str(row.ConversationId): row for row in reversed(rows)}
 
@@ -775,6 +784,138 @@ class PortalSessionDetailApi(HTTPMethodView):
                 latest,
                 evidence_count=len(evidence_by_run.get(str(latest.Id), [])) if latest else 0,
             ),
+            "messages": [{
+                "id": str(item.Id),
+                "direction": item.Direction,
+                "messageType": item.MessageType,
+                "body": item.Body or "",
+                "runId": str(item.ExecutionRunId) if item.ExecutionRunId else None,
+                "traceId": item.TraceId,
+                "createdAt": item.CreatedAt.isoformat() if item.CreatedAt else "",
+            } for item in messages],
+            "runs": [{
+                "runId": item.RunId,
+                "status": item.Status,
+                "query": item.Query,
+                "title": item.Title,
+                "summary": item.Summary,
+                "traceId": item.TraceId,
+                "startedAt": item.StartedAt.isoformat() if item.StartedAt else "",
+                "completedAt": item.CompletedAt.isoformat() if item.CompletedAt else None,
+                "evidence": [_serialize_evidence(evidence) for evidence in evidence_by_run.get(str(item.Id), [])],
+            } for item in runs],
+            "result": _serialize_run_result(latest, evidence_by_run.get(str(latest.Id), [])) if latest else None,
+        })
+
+
+def _int_arg(request: Request, name: str, *, default: int, lo: int, hi: int) -> int:
+    raw = request.args.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise PlatformBadRequest(f"{name} 参数不正确") from exc
+    return max(lo, min(hi, value))
+
+
+class AdminConversationListApi(HTTPMethodView):
+    @platform_required
+    async def get(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        limit = _int_arg(request, "limit", default=50, lo=1, hi=200)
+        offset = _int_arg(request, "offset", default=0, lo=0, hi=1_000_000)
+        enterprise_id = _validated_conversation_id(request.args.get("enterpriseId"))
+        base = select(PlatformConversation)
+        if enterprise_id is not None:
+            base = base.where(PlatformConversation.EnterpriseId == enterprise_id)
+        total = (await request.ctx.db.execute(
+            select(func.count()).select_from(base.subquery())
+        )).scalar_one()
+        sessions = list((await request.ctx.db.execute(
+            base.order_by(PlatformConversation.LastActiveAt.desc()).limit(limit).offset(offset)
+        )).scalars().all())
+        latest_runs = await _latest_runs(
+            request.ctx.db, conversation_ids=[str(item.Id) for item in sessions]
+        )
+        evidence_counts: dict[str, int] = {}
+        if latest_runs:
+            evidence_rows = list((await request.ctx.db.execute(
+                select(PlatformEvidence.ExecutionRunId, func.count())
+                .where(PlatformEvidence.ExecutionRunId.in_([item.Id for item in latest_runs.values()]))
+                .group_by(PlatformEvidence.ExecutionRunId)
+            )).all())
+            evidence_counts = {str(run_id): int(count) for run_id, count in evidence_rows}
+        enterprise_ids = {str(item.EnterpriseId) for item in sessions if item.EnterpriseId}
+        account_ids = {str(item.AccountId) for item in sessions if item.AccountId}
+        enterprise_names: dict[str, str] = {}
+        if enterprise_ids:
+            for eid, name in (await request.ctx.db.execute(
+                select(PlatformEnterprise.Id, PlatformEnterprise.Name).where(PlatformEnterprise.Id.in_(enterprise_ids))
+            )).all():
+                enterprise_names[str(eid)] = name
+        account_names: dict[str, str] = {}
+        if account_ids:
+            for aid, name in (await request.ctx.db.execute(
+                select(Account.Id, Account.Name).where(Account.Id.in_(account_ids))
+            )).all():
+                account_names[str(aid)] = name
+        return json({
+            "items": [{
+                **_serialize_session(
+                    item,
+                    latest_runs.get(str(item.Id)),
+                    evidence_count=evidence_counts.get(str(latest_runs.get(str(item.Id)).Id), 0) if latest_runs.get(str(item.Id)) else 0,
+                ),
+                "enterpriseId": str(item.EnterpriseId) if item.EnterpriseId else None,
+                "enterpriseName": enterprise_names.get(str(item.EnterpriseId)) if item.EnterpriseId else None,
+                "accountId": str(item.AccountId) if item.AccountId else None,
+                "accountName": account_names.get(str(item.AccountId)) if item.AccountId else None,
+            } for item in sessions],
+            "total": int(total or 0),
+            "limit": limit,
+            "offset": offset,
+        })
+
+
+class AdminConversationDetailApi(HTTPMethodView):
+    @platform_required
+    async def get(self, request: Request, conversation_id: str):
+        require_permission(_context(request), "platform.manage")
+        validated_id = _validated_conversation_id(conversation_id)
+        conversation = await request.ctx.db.get(PlatformConversation, validated_id) if validated_id else None
+        if conversation is None:
+            raise PlatformNotFound("会话不存在")
+        runs = list((await request.ctx.db.execute(
+            select(PlatformExecutionRun)
+            .where(PlatformExecutionRun.ConversationId == conversation.Id)
+            .order_by(PlatformExecutionRun.StartedAt.asc())
+        )).scalars().all())
+        run_ids = [item.Id for item in runs]
+        evidence_rows = list((await request.ctx.db.execute(
+            select(PlatformEvidence)
+            .where(PlatformEvidence.ExecutionRunId.in_(run_ids))
+            .order_by(PlatformEvidence.CapturedAt.asc())
+        )).scalars().all()) if run_ids else []
+        evidence_by_run: dict[str, list[PlatformEvidence]] = {}
+        for item in evidence_rows:
+            evidence_by_run.setdefault(str(item.ExecutionRunId), []).append(item)
+        messages = list((await request.ctx.db.execute(
+            select(PlatformMessage)
+            .where(PlatformMessage.ConversationId == conversation.Id)
+            .order_by(PlatformMessage.CreatedAt.asc())
+        )).scalars().all())
+        enterprise = await request.ctx.db.get(PlatformEnterprise, conversation.EnterpriseId) if conversation.EnterpriseId else None
+        account = await request.ctx.db.get(Account, conversation.AccountId) if conversation.AccountId else None
+        latest = runs[-1] if runs else None
+        return json({
+            "conversation": {
+                **_serialize_session(conversation, latest, evidence_count=len(evidence_by_run.get(str(latest.Id), [])) if latest else 0),
+                "enterpriseId": str(conversation.EnterpriseId) if conversation.EnterpriseId else None,
+                "enterpriseName": enterprise.Name if enterprise is not None else None,
+                "accountId": str(conversation.AccountId) if conversation.AccountId else None,
+                "accountName": account.Name if account is not None else None,
+            },
             "messages": [{
                 "id": str(item.Id),
                 "direction": item.Direction,
@@ -1873,21 +2014,122 @@ class AdminConfigRollbackApi(HTTPMethodView):
         return json(await get_platform_config_state(request.ctx.db))
 
 
+def _serialize_admin_enterprise(row: PlatformEnterprise) -> dict[str, Any]:
+    return {
+        "id": str(row.Id),
+        "name": row.Name,
+        "customerCode": row.CustomerCode,
+        "unifiedSocialCreditCode": row.UnifiedSocialCreditCode,
+        "contactPerson": row.ContactPerson,
+        "contactPhone": row.ContactPhone,
+        "adpAppId": str(row.AdpAppId) if row.AdpAppId else None,
+        "status": row.Status,
+    }
+
+
 class AdminEnterpriseListApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
         require_permission(_context(request), "platform.manage")
         rows = list((await request.ctx.db.execute(select(PlatformEnterprise).order_by(PlatformEnterprise.Name))).scalars().all())
-        return json([{"id": str(row.Id), "name": row.Name, "customerCode": row.CustomerCode, "status": row.Status} for row in rows])
+        return json([_serialize_admin_enterprise(row) for row in rows])
 
     @platform_required
     async def post(self, request: Request):
         context = _context(request)
         require_permission(context, "platform.manage")
         body = _body(request)
-        enterprise = await create_enterprise(db=request.ctx.db, name=body.get("name"), customer_code=body.get("customerCode"))
+        enterprise = await create_enterprise(
+            db=request.ctx.db,
+            name=body.get("name"),
+            customer_code=body.get("customerCode"),
+            unified_social_credit_code=body.get("unifiedSocialCreditCode"),
+            contact_person=body.get("contactPerson"),
+            contact_phone=body.get("contactPhone"),
+            adp_app_id=body.get("adpAppId"),
+        )
         await _commit_audit(request, action="enterprise.create", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
-        return json({"id": str(enterprise.Id), "name": enterprise.Name, "customerCode": enterprise.CustomerCode, "status": enterprise.Status}, status=201)
+        return json(_serialize_admin_enterprise(enterprise), status=201)
+
+
+class AdminEnterpriseDetailApi(HTTPMethodView):
+    @platform_required
+    async def post(self, request: Request, enterprise_id: str):
+        context = _context(request)
+        require_permission(context, "platform.manage")
+        body = _body(request)
+        update_kwargs: dict[str, Any] = {}
+        if "adpAppId" in body:
+            update_kwargs["adp_app_id"] = body["adpAppId"]
+        enterprise = await update_enterprise(
+            db=request.ctx.db,
+            enterprise_id=enterprise_id,
+            name=body.get("name"),
+            unified_social_credit_code=body.get("unifiedSocialCreditCode"),
+            contact_person=body.get("contactPerson"),
+            contact_phone=body.get("contactPhone"),
+            **update_kwargs,
+        )
+        await _commit_audit(request, action="enterprise.update", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
+        return json(_serialize_admin_enterprise(enterprise))
+
+
+class AdminAdpAppListApi(HTTPMethodView):
+    @platform_required
+    async def get(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        rows = await list_adp_apps(request.ctx.db)
+        return json([serialize_adp_app(row) for row in rows])
+
+    @platform_required
+    async def post(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        body = _body(request)
+        app = await create_adp_app(
+            request.ctx.db,
+            name=body.get("name"),
+            application_id=body.get("applicationId"),
+            app_key=body.get("appKey"),
+            vendor=body.get("vendor"),
+            service_vendor=body.get("serviceVendor"),
+            agent_id=body.get("agentId"),
+            private_url=body.get("privateUrl"),
+            is_default=bool(body.get("isDefault")),
+        )
+        clear_provider_cache()
+        await _commit_audit(request, action="adp_app.create", target_type="platform_adp_app", target_id=str(app.Id), metadata={"applicationId": app.ApplicationId, "isDefault": bool(app.IsDefault)})
+        return json(serialize_adp_app(app), status=201)
+
+
+class AdminAdpAppDetailApi(HTTPMethodView):
+    @platform_required
+    async def post(self, request: Request, adp_app_id: str):
+        require_permission(_context(request), "platform.manage")
+        body = _body(request)
+        app = await update_adp_app(
+            request.ctx.db,
+            adp_app_id=adp_app_id,
+            name=body.get("name"),
+            app_key=body.get("appKey"),
+            vendor=body.get("vendor"),
+            service_vendor=body.get("serviceVendor"),
+            agent_id=body.get("agentId"),
+            private_url=body.get("privateUrl"),
+            status=body.get("status"),
+            is_default=body.get("isDefault"),
+        )
+        clear_provider_cache()
+        await _commit_audit(request, action="adp_app.update", target_type="platform_adp_app", target_id=str(app.Id), metadata={"applicationId": app.ApplicationId, "status": app.Status, "isDefault": bool(app.IsDefault)})
+        return json(serialize_adp_app(app))
+
+    @platform_required
+    async def delete(self, request: Request, adp_app_id: str):
+        require_permission(_context(request), "platform.manage")
+        await delete_adp_app(request.ctx.db, adp_app_id=adp_app_id)
+        clear_provider_cache()
+        await _commit_audit(request, action="adp_app.delete", target_type="platform_adp_app", target_id=str(adp_app_id))
+        return json({"deleted": True})
+
 
 
 class AdminUserListApi(HTTPMethodView):
@@ -1975,15 +2217,16 @@ class AdminUserAccessApi(HTTPMethodView):
         if str(context.user.Id) == str(user_id):
             raise PlatformBadRequest("不能修改当前登录账号的角色或企业范围")
         body = _body(request)
-        if "role" not in body and "enterpriseIds" not in body:
-            raise PlatformBadRequest("至少提供 role 或 enterpriseIds")
-        if "enterpriseIds" in body and not isinstance(body["enterpriseIds"], list):
-            raise PlatformBadRequest("enterpriseIds 必须是 JSON 数组")
+        if "role" not in body and "enterpriseId" not in body:
+            raise PlatformBadRequest("至少提供 role 或 enterpriseId")
+        access_kwargs: dict[str, Any] = {}
+        if "enterpriseId" in body:
+            access_kwargs["enterprise_id"] = body["enterpriseId"]
         user, _ = await update_platform_user_access(
             request.ctx.db,
             user_id=user_id,
             role=body.get("role") if "role" in body else None,
-            enterprise_ids=body.get("enterpriseIds") if "enterpriseIds" in body else None,
+            **access_kwargs,
         )
         reply_tasks_revoked = await revoke_account_delivery_tasks(request.ctx.db, str(user.AccountId))
         enterprises = await get_enterprises_for_user(request.ctx.db, user)
@@ -2045,7 +2288,17 @@ class AdminAuditListApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
         require_permission(_context(request), "platform.manage")
-        events = list((await request.ctx.db.execute(select(PlatformAuditEvent).order_by(PlatformAuditEvent.CreatedAt.desc()).limit(200))).scalars().all())
+        limit = _int_arg(request, "limit", default=200, lo=1, hi=500)
+        query = select(PlatformAuditEvent)
+        action = (request.args.get("action") or "").strip()
+        if action:
+            query = query.where(PlatformAuditEvent.Action.ilike(f"%{action}%"))
+        outcome = (request.args.get("outcome") or "").strip()
+        if outcome:
+            query = query.where(PlatformAuditEvent.Outcome == outcome)
+        events = list((await request.ctx.db.execute(
+            query.order_by(PlatformAuditEvent.CreatedAt.desc()).limit(limit)
+        )).scalars().all())
         return json([{
             "id": str(event.Id), "action": event.Action, "targetType": event.TargetType,
             "targetId": event.TargetId, "traceId": event.TraceId, "outcome": event.Outcome,
@@ -2387,11 +2640,16 @@ app.add_route(AdminConfigPublishApi.as_view(), "/api/v1/admin/config/publish")
 app.add_route(AdminConfigRollbackApi.as_view(), "/api/v1/admin/config/rollback")
 app.add_route(AdminAdpConfigApi.as_view(), "/api/v1/admin/adp-config")
 app.add_route(AdminEnterpriseListApi.as_view(), "/api/v1/admin/enterprises")
+app.add_route(AdminEnterpriseDetailApi.as_view(), "/api/v1/admin/enterprises/<enterprise_id:str>")
+app.add_route(AdminAdpAppListApi.as_view(), "/api/v1/admin/adp-apps")
+app.add_route(AdminAdpAppDetailApi.as_view(), "/api/v1/admin/adp-apps/<adp_app_id:str>")
 app.add_route(AdminUserListApi.as_view(), "/api/v1/admin/users")
 app.add_route(AdminUserResetPasswordApi.as_view(), "/api/v1/admin/users/<user_id:str>/reset-password")
 app.add_route(AdminUserAccessApi.as_view(), "/api/v1/admin/users/<user_id:str>/access")
 app.add_route(AdminUserDisableApi.as_view(), "/api/v1/admin/users/<user_id:str>/disable")
 app.add_route(AdminAuditListApi.as_view(), "/api/v1/admin/audit")
+app.add_route(AdminConversationListApi.as_view(), "/api/v1/admin/conversations")
+app.add_route(AdminConversationDetailApi.as_view(), "/api/v1/admin/conversations/<conversation_id:str>")
 app.add_route(AdminChannelIdentityListApi.as_view(), "/api/v1/admin/channel-identities")
 app.add_route(AdminChannelIdentityRevokeApi.as_view(), "/api/v1/admin/channel-identities/<identity_id:str>/revoke")
 app.add_route(AdminBindingListApi.as_view(), "/api/v1/admin/bindings")

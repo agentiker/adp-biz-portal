@@ -445,6 +445,25 @@
   - 验证命令与结果：`cd server && .venv/bin/pytest test/unit_test/test_platform_ops_status.py -q`（5 项聚焦测试）；`.venv/bin/python -m py_compile router/platform.py test/unit_test/test_platform_ops_status.py`；`git diff --check`。
   - 遗留风险：当前是后端只读入口，尚未接入生产运维机器人、告警系统和真实监控数据；真实 ADP/M3/微信/企微联调仍不在本项完成范围。
 
+### 平台优化（2026-09 迭代）
+
+- [ ] `M4-ENT-01` 多租户企业信息扩展 + 企业/用户页拆分。
+  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署）。
+  - 已完成：`PlatformEnterprise` 增 `UnifiedSocialCreditCode`（必填、非空唯一，18 位 GB32100 校验）/`ContactPerson`/`ContactPhone`（选填）+ 迁移 **revision 15**（`_apply_revision_15`：`ADD COLUMN IF NOT EXISTS` + `UnifiedSocialCreditCode` 部分唯一索引）；`core/platform.create_enterprise` 扩参 + 新增 `update_enterprise`；`AdminEnterpriseListApi` 序列化补字段、新增 `AdminEnterpriseDetailApi`（`POST /api/v1/admin/enterprises/<id>` 更新，CustomerCode 不可改）；OpenAPI 补 `updateEnterprise` 路径 + `AdminEnterprise`/`CreateEnterpriseRequest`/`UpdateEnterpriseRequest` schema（45 ops）并重生成类型。前端把合并的「企业与用户」拆成 `企业管理`(/admin/enterprises，含新字段增改) 与 `平台用户`(/admin/users) 两页（`PlatformShell` 导航 + `router` + `Admin.vue` 视图/表单/loadData + `platformService.createEnterprise({...})`/`updateEnterprise`）。
+  - 验证：迁移 15 在隔离/本地/测试 DB up 通过（列 + 部分唯一索引存在）；`test/integration/test_enterprise_admin_postgres.py`(5) 覆盖必填/唯一/格式/选填/更新；后端 `334 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
+  - 未完成：生产部署（迁移 15，按 deploy skill 备份 + 回滚 + 验 `/readyz`）。
+  - 迭代（2026-09-11，验收反馈）：① 统一自定义下拉组件 `components/PlatformSelect.vue`（弃用原生 `<select>`：角色、所属企业、ADP 应用、企业筛选均改用它）；② **平台用户单企业**：每个用户只关联一个企业——`create_platform_user` 所有角色都必须绑定一个企业；`update_platform_user_access(enterprise_id)` 由数组改单值（切换即停用旧 membership，空串=解绑，`_UNSET`=只改角色），保证至多一个活跃 membership；`AdminUserAccessApi` 收 `enterpriseId`（替代 `enterpriseIds`）；「调整范围」多选清单改为单选「所属企业」；平台用户列表新增按企业筛选下拉。OpenAPI 同步（Create 必填 `enterpriseId`、Update 单 `enterpriseId`），移除过时多企业单测、新增 `test_user_access_postgres`(5)（换绑单一活跃/解绑/仅改角色/拒停用企业/创建必绑）。后端 `342 passed`、`platform_api_check` 通过、前端 type-check 通过。用户自助解绑（Portal 侧）仍为后续项。
+- [ ] `M4-AUDIT-01` 拆分「历史对话」与「审计日志」两个管理页面，新增跨企业只读对话读接口。
+  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署）。
+  - 已完成：新增跨企业只读接口 `GET /api/v1/admin/conversations`（分页 limit/offset + 可选 enterpriseId，附最新 run + 企业名 + 账号名）与 `GET /api/v1/admin/conversations/<id>`（按 id 取，复用 `_serialize_session`/`_serialize_run_result`/`_serialize_evidence`，附企业/账号）；`_latest_runs` 改 account_id 可选以支持跨企业；`AdminAuditListApi` 加可选 `limit/action/outcome` 过滤（默认仍最近 200，响应形状不变）。前端把「会话与审计」拆成 `历史对话`(/admin/conversations，列表+分页+详情弹窗) 与 `审计日志`(/admin/audit) 两页（`PlatformShell` 导航 + `router` + `Admin.vue` 视图/loadData + `platformService.listAdminConversations`/`getAdminConversation`）。OpenAPI 补 3 路径 + `AdminConversation*` schema（复用 `PortalSession/Message/ExecutionRun/ShipmentResult`，47 ops）并重生成类型。
+  - 验证：`test/integration/test_admin_conversations_postgres.py`(3) 覆盖跨企业列出/分页/`platform.manage` 拒绝 + 详情按 id 读；后端 `337 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
+  - 未完成：生产部署（无 schema 变更，app-only）。
+- [ ] `M4-ADP-CFG-01` ADP 应用配置化 + 多应用（按企业绑定、凭据 DB 加密、Admin 可编辑）。
+  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署；真实 ADP 应用联调待录入）。
+  - 已完成：新表 `PlatformAdpApp`（AppKey 等经 Fernet 加密存 Ciphertext + 非密字段明文，`IsDefault` 部分唯一索引保证至多一个活跃默认）+ `PlatformEnterprise.AdpAppId` FK（ON DELETE SET NULL），迁移 **revision 16**（新表 + ALTER 加列 + FK + 部分唯一索引，混合式；fresh 0→16 与增量均验证）；`channel_credentials` 抽 `decrypt_ciphertext` 供复用；`integrations/adp/registry.resolve_provider_for_enterprise`（企业绑定→默认→`.env` 回退三级，按 ApplicationId+UpdatedAt 缓存 provider，编辑即失效）替换单例——接入 `platform_worker`（每回合按企业解析）与 `wecom_bot/gateway`（回合内解析）；`core/adp_app.py` CRUD（create/update/list/delete，设默认互斥、停用清默认、rotate AppKey）；router `AdminAdpAppList/DetailApi`（`platform.manage`，序列化不吐密钥、只给指纹末 8 位，写审计，改动清 provider 缓存）+ 企业 create/update 接受 `adpAppId`。前端「ADP 应用配置」页改为应用注册表（列表 + 新建/编辑/设默认/停用/删除 + .env 回退信息卡），企业表单加「ADP 应用」下拉（空=平台默认）。OpenAPI 加 4 路径 + `AdpApp`/`Create`/`Update` schema + 企业 schema 补 `adpAppId`（51 ops）并重生成类型。
+  - 验证：迁移 16 fresh + 增量 up 通过（表/列/FK/索引存在）；`test/integration/test_adp_app_registry_postgres.py`(5) 覆盖加密往返/序列化不含密钥/三级解析/缓存按 UpdatedAt 失效/默认互斥/停用清默认/重复 ApplicationId 拒绝；后端 `342 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
+  - 未完成：生产部署（迁移 16）；录入真实 ADP 应用后按企业路由的真机验收（沿用现有渠道联调路径）。
+
 ## 每个 TODO 的完成标准
 
 一个 TODO 只有同时满足以下条件才可以从 `TODO`/`IN PROGRESS` 改为 `DONE`：
