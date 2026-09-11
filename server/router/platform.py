@@ -59,6 +59,14 @@ from core.platform import (
 from core.delivery import InboundMessageInput, record_inbound_message
 from core.delivery import enqueue_delivery_task
 from core.channel_ingress import resolve_and_enqueue_inbound
+from core.adp_app import (
+    create_adp_app,
+    delete_adp_app,
+    list_adp_apps,
+    serialize_adp_app,
+    update_adp_app,
+)
+from integrations.adp.registry import clear_provider_cache
 from integrations.channels.wechat_kf import WECHAT_KF, WechatKfAdapter
 from integrations.channels.sender_registry import (
     CREDENTIAL_CORP_ID_KEYS,
@@ -2014,6 +2022,7 @@ def _serialize_admin_enterprise(row: PlatformEnterprise) -> dict[str, Any]:
         "unifiedSocialCreditCode": row.UnifiedSocialCreditCode,
         "contactPerson": row.ContactPerson,
         "contactPhone": row.ContactPhone,
+        "adpAppId": str(row.AdpAppId) if row.AdpAppId else None,
         "status": row.Status,
     }
 
@@ -2037,6 +2046,7 @@ class AdminEnterpriseListApi(HTTPMethodView):
             unified_social_credit_code=body.get("unifiedSocialCreditCode"),
             contact_person=body.get("contactPerson"),
             contact_phone=body.get("contactPhone"),
+            adp_app_id=body.get("adpAppId"),
         )
         await _commit_audit(request, action="enterprise.create", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
         return json(_serialize_admin_enterprise(enterprise), status=201)
@@ -2048,6 +2058,9 @@ class AdminEnterpriseDetailApi(HTTPMethodView):
         context = _context(request)
         require_permission(context, "platform.manage")
         body = _body(request)
+        update_kwargs: dict[str, Any] = {}
+        if "adpAppId" in body:
+            update_kwargs["adp_app_id"] = body["adpAppId"]
         enterprise = await update_enterprise(
             db=request.ctx.db,
             enterprise_id=enterprise_id,
@@ -2055,9 +2068,67 @@ class AdminEnterpriseDetailApi(HTTPMethodView):
             unified_social_credit_code=body.get("unifiedSocialCreditCode"),
             contact_person=body.get("contactPerson"),
             contact_phone=body.get("contactPhone"),
+            **update_kwargs,
         )
         await _commit_audit(request, action="enterprise.update", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
         return json(_serialize_admin_enterprise(enterprise))
+
+
+class AdminAdpAppListApi(HTTPMethodView):
+    @platform_required
+    async def get(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        rows = await list_adp_apps(request.ctx.db)
+        return json([serialize_adp_app(row) for row in rows])
+
+    @platform_required
+    async def post(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        body = _body(request)
+        app = await create_adp_app(
+            request.ctx.db,
+            name=body.get("name"),
+            application_id=body.get("applicationId"),
+            app_key=body.get("appKey"),
+            vendor=body.get("vendor"),
+            service_vendor=body.get("serviceVendor"),
+            agent_id=body.get("agentId"),
+            private_url=body.get("privateUrl"),
+            is_default=bool(body.get("isDefault")),
+        )
+        clear_provider_cache()
+        await _commit_audit(request, action="adp_app.create", target_type="platform_adp_app", target_id=str(app.Id), metadata={"applicationId": app.ApplicationId, "isDefault": bool(app.IsDefault)})
+        return json(serialize_adp_app(app), status=201)
+
+
+class AdminAdpAppDetailApi(HTTPMethodView):
+    @platform_required
+    async def post(self, request: Request, adp_app_id: str):
+        require_permission(_context(request), "platform.manage")
+        body = _body(request)
+        app = await update_adp_app(
+            request.ctx.db,
+            adp_app_id=adp_app_id,
+            name=body.get("name"),
+            app_key=body.get("appKey"),
+            vendor=body.get("vendor"),
+            service_vendor=body.get("serviceVendor"),
+            agent_id=body.get("agentId"),
+            private_url=body.get("privateUrl"),
+            status=body.get("status"),
+            is_default=body.get("isDefault"),
+        )
+        clear_provider_cache()
+        await _commit_audit(request, action="adp_app.update", target_type="platform_adp_app", target_id=str(app.Id), metadata={"applicationId": app.ApplicationId, "status": app.Status, "isDefault": bool(app.IsDefault)})
+        return json(serialize_adp_app(app))
+
+    @platform_required
+    async def delete(self, request: Request, adp_app_id: str):
+        require_permission(_context(request), "platform.manage")
+        await delete_adp_app(request.ctx.db, adp_app_id=adp_app_id)
+        clear_provider_cache()
+        await _commit_audit(request, action="adp_app.delete", target_type="platform_adp_app", target_id=str(adp_app_id))
+        return json({"deleted": True})
 
 
 
@@ -2569,6 +2640,8 @@ app.add_route(AdminConfigRollbackApi.as_view(), "/api/v1/admin/config/rollback")
 app.add_route(AdminAdpConfigApi.as_view(), "/api/v1/admin/adp-config")
 app.add_route(AdminEnterpriseListApi.as_view(), "/api/v1/admin/enterprises")
 app.add_route(AdminEnterpriseDetailApi.as_view(), "/api/v1/admin/enterprises/<enterprise_id:str>")
+app.add_route(AdminAdpAppListApi.as_view(), "/api/v1/admin/adp-apps")
+app.add_route(AdminAdpAppDetailApi.as_view(), "/api/v1/admin/adp-apps/<adp_app_id:str>")
 app.add_route(AdminUserListApi.as_view(), "/api/v1/admin/users")
 app.add_route(AdminUserResetPasswordApi.as_view(), "/api/v1/admin/users/<user_id:str>/reset-password")
 app.add_route(AdminUserAccessApi.as_view(), "/api/v1/admin/users/<user_id:str>/access")

@@ -7,6 +7,9 @@ import type {
   AdminConversationList,
   AdminConversationDetail,
   AdminEnterprise,
+  AdpApp,
+  CreateAdpAppRequest,
+  UpdateAdpAppRequest,
   AdminPasswordResetResult,
   AdminUser,
   AdminUserCreateResult,
@@ -383,6 +386,7 @@ export type EnterpriseInput = {
   unifiedSocialCreditCode?: string
   contactPerson?: string
   contactPhone?: string
+  adpAppId?: string
 }
 
 export async function createEnterprise(input: EnterpriseInput): Promise<AdminEnterprise> {
@@ -500,6 +504,23 @@ export async function listAdminBindings(): Promise<IntegrationBinding[]> {
 
 export async function getAdminAdpConfig(): Promise<AdpConfigStatus> {
   return httpService.get<AdpConfigStatus>('/api/v1/admin/adp-config')
+}
+
+export async function listAdpApps(): Promise<AdpApp[]> {
+  if (useMock) return []
+  return httpService.get<AdpApp[]>('/api/v1/admin/adp-apps')
+}
+
+export async function createAdpApp(input: CreateAdpAppRequest): Promise<AdpApp> {
+  return httpService.post<AdpApp>('/api/v1/admin/adp-apps', input)
+}
+
+export async function updateAdpApp(id: string, input: UpdateAdpAppRequest): Promise<AdpApp> {
+  return httpService.post<AdpApp>(`/api/v1/admin/adp-apps/${id}`, input)
+}
+
+export async function deleteAdpApp(id: string): Promise<{ deleted: boolean }> {
+  return httpService.delete<{ deleted: boolean }>(`/api/v1/admin/adp-apps/${id}`)
 }
 
 export async function createAdminBinding(data: {

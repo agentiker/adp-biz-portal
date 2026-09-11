@@ -72,9 +72,44 @@ class PlatformEnterprise(Base):
     ContactPerson = Column(String(128), nullable=True)
     ContactPhone = Column(String(32), nullable=True)
     Status = Column(String(16), nullable=False, server_default=EnterpriseStatus.ACTIVE)
+    # FK to platform_adp_app added in migration revision 16 (avoids a fresh-create
+    # ordering cycle since platform_enterprise is created before platform_adp_app);
+    # null = use the platform default ADP app.
+    AdpAppId = Column(UUID(), nullable=True, index=True)
     CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
     ExtraInfo = Column(Text(), nullable=True)
+
+
+class AdpAppStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class PlatformAdpApp(Base):
+    """A configurable ADP application (vendor app + encrypted AppKey).
+
+    Non-secret fields stay in the clear for listing; the AppKey (and any private
+    endpoint) live in ``Ciphertext`` encrypted with the same Fernet keyring as
+    channel credentials. At most one row may be the active default (enforced by a
+    partial unique index created in the migration).
+    """
+
+    __tablename__ = "platform_adp_app"
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    Name = Column(String(128), nullable=False)
+    ApplicationId = Column(String(64), nullable=False, unique=True, index=True)
+    Vendor = Column(String(32), nullable=False, server_default="Tencent")
+    ServiceVendor = Column(String(32), nullable=False, server_default="ChinaTencentCloud")
+    AgentId = Column(String(128), nullable=False, server_default="platform-default")
+    Ciphertext = Column(Text(), nullable=False)
+    KeyVersion = Column(String(32), nullable=False)
+    Fingerprint = Column(String(64), nullable=False)
+    Status = Column(String(16), nullable=False, server_default=AdpAppStatus.ACTIVE)
+    IsDefault = Column(Boolean, nullable=False, server_default=text("false"))
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 
 
 class IntegrationConnection(Base):
