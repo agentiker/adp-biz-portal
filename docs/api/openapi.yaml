@@ -1898,23 +1898,22 @@ components:
         adpAppId: { type: string, nullable: true }
     CreatePlatformUserRequest:
       type: object
-      required: [name, phone, role]
+      required: [name, phone, role, enterpriseId]
       properties:
         name: { type: string, minLength: 1, maxLength: 255 }
         phone: { type: string, minLength: 1, maxLength: 32 }
         role: { $ref: '#/components/schemas/PlatformRole' }
-        enterpriseId:
-          oneOf:
-            - { type: string, format: uuid }
-            - { type: 'null' }
+        enterpriseId: { type: string, format: uuid }
     UpdatePlatformUserAccessRequest:
       type: object
       minProperties: 1
       properties:
         role: { $ref: '#/components/schemas/PlatformRole' }
-        enterpriseIds:
-          type: array
-          items: { type: string, format: uuid }
+        enterpriseId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: string, enum: [''] }
+            - { type: 'null' }
     UpsertBindingRequest:
       type: object
       required: [applicationId, upstreamAppId, enterpriseId, workspaceId, externalAccountId]

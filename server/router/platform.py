@@ -2217,15 +2217,16 @@ class AdminUserAccessApi(HTTPMethodView):
         if str(context.user.Id) == str(user_id):
             raise PlatformBadRequest("不能修改当前登录账号的角色或企业范围")
         body = _body(request)
-        if "role" not in body and "enterpriseIds" not in body:
-            raise PlatformBadRequest("至少提供 role 或 enterpriseIds")
-        if "enterpriseIds" in body and not isinstance(body["enterpriseIds"], list):
-            raise PlatformBadRequest("enterpriseIds 必须是 JSON 数组")
+        if "role" not in body and "enterpriseId" not in body:
+            raise PlatformBadRequest("至少提供 role 或 enterpriseId")
+        access_kwargs: dict[str, Any] = {}
+        if "enterpriseId" in body:
+            access_kwargs["enterprise_id"] = body["enterpriseId"]
         user, _ = await update_platform_user_access(
             request.ctx.db,
             user_id=user_id,
             role=body.get("role") if "role" in body else None,
-            enterprise_ids=body.get("enterpriseIds") if "enterpriseIds" in body else None,
+            **access_kwargs,
         )
         reply_tasks_revoked = await revoke_account_delivery_tasks(request.ctx.db, str(user.AccountId))
         enterprises = await get_enterprises_for_user(request.ctx.db, user)

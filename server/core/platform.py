@@ -64,6 +64,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 
 PLATFORM_CONFIG_STATUSES = frozenset({"draft", "published", "rolled_back"})
 PLATFORM_CONFIG_FEATURES = ("portal", "m3ReadOnly", "audit", "webChannel")
+# Sentinel for "argument not provided" so callers can distinguish leave-unchanged
+# from an explicit clear.
+_UNSET = object()
 DEFAULT_PLATFORM_CONFIG: dict[str, Any] = {
     "items": ["客户登录与会话", "M3 只读工具", "企业隔离", "审计记录"],
     "featureFlags": {
@@ -463,8 +466,8 @@ async def create_platform_user(
         raise PlatformBadRequest("姓名不能为空")
     normalized = normalize_phone(phone)
     role = _validate_role(role)
-    if role == PlatformRole.CUSTOMER and not enterprise_id:
-        raise PlatformBadRequest("客户账号必须绑定企业")
+    if not enterprise_id:
+        raise PlatformBadRequest("平台用户必须绑定一个企业")
 
     duplicate = (
         await db.execute(select(PlatformUser).where(PlatformUser.PhoneNormalized == normalized))
@@ -527,14 +530,15 @@ async def update_platform_user_access(
     *,
     user_id: str,
     role: Any = None,
-    enterprise_ids: Any = None,
+    enterprise_id: Any = _UNSET,
 ) -> tuple[PlatformUser, list[PlatformMembership]]:
-    """Update a user's role and enterprise scope as one revocable change.
+    """Update a user's role and single enterprise as one revocable change.
 
-    ``enterprise_ids=None`` preserves the current scope; an explicit empty
-    list clears it (which is only valid for non-customer roles). Every active
-    membership receives the new role, and existing execution contexts are
-    revoked so a narrowed scope takes effect immediately.
+    A platform user is associated with at most one enterprise. ``enterprise_id``
+    ``_UNSET`` leaves the current enterprise unchanged; a uuid replaces it (any
+    other active membership is deactivated); ``""``/``None`` unbinds the user
+    (self-service). Execution contexts are revoked so the change takes effect
+    immediately.
     """
     normalized_user_id = _validate_uuid_text(user_id, field="用户 ID")
     user = (
@@ -548,80 +552,59 @@ async def update_platform_user_access(
 
     target_role = _validate_role(role) if role is not None else user.Role
     memberships = list(
-        (
-            await db.execute(
-                select(PlatformMembership).where(PlatformMembership.UserId == user.Id)
-            )
-        ).scalars().all()
+        (await db.execute(select(PlatformMembership).where(PlatformMembership.UserId == user.Id))).scalars().all()
     )
 
-    selected_ids: list[str] | None = None
-    if enterprise_ids is not None:
-        if not isinstance(enterprise_ids, list):
-            raise PlatformBadRequest("enterpriseIds 必须是 JSON 数组")
-        if len(enterprise_ids) > 50:
-            raise PlatformBadRequest("企业范围不能超过 50 家")
-        selected_ids = []
-        for enterprise_id in enterprise_ids:
-            normalized_id = _validate_uuid_text(enterprise_id, field="企业 ID")
-            if normalized_id in selected_ids:
-                raise PlatformBadRequest("企业范围不能包含重复项")
-            selected_ids.append(normalized_id)
-
-        enterprises = list(
-            (
-                await db.execute(
-                    select(PlatformEnterprise).where(PlatformEnterprise.Id.in_(selected_ids))
-                )
-            ).scalars().all()
-        )
-        enterprise_by_id = {str(item.Id): item for item in enterprises}
-        if len(enterprise_by_id) != len(selected_ids):
-            raise PlatformBadRequest("企业不存在")
-        if any(item.Status != EnterpriseStatus.ACTIVE for item in enterprises):
-            raise PlatformBadRequest("不能绑定已停用企业")
-
-    current_active_ids = {
-        str(item.EnterpriseId) for item in memberships if item.Active
-    }
-    effective_ids = set(selected_ids) if selected_ids is not None else current_active_ids
-    if target_role == PlatformRole.CUSTOMER and not effective_ids:
-        raise PlatformBadRequest("客户账号必须绑定至少一家企业")
+    selected_id: str | None | object = _UNSET
+    if enterprise_id is not _UNSET:
+        if enterprise_id in (None, ""):
+            selected_id = None  # unbind
+        else:
+            selected_id = _validate_uuid_text(enterprise_id, field="企业 ID")
+            enterprise = await db.get(PlatformEnterprise, selected_id)
+            if enterprise is None:
+                raise PlatformBadRequest("企业不存在")
+            if enterprise.Status != EnterpriseStatus.ACTIVE:
+                raise PlatformBadRequest("不能绑定已停用企业")
 
     user.Role = target_role
     account.Role = AccountRole.ADMIN if target_role == PlatformRole.ADMIN else AccountRole.NORMAL
     db.add(user)
     db.add(account)
 
-    existing_ids: set[str] = set()
-    for membership in memberships:
-        membership_id = str(membership.EnterpriseId)
-        existing_ids.add(membership_id)
-        if selected_ids is not None:
-            membership.Active = membership_id in effective_ids
-        if membership.Active:
-            membership.MembershipRole = target_role
-        db.add(membership)
-
-    if selected_ids is not None:
-        for enterprise_id in selected_ids:
-            if enterprise_id not in existing_ids:
-                db.add(
-                    PlatformMembership(
-                        UserId=user.Id,
-                        EnterpriseId=enterprise_id,
-                        MembershipRole=target_role,
-                        Active=True,
-                    )
-                )
+    if selected_id is _UNSET:
+        # Only the role changed; keep the single active membership in sync.
+        for membership in memberships:
+            if membership.Active:
+                membership.MembershipRole = target_role
+                db.add(membership)
+        active = [m for m in memberships if m.Active]
+    else:
+        # Enforce a single (or zero) active membership.
+        active = []
+        matched = False
+        for membership in memberships:
+            if selected_id is not None and str(membership.EnterpriseId) == selected_id:
+                membership.Active = True
+                membership.MembershipRole = target_role
+                matched = True
+                active.append(membership)
+            else:
+                membership.Active = False
+            db.add(membership)
+        if selected_id is not None and not matched:
+            created = PlatformMembership(
+                UserId=user.Id, EnterpriseId=selected_id, MembershipRole=target_role, Active=True,
+            )
+            db.add(created)
+            active.append(created)
 
     await revoke_account_execution_contexts(db, str(account.Id))
     await db.flush()
-    return user, [item for item in memberships if item.Active]
+    return user, active
 
 
 _USCC_PATTERN = re.compile(r"[0-9A-HJ-NPQRTUWXY]{18}")
-_UNSET = object()
 
 
 def _validate_uscc(value: str) -> str:
