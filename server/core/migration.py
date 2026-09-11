@@ -20,6 +20,8 @@ from model.agent import AgentConfig
 from model.base import Base
 from model.chat import ChatConversation, ChatRecord, SharedConversation
 from model.platform import (
+    PlatformAdpApp,
+    AdpAppStatus,
     PlatformAuditEvent,
     PlatformAuthSession,
     PlatformChannelCredential,
@@ -77,7 +79,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 15
+    CURRENT_PLATFORM_SCHEMA_VERSION = 16
     REVISIONS = (
         MigrationRevision(
             1,
@@ -177,6 +179,11 @@ class Migration:
             "platform_enterprise_contact_schema",
             (),
         ),
+        MigrationRevision(
+            16,
+            "platform_adp_app_schema",
+            (PlatformAdpApp.__tablename__,),
+        ),
     )
 
     @classmethod
@@ -207,6 +214,7 @@ class Migration:
             PlatformDeliveryTask,
             PlatformSharedResult,
             PlatformChannelCursor,
+            PlatformAdpApp,
             PlatformConfigVersion,
             PlatformToolDefinition,
             PlatformExecutionContext,
@@ -553,6 +561,45 @@ class Migration:
         )
 
     @classmethod
+    async def _apply_revision_16(cls, db: AsyncSession) -> None:
+        """Add the configurable ADP-app registry and bind enterprises to it.
+
+        ``platform_adp_app`` is created from metadata by the revision's table
+        list; here we add the enterprise -> app column (nullable = use default),
+        its FK (added by ALTER so a fresh create of platform_enterprise does not
+        depend on platform_adp_app existing first), and a partial unique index so
+        at most one active row is the default.
+        """
+        enterprise_table = PlatformEnterprise.__tablename__
+        adp_table = PlatformAdpApp.__tablename__
+        await db.execute(
+            text(f'ALTER TABLE "{enterprise_table}" ADD COLUMN IF NOT EXISTS "AdpAppId" UUID')
+        )
+        await db.execute(
+            text(
+                f'CREATE INDEX IF NOT EXISTS "ix_{enterprise_table}_AdpAppId" '
+                f'ON "{enterprise_table}" ("AdpAppId")'
+            )
+        )
+        # Add the FK only if it is not already present (idempotent on re-run).
+        await db.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_platform_enterprise_adp_app') THEN "
+                f'ALTER TABLE "{enterprise_table}" ADD CONSTRAINT "fk_platform_enterprise_adp_app" '
+                f'FOREIGN KEY ("AdpAppId") REFERENCES "{adp_table}" ("Id") ON DELETE SET NULL; '
+                "END IF; END $$;"
+            )
+        )
+        await db.execute(
+            text(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_platform_adp_app_default" '
+                f'ON "{adp_table}" ("IsDefault") '
+                f"WHERE \"IsDefault\" = true AND \"Status\" = '{str(AdpAppStatus.ACTIVE)}'"
+            )
+        )
+
+    @classmethod
     async def _drop_revision_tables(
         cls,
         db: AsyncSession,
@@ -621,6 +668,8 @@ class Migration:
                     await cls._apply_revision_12(db)
                 elif revision.version == 15:
                     await cls._apply_revision_15(db)
+                elif revision.version == 16:
+                    await cls._apply_revision_16(db)
                 record = records.get(revision.version)
                 if record is None:
                     record = PlatformMigration(

@@ -438,7 +438,10 @@
   - 验证：`test/integration/test_admin_conversations_postgres.py`(3) 覆盖跨企业列出/分页/`platform.manage` 拒绝 + 详情按 id 读；后端 `337 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
   - 未完成：生产部署（无 schema 变更，app-only）。
 - [ ] `M4-ADP-CFG-01` ADP 应用配置化 + 多应用（按企业绑定、凭据 DB 加密、Admin 可编辑）。
-  - 状态：`TODO`（见计划 Phase C）。迁移 **revision 16**（`platform_adp_app` 表 + `PlatformEnterprise.AdpAppId`）；`resolve_provider_for_enterprise` 替换单例 provider；复用 `channel_credentials` Fernet 加密。
+  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署；真实 ADP 应用联调待录入）。
+  - 已完成：新表 `PlatformAdpApp`（AppKey 等经 Fernet 加密存 Ciphertext + 非密字段明文，`IsDefault` 部分唯一索引保证至多一个活跃默认）+ `PlatformEnterprise.AdpAppId` FK（ON DELETE SET NULL），迁移 **revision 16**（新表 + ALTER 加列 + FK + 部分唯一索引，混合式；fresh 0→16 与增量均验证）；`channel_credentials` 抽 `decrypt_ciphertext` 供复用；`integrations/adp/registry.resolve_provider_for_enterprise`（企业绑定→默认→`.env` 回退三级，按 ApplicationId+UpdatedAt 缓存 provider，编辑即失效）替换单例——接入 `platform_worker`（每回合按企业解析）与 `wecom_bot/gateway`（回合内解析）；`core/adp_app.py` CRUD（create/update/list/delete，设默认互斥、停用清默认、rotate AppKey）；router `AdminAdpAppList/DetailApi`（`platform.manage`，序列化不吐密钥、只给指纹末 8 位，写审计，改动清 provider 缓存）+ 企业 create/update 接受 `adpAppId`。前端「ADP 应用配置」页改为应用注册表（列表 + 新建/编辑/设默认/停用/删除 + .env 回退信息卡），企业表单加「ADP 应用」下拉（空=平台默认）。OpenAPI 加 4 路径 + `AdpApp`/`Create`/`Update` schema + 企业 schema 补 `adpAppId`（51 ops）并重生成类型。
+  - 验证：迁移 16 fresh + 增量 up 通过（表/列/FK/索引存在）；`test/integration/test_adp_app_registry_postgres.py`(5) 覆盖加密往返/序列化不含密钥/三级解析/缓存按 UpdatedAt 失效/默认互斥/停用清默认/重复 ApplicationId 拒绝；后端 `342 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
+  - 未完成：生产部署（迁移 16）；录入真实 ADP 应用后按企业路由的真机验收（沿用现有渠道联调路径）。
 
 ## 每个 TODO 的完成标准
 

@@ -457,7 +457,14 @@ async def process_platform_inbound_task(
             permissions=permissions_for_role(user.Role),
         )
         require_permission(context, "shipment.read")
-        provider = _resolve_agent_provider(agent_provider, adapter)
+        # Resolve the ADP application for this enterprise (DB registry, with the
+        # .env single provider as fallback when no DB app applies).
+        from integrations.adp.registry import resolve_provider_for_enterprise
+
+        resolved_provider = await resolve_provider_for_enterprise(
+            db, enterprise, fallback=lambda: agent_provider
+        )
+        provider = _resolve_agent_provider(resolved_provider, adapter)
 
         query = (inbound.Text or "").strip()
         conversation = None

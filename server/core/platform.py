@@ -621,6 +621,7 @@ async def update_platform_user_access(
 
 
 _USCC_PATTERN = re.compile(r"[0-9A-HJ-NPQRTUWXY]{18}")
+_UNSET = object()
 
 
 def _validate_uscc(value: str) -> str:
@@ -660,6 +661,7 @@ async def create_enterprise(
     unified_social_credit_code: str,
     contact_person: Any = None,
     contact_phone: Any = None,
+    adp_app_id: Any = None,
 ) -> PlatformEnterprise:
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 255:
         raise PlatformBadRequest("企业名称不能为空")
@@ -670,6 +672,7 @@ async def create_enterprise(
     uscc = _validate_uscc(unified_social_credit_code)
     person = _optional_contact(contact_person, field="企业联系人", max_length=128)
     phone = _optional_contact(contact_phone, field="联系电话", max_length=32)
+    adp_app = _validate_uuid_text(adp_app_id, field="ADP 应用") if adp_app_id not in (None, "") else None
     duplicate = (
         await db.execute(
             select(PlatformEnterprise).where(PlatformEnterprise.CustomerCode == customer_code.strip())
@@ -684,6 +687,7 @@ async def create_enterprise(
         UnifiedSocialCreditCode=uscc,
         ContactPerson=person,
         ContactPhone=phone,
+        AdpAppId=adp_app,
     )
     db.add(enterprise)
     await db.flush()
@@ -698,6 +702,7 @@ async def update_enterprise(
     unified_social_credit_code: Any = None,
     contact_person: Any = None,
     contact_phone: Any = None,
+    adp_app_id: Any = _UNSET,
 ) -> PlatformEnterprise:
     """Update mutable enterprise fields. CustomerCode is immutable (M3 key)."""
     enterprise = await db.get(PlatformEnterprise, enterprise_id)
@@ -718,6 +723,9 @@ async def update_enterprise(
         enterprise.ContactPerson = _optional_contact(contact_person, field="企业联系人", max_length=128)
     if contact_phone is not None:
         enterprise.ContactPhone = _optional_contact(contact_phone, field="联系电话", max_length=32)
+    # adp_app_id: _UNSET = leave unchanged, "" / None = unbind (use default), uuid = bind.
+    if adp_app_id is not _UNSET:
+        enterprise.AdpAppId = _validate_uuid_text(adp_app_id, field="ADP 应用") if adp_app_id not in (None, "") else None
     await db.flush()
     return enterprise
 

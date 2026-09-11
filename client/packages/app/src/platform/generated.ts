@@ -76,6 +76,7 @@ export interface AdminEnterprise {
   unifiedSocialCreditCode?: string
   contactPerson?: string
   contactPhone?: string
+  adpAppId?: string
   status: 'active' | 'suspended'
 }
 
@@ -120,6 +121,19 @@ export interface AdminUserEnterprise {
   name: string
   customerCode: string
   status: 'active' | 'suspended'
+}
+
+export interface AdpApp {
+  id: string
+  name: string
+  applicationId: string
+  vendor: string
+  serviceVendor: string
+  agentId: string
+  status: 'active' | 'disabled'
+  isDefault: boolean
+  appKeyFingerprint: string
+  updatedAt: string
 }
 
 export interface AdpConfigStatus {
@@ -180,6 +194,17 @@ export interface ChannelIdentity {
 
 export type ChannelIdentityStatus = 'pending' | 'active' | 'revoked' | 'expired'
 
+export interface CreateAdpAppRequest {
+  name: string
+  applicationId: string
+  appKey: string
+  vendor?: string
+  serviceVendor?: string
+  agentId?: string
+  privateUrl?: string
+  isDefault?: boolean
+}
+
 export interface CreateChannelCredentialRequest {
   channel: string
   channelInstanceId: string
@@ -192,6 +217,7 @@ export interface CreateEnterpriseRequest {
   unifiedSocialCreditCode: string
   contactPerson?: string
   contactPhone?: string
+  adpAppId?: string
 }
 
 export interface CreatePlatformUserRequest {
@@ -424,11 +450,23 @@ export interface SuccessResponse {
   success: boolean
 }
 
+export interface UpdateAdpAppRequest {
+  name?: string
+  appKey?: string
+  vendor?: string
+  serviceVendor?: string
+  agentId?: string
+  privateUrl?: string
+  status?: 'active' | 'disabled'
+  isDefault?: boolean
+}
+
 export interface UpdateEnterpriseRequest {
   name?: string
   unifiedSocialCreditCode?: string
   contactPerson?: string
   contactPhone?: string
+  adpAppId?: string
 }
 
 export interface UpdatePlatformUserAccessRequest {
