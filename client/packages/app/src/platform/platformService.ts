@@ -445,19 +445,21 @@ export async function createPlatformUser(data: { name: string; phone: string; ro
 
 export async function updatePlatformUserAccess(
   userId: string,
-  data: { role: PlatformRole; enterpriseIds: string[] },
+  data: { role: PlatformRole; enterpriseId: string },
 ): Promise<{ user: AdminUser }> {
   if (useMock) {
     const user = mockUsers.find((item) => item.id === userId)
     if (!user) throw new Error('用户不存在')
-    if (data.role === 'customer' && data.enterpriseIds.length === 0) throw new Error('客户账号必须绑定至少一家企业')
-    if (new Set(data.enterpriseIds).size !== data.enterpriseIds.length) throw new Error('企业范围不能包含重复项')
-    const selected = data.enterpriseIds.map((id) => mockEnterprises.find((item) => item.id === id))
-    if (selected.some((item) => !item)) throw new Error('企业不存在')
-    if (selected.some((item) => item?.status !== 'active')) throw new Error('不能绑定已停用企业')
     user.role = data.role
     user.roleLabel = roleLabelFor(data.role)
-    user.enterprises = selected.filter((item): item is AdminEnterprise => Boolean(item)).map(cloneEnterprise)
+    if (data.enterpriseId) {
+      const enterprise = mockEnterprises.find((item) => item.id === data.enterpriseId)
+      if (!enterprise) throw new Error('企业不存在')
+      if (enterprise.status !== 'active') throw new Error('不能绑定已停用企业')
+      user.enterprises = [cloneEnterprise(enterprise)]
+    } else {
+      user.enterprises = []
+    }
     return { user: cloneAdminUser(user) }
   }
   return httpService.post<{ user: AdminUser }>(`/api/v1/admin/users/${encodeURIComponent(userId)}/access`, data)

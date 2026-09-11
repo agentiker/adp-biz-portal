@@ -224,7 +224,7 @@ export interface CreatePlatformUserRequest {
   name: string
   phone: string
   role: PlatformRole
-  enterpriseId?: string | null
+  enterpriseId: string
 }
 
 export interface EnterpriseScope {
@@ -471,7 +471,7 @@ export interface UpdateEnterpriseRequest {
 
 export interface UpdatePlatformUserAccessRequest {
   role?: PlatformRole
-  enterpriseIds?: Array<string>
+  enterpriseId?: string | '' | null
 }
 
 export interface UpsertBindingRequest {
