@@ -1,9 +1,0 @@
-{
-  "title": "Common Components",
-  "icon": "tools-line",
-  "pages": [
-    "file-list",
-    "option-card",
-    "record-icon"
-  ]
-}
