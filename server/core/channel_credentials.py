@@ -98,22 +98,33 @@ def encrypt_credential(value: Any) -> EncryptedCredential:
     return EncryptedCredential(ciphertext, key_version, fingerprint)
 
 
-def decrypt_credential(row: PlatformChannelCredential) -> str:
-    """Decrypt a row for an internal Worker or channel adapter only."""
+def decrypt_ciphertext(ciphertext: Any, key_version: Any, *, fingerprint: Any = None) -> str:
+    """Decrypt a Fernet ciphertext + optional fingerprint check (generic).
+
+    Shared by channel credentials and the ADP-app registry so encrypted secrets
+    are never coupled to a single table.
+    """
     _, keys = _keyring()
-    version = _validate_version(row.KeyVersion)
+    version = _validate_version(key_version)
     key = keys.get(version)
     if key is None:
         raise ChannelCredentialConfigurationError("channel credential key version is unavailable")
+    if not isinstance(ciphertext, str) or not ciphertext:
+        raise ChannelCredentialError("channel credential ciphertext is invalid")
     try:
-        secret = key.decrypt(row.Ciphertext.encode("ascii")).decode("utf-8")
+        secret = key.decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except (InvalidToken, UnicodeError, ValueError) as exc:
         raise ChannelCredentialError("channel credential could not be decrypted") from exc
     if not secret or len(secret) > MAX_CREDENTIAL_LENGTH:
         raise ChannelCredentialError("channel credential plaintext is invalid")
-    if hashlib.sha256(secret.encode("utf-8")).hexdigest() != row.Fingerprint:
+    if fingerprint is not None and hashlib.sha256(secret.encode("utf-8")).hexdigest() != fingerprint:
         raise ChannelCredentialError("channel credential fingerprint does not match")
     return secret
+
+
+def decrypt_credential(row: PlatformChannelCredential) -> str:
+    """Decrypt a row for an internal Worker or channel adapter only."""
+    return decrypt_ciphertext(row.Ciphertext, row.KeyVersion, fingerprint=row.Fingerprint)
 
 
 def serialize_credential(row: PlatformChannelCredential) -> dict[str, Any]:

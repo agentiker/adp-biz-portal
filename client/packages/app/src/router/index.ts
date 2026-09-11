@@ -43,6 +43,11 @@ const router = createRouter({
       component: () => import('@/pages/Admin.vue'),
     },
     {
+      path: '/admin/users',
+      name: 'admin-users',
+      component: () => import('@/pages/Admin.vue'),
+    },
+    {
       path: '/admin/bindings',
       name: 'admin-bindings',
       component: () => import('@/pages/Admin.vue'),
@@ -60,6 +65,11 @@ const router = createRouter({
     {
       path: '/admin/agents-tools',
       name: 'admin-agents-tools',
+      component: () => import('@/pages/Admin.vue'),
+    },
+    {
+      path: '/admin/conversations',
+      name: 'admin-conversations',
       component: () => import('@/pages/Admin.vue'),
     },
     {

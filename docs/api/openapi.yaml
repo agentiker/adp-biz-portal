@@ -641,6 +641,112 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/enterprises/{enterprise_id}:
+    post:
+      tags: [Administration]
+      operationId: updateEnterprise
+      summary: Update a platform enterprise
+      parameters:
+        - name: enterprise_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEnterpriseRequest'
+      responses:
+        '200':
+          description: Updated enterprise
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminEnterprise' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/admin/adp-apps:
+    get:
+      tags: [Administration]
+      operationId: listAdpApps
+      summary: List configurable ADP applications
+      responses:
+        '200':
+          description: ADP application registry
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdpApp' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Administration]
+      operationId: createAdpApp
+      summary: Create an ADP application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAdpAppRequest' }
+      responses:
+        '201':
+          description: Created ADP application
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdpApp' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/adp-apps/{adp_app_id}:
+    post:
+      tags: [Administration]
+      operationId: updateAdpApp
+      summary: Update an ADP application (rotate key / set default / disable)
+      parameters:
+        - name: adp_app_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAdpAppRequest' }
+      responses:
+        '200':
+          description: Updated ADP application
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdpApp' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Administration]
+      operationId: deleteAdpApp
+      summary: Delete an ADP application
+      parameters:
+        - name: adp_app_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/admin/users:
     get:
       tags: [Administration]
@@ -738,6 +844,19 @@ paths:
       tags: [Administration]
       operationId: listAuditEvents
       summary: List recent platform audit events
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+        - name: action
+          in: query
+          required: false
+          schema: { type: string }
+        - name: outcome
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         '200':
           description: Most recent audit events
@@ -748,6 +867,51 @@ paths:
                 items: { $ref: '#/components/schemas/AdminAuditEvent' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/conversations:
+    get:
+      tags: [Administration]
+      operationId: listAdminConversations
+      summary: List conversations across enterprises (admin)
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: enterpriseId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Paginated conversation directory
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConversationList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/conversations/{conversation_id}:
+    get:
+      tags: [Administration]
+      operationId: getAdminConversation
+      summary: Read one conversation with runs/evidence (admin)
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Conversation detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminConversationDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/admin/channel-identities:
     get:
       tags: [Administration]
@@ -1232,6 +1396,40 @@ components:
           oneOf:
             - { $ref: '#/components/schemas/ShipmentResult' }
             - { type: 'null' }
+    AdminConversationSummary:
+      allOf:
+        - { $ref: '#/components/schemas/PortalSession' }
+        - type: object
+          properties:
+            enterpriseId: { type: string, nullable: true }
+            enterpriseName: { type: string, nullable: true }
+            accountId: { type: string, nullable: true }
+            accountName: { type: string, nullable: true }
+    AdminConversationList:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminConversationSummary' }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    AdminConversationDetail:
+      type: object
+      required: [conversation, messages, runs, result]
+      properties:
+        conversation: { $ref: '#/components/schemas/AdminConversationSummary' }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/PortalMessage' }
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/PortalExecutionRun' }
+        result:
+          oneOf:
+            - { $ref: '#/components/schemas/ShipmentResult' }
+            - { type: 'null' }
     ShipmentLookupRequest:
       type: object
       required: [query]
@@ -1492,7 +1690,48 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         customerCode: { type: string }
+        unifiedSocialCreditCode: { type: string, nullable: true }
+        contactPerson: { type: string, nullable: true }
+        contactPhone: { type: string, nullable: true }
+        adpAppId: { type: string, nullable: true }
         status: { type: string, enum: [active, suspended] }
+    AdpApp:
+      type: object
+      required: [id, name, applicationId, vendor, serviceVendor, agentId, status, isDefault, appKeyFingerprint, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        applicationId: { type: string }
+        vendor: { type: string }
+        serviceVendor: { type: string }
+        agentId: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        isDefault: { type: boolean }
+        appKeyFingerprint: { type: string }
+        updatedAt: { type: string }
+    CreateAdpAppRequest:
+      type: object
+      required: [name, applicationId, appKey]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        applicationId: { type: string, minLength: 2, maxLength: 64 }
+        appKey: { type: string, minLength: 1 }
+        vendor: { type: string, nullable: true }
+        serviceVendor: { type: string, nullable: true }
+        agentId: { type: string, nullable: true }
+        privateUrl: { type: string, nullable: true }
+        isDefault: { type: boolean }
+    UpdateAdpAppRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        appKey: { type: string }
+        vendor: { type: string }
+        serviceVendor: { type: string }
+        agentId: { type: string }
+        privateUrl: { type: string, nullable: true }
+        status: { type: string, enum: [active, disabled] }
+        isDefault: { type: boolean }
     AdminUserEnterprise:
       type: object
       required: [id, name, customerCode, status]
@@ -1641,29 +1880,40 @@ components:
         credential: { $ref: '#/components/schemas/ChannelCredentialValue' }
     CreateEnterpriseRequest:
       type: object
-      required: [name, customerCode]
+      required: [name, customerCode, unifiedSocialCreditCode]
       properties:
         name: { type: string, minLength: 1, maxLength: 255 }
         customerCode: { type: string, minLength: 1, maxLength: 128 }
+        unifiedSocialCreditCode: { type: string, minLength: 18, maxLength: 18 }
+        contactPerson: { type: string, maxLength: 128, nullable: true }
+        contactPhone: { type: string, maxLength: 32, nullable: true }
+        adpAppId: { type: string, nullable: true }
+    UpdateEnterpriseRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        unifiedSocialCreditCode: { type: string, minLength: 18, maxLength: 18 }
+        contactPerson: { type: string, maxLength: 128, nullable: true }
+        contactPhone: { type: string, maxLength: 32, nullable: true }
+        adpAppId: { type: string, nullable: true }
     CreatePlatformUserRequest:
       type: object
-      required: [name, phone, role]
+      required: [name, phone, role, enterpriseId]
       properties:
         name: { type: string, minLength: 1, maxLength: 255 }
         phone: { type: string, minLength: 1, maxLength: 32 }
         role: { $ref: '#/components/schemas/PlatformRole' }
-        enterpriseId:
-          oneOf:
-            - { type: string, format: uuid }
-            - { type: 'null' }
+        enterpriseId: { type: string, format: uuid }
     UpdatePlatformUserAccessRequest:
       type: object
       minProperties: 1
       properties:
         role: { $ref: '#/components/schemas/PlatformRole' }
-        enterpriseIds:
-          type: array
-          items: { type: string, format: uuid }
+        enterpriseId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: string, enum: [''] }
+            - { type: 'null' }
     UpsertBindingRequest:
       type: object
       required: [applicationId, upstreamAppId, enterpriseId, workspaceId, externalAccountId]
