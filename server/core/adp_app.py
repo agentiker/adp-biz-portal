@@ -7,13 +7,14 @@ back to the Admin UI. At most one active app may be the platform default.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.channel_credentials import encrypt_credential
+from core.channel_credentials import decrypt_ciphertext, encrypt_credential
 from core.error.platform import PlatformBadRequest, PlatformNotFound
 from model.platform import AdpAppStatus, PlatformAdpApp
 
@@ -63,8 +64,19 @@ def _optional_text(value: Any, *, field: str, max_length: int, default: str | No
     return trimmed
 
 
-def _encrypt_secret(app_key: str, private_url: str | None):
-    payload: dict[str, str] = {"AppKey": app_key}
+def _require_secret(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise PlatformBadRequest(f"{field} 不能为空")
+    return value.strip()
+
+
+def _encrypt_secret(*, app_key: str, secret_id: str, secret_key: str, secret_app_id: str, private_url: str | None):
+    payload: dict[str, str] = {
+        "AppKey": app_key,
+        "SecretId": secret_id,
+        "SecretKey": secret_key,
+        "SecretAppId": secret_app_id,
+    }
     if private_url:
         payload["PrivateUrl"] = private_url
     return encrypt_credential(payload)
@@ -92,6 +104,9 @@ async def create_adp_app(
     name: str,
     application_id: str,
     app_key: str,
+    secret_id: str,
+    secret_key: str,
+    secret_app_id: str,
     vendor: Any = None,
     service_vendor: Any = None,
     agent_id: Any = None,
@@ -100,14 +115,20 @@ async def create_adp_app(
 ) -> PlatformAdpApp:
     name = _validate_name(name)
     application_id = _validate_application_id(application_id)
-    if not isinstance(app_key, str) or not app_key.strip():
-        raise PlatformBadRequest("AppKey 不能为空")
+    app_key = _require_secret(app_key, field="AppKey")
+    secret_id = _require_secret(secret_id, field="TC_SECRET_ID")
+    secret_key = _require_secret(secret_key, field="TC_SECRET_KEY")
+    secret_app_id = _require_secret(secret_app_id, field="TC_SECRET_APPID")
     duplicate = (await db.execute(
         select(PlatformAdpApp).where(PlatformAdpApp.ApplicationId == application_id)
     )).scalar_one_or_none()
     if duplicate is not None:
         raise PlatformBadRequest("ApplicationId 已存在")
-    encrypted = _encrypt_secret(app_key.strip(), _optional_text(private_url, field="PrivateUrl", max_length=512))
+    encrypted = _encrypt_secret(
+        app_key=app_key, secret_id=secret_id, secret_key=secret_key,
+        secret_app_id=secret_app_id,
+        private_url=_optional_text(private_url, field="PrivateUrl", max_length=512),
+    )
     if is_default:
         await _clear_other_defaults(db, keep_id=None)
     app = PlatformAdpApp(
@@ -134,6 +155,9 @@ async def update_adp_app(
     adp_app_id: str,
     name: Any = None,
     app_key: Any = None,
+    secret_id: Any = None,
+    secret_key: Any = None,
+    secret_app_id: Any = None,
     vendor: Any = None,
     service_vendor: Any = None,
     agent_id: Any = None,
@@ -152,9 +176,25 @@ async def update_adp_app(
         app.ServiceVendor = _optional_text(service_vendor, field="ServiceVendor", max_length=32, default="ChinaTencentCloud")
     if agent_id is not None:
         app.AgentId = _optional_text(agent_id, field="AgentId", max_length=128, default="platform-default")
-    if isinstance(app_key, str) and app_key.strip():
-        # Rotate the secret; private_url (if provided) rides along.
-        encrypted = _encrypt_secret(app_key.strip(), _optional_text(private_url, field="PrivateUrl", max_length=512))
+    # Rotate secrets: any provided field is merged over the current decrypted
+    # payload, so the operator can update just one credential at a time.
+    rotate = {
+        key: value
+        for key, value in {
+            "AppKey": app_key, "SecretId": secret_id,
+            "SecretKey": secret_key, "SecretAppId": secret_app_id,
+            "PrivateUrl": private_url,
+        }.items()
+        if isinstance(value, str) and value.strip()
+    }
+    if rotate:
+        current = json.loads(decrypt_ciphertext(app.Ciphertext, app.KeyVersion, fingerprint=app.Fingerprint))
+        merged = {**current, **{k: v.strip() for k, v in rotate.items()}}
+        encrypted = _encrypt_secret(
+            app_key=merged["AppKey"], secret_id=merged["SecretId"],
+            secret_key=merged["SecretKey"], secret_app_id=merged["SecretAppId"],
+            private_url=merged.get("PrivateUrl"),
+        )
         app.Ciphertext = encrypted.ciphertext
         app.KeyVersion = encrypted.key_version
         app.Fingerprint = encrypted.fingerprint
