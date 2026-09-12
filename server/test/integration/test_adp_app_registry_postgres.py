@@ -12,9 +12,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.adp_app import create_adp_app, delete_adp_app, list_adp_apps, serialize_adp_app, update_adp_app
+from core.adp_app import create_adp_app as _create_adp_app, delete_adp_app, list_adp_apps, serialize_adp_app, update_adp_app
 from core.error.platform import PlatformBadRequest
 from model.platform import AdpAppStatus, PlatformAdpApp
+
+
+async def create_adp_app(db, **kwargs):
+    """Fill the required TC credentials so each test only states what it cares about."""
+    kwargs.setdefault("secret_id", "AKID-test-secret-id")
+    kwargs.setdefault("secret_key", "test-secret-key")
+    kwargs.setdefault("secret_app_id", "1250000000")
+    return await _create_adp_app(db, **kwargs)
 
 
 def _database_url() -> str:
@@ -140,3 +148,52 @@ async def test_duplicate_application_id_rejected(adp_sessionmaker):
         await db.commit()
         with pytest.raises(PlatformBadRequest):
             await create_adp_app(db, name="B", application_id="DUP", app_key="k", vendor="test-vendor")
+
+
+@pytest.mark.asyncio
+async def test_all_tc_secrets_required_on_create(adp_sessionmaker):
+    async with adp_sessionmaker() as db:
+        with pytest.raises(PlatformBadRequest, match="TC_SECRET_ID"):
+            await _create_adp_app(
+                db, name="A", application_id="APP-NO-SID", app_key="k",
+                secret_id="", secret_key="skey", secret_app_id="sappid", vendor="test-vendor",
+            )
+
+
+@pytest.mark.asyncio
+async def test_per_app_secrets_reach_vendor_config(adp_sessionmaker):
+    from integrations.adp import registry
+    async with adp_sessionmaker() as db:
+        app = await create_adp_app(
+            db, name="Secrets", application_id="APP-SEC", app_key="k",
+            secret_id="AKID-per-app", secret_key="per-app-key", secret_app_id="9988",
+            vendor="test-vendor",
+        )
+        await db.commit()
+        prov = await registry.resolve_provider_for_enterprise(
+            db, SimpleNamespace(AdpAppId=app.Id), fallback=_fallback_provider
+        )
+        assert prov.vendor.config["SecretId"] == "AKID-per-app"
+        assert prov.vendor.config["SecretKey"] == "per-app-key"
+        assert prov.vendor.config["SecretAppId"] == "9988"
+
+
+@pytest.mark.asyncio
+async def test_partial_secret_rotation_keeps_other_fields(adp_sessionmaker):
+    from integrations.adp import registry
+    async with adp_sessionmaker() as db:
+        app = await create_adp_app(
+            db, name="Rotate", application_id="APP-ROT", app_key="k",
+            secret_id="sid-orig", secret_key="skey-orig", secret_app_id="appid-orig",
+            vendor="test-vendor",
+        )
+        await db.commit()
+        # Rotate only the secret_key; the others must survive.
+        await update_adp_app(db, adp_app_id=str(app.Id), secret_key="skey-new")
+        await db.commit()
+        prov = await registry.resolve_provider_for_enterprise(
+            db, SimpleNamespace(AdpAppId=app.Id), fallback=_fallback_provider
+        )
+        assert prov.vendor.config["SecretKey"] == "skey-new"
+        assert prov.vendor.config["SecretId"] == "sid-orig"
+        assert prov.vendor.config["SecretAppId"] == "appid-orig"

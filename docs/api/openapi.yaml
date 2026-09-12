@@ -1711,11 +1711,14 @@ components:
         updatedAt: { type: string }
     CreateAdpAppRequest:
       type: object
-      required: [name, applicationId, appKey]
+      required: [name, applicationId, appKey, tcSecretAppId, tcSecretId, tcSecretKey]
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         applicationId: { type: string, minLength: 2, maxLength: 64 }
         appKey: { type: string, minLength: 1 }
+        tcSecretAppId: { type: string, minLength: 1 }
+        tcSecretId: { type: string, minLength: 1 }
+        tcSecretKey: { type: string, minLength: 1 }
         vendor: { type: string, nullable: true }
         serviceVendor: { type: string, nullable: true }
         agentId: { type: string, nullable: true }
@@ -1726,6 +1729,9 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         appKey: { type: string }
+        tcSecretAppId: { type: string }
+        tcSecretId: { type: string }
+        tcSecretKey: { type: string }
         vendor: { type: string }
         serviceVendor: { type: string }
         agentId: { type: string }
