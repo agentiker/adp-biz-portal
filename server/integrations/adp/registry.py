@@ -72,6 +72,16 @@ def _build_provider(app: PlatformAdpApp) -> AgentProvider:
         "AppKey": str(payload["AppKey"]).strip(),
         "ServiceVendor": app.ServiceVendor,
     }
+    # Per-app Tencent Cloud credentials override the global .env values so each
+    # ADP application signs its own API calls (see vendor tc_config injection).
+    for payload_key, config_key in (
+        ("SecretId", "SecretId"),
+        ("SecretKey", "SecretKey"),
+        ("SecretAppId", "SecretAppId"),
+    ):
+        value = str(payload.get(payload_key) or "").strip()
+        if value:
+            config[config_key] = value
     private_url = str(payload.get("PrivateUrl") or "").strip()
     if private_url:
         config["PrivateUrl"] = private_url

@@ -1619,6 +1619,19 @@ class TCADP(BaseVendor):
                 config['secret_id'] = adp_secret_id
                 config['secret_key'] = adp_secret_key
 
+        # 平台按应用注入的腾讯云密钥：优先级高于全局 .env，让每个 ADP 应用用
+        # 自己的凭据签名 API 调用（tc_request_prepare 读取 config['secret_id'] /
+        # ['secret_key']，并回退到全局；asr 等按 appid 使用）。
+        per_app_secret_id = str(self.config.get('SecretId') or '').strip()
+        per_app_secret_key = str(self.config.get('SecretKey') or '').strip()
+        per_app_appid = str(self.config.get('SecretAppId') or '').strip()
+        if per_app_secret_id:
+            config['secret_id'] = per_app_secret_id
+        if per_app_secret_key:
+            config['secret_key'] = per_app_secret_key
+        if per_app_appid:
+            config['appid'] = per_app_appid
+
         # 自定义 URL 覆盖：只要配了就直接覆盖，不需要额外开关
         if self.config.get('CustomLkeUrl') and 'lke' in config:
             config['lke']['url'] = self.config['CustomLkeUrl']

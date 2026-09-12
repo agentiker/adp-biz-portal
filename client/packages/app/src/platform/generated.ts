@@ -198,6 +198,9 @@ export interface CreateAdpAppRequest {
   name: string
   applicationId: string
   appKey: string
+  tcSecretAppId: string
+  tcSecretId: string
+  tcSecretKey: string
   vendor?: string
   serviceVendor?: string
   agentId?: string
@@ -453,6 +456,9 @@ export interface SuccessResponse {
 export interface UpdateAdpAppRequest {
   name?: string
   appKey?: string
+  tcSecretAppId?: string
+  tcSecretId?: string
+  tcSecretKey?: string
   vendor?: string
   serviceVendor?: string
   agentId?: string
