@@ -1,6 +1,6 @@
 {
   "project": {
-    "projectName": "Tencent Cloud ADP Chat Client"
+    "projectName": "ADP 业务统一网关"
   },
   "header": {
     "codeRepository": "代码仓库",
@@ -23,7 +23,7 @@
     "inputPassword": "请输入密码",
     "defaultName": "游客",
     "welcome": "欢迎登录",
-    "systemName": "ADP Chat Client"
+    "systemName": "ADP 业务统一网关"
   },
   "operation": {
     "search": "搜索",
