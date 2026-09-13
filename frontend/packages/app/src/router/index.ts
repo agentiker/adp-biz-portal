@@ -15,72 +15,72 @@ const router = createRouter({
     {
       path: '/portal/lookup',
       name: 'portal-lookup',
-      component: () => import('@/pages/Portal.vue'),
+      component: () => import('@/pages/portal/Portal.vue'),
     },
     {
       path: '/portal/sessions',
       name: 'portal-sessions',
-      component: () => import('@/pages/Portal.vue'),
+      component: () => import('@/pages/portal/Portal.vue'),
     },
     {
       path: '/portal/settings',
       name: 'portal-settings',
-      component: () => import('@/pages/Portal.vue'),
+      component: () => import('@/pages/portal/Portal.vue'),
     },
     {
       path: '/portal/:section(lookup|sessions|settings)?',
       name: 'portal',
-      component: () => import('@/pages/Portal.vue'),
+      component: () => import('@/pages/portal/Portal.vue'),
     },
     {
       path: '/admin',
       name: 'admin',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/enterprises',
       name: 'admin-enterprises',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/users',
       name: 'admin-users',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/bindings',
       name: 'admin-bindings',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/channels',
       name: 'admin-channels',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/adp-chat/:applicationId?/:conversationId?',
       name: 'admin-adp-chat',
-      component: () => import('@/pages/AdminAdpChat.vue'),
+      component: () => import('@/pages/admin/AdminAdpChat.vue'),
     },
     {
       path: '/admin/agents-tools',
       name: 'admin-agents-tools',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/conversations',
       name: 'admin-conversations',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/admin/audit',
       name: 'admin-audit',
-      component: () => import('@/pages/Admin.vue'),
+      component: () => import('@/pages/admin/Admin.vue'),
     },
     {
       path: '/login',
       name: 'login',
-      component: () => import('@/pages/Login.vue'),
+      component: () => import('@/pages/auth/Login.vue'),
     },
     {
       // 免登录只读分享结果页：微信服务号图文卡片点开的目标页，保留公开可访问。
@@ -90,7 +90,7 @@ const router = createRouter({
       meta: {
         unauthorized: true,
       },
-      component: () => import('@/pages/SharedResult.vue'),
+      component: () => import('@/pages/public/SharedResult.vue'),
     },
     {
       // 旧 ADP 控制台聊天页（Home）与旧公开分享页（Share）已下线，平台只保留
