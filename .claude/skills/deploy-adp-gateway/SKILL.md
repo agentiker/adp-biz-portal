@@ -42,10 +42,19 @@ dev-instance manager `script/deploy.sh` and `make dev` are unrelated.
   processes instead of starting them broken.
 - DB: database `adp_chat`, user `adp_chat` (both from `.env`). Image arch is
   `amd64` — build with `--platform linux/amd64`.
-- Image tag in use: `adp-chat-client:local` (compose reads `APP_IMAGE`, default
-  `adp-chat-client:local`).
+- Image tag in use: `adp-business-gateway:local` (compose reads `APP_IMAGE`, default
+  `adp-business-gateway:local`).
+  - RENAME CUTOVER: the project was rebranded from `adp-chat-client` to
+    `adp-business-gateway` (compose project name, image name, DB advisory-lock
+    key). Until the one-time cutover has run on prod, the live server may still
+    have `APP_IMAGE=adp-chat-client:local` in its `.env` and a compose project
+    named `adp-chat-client`. Perform the cutover per the "项目重命名割接"
+    section in `docs/operations/release-and-rollback.md` (pg_dump backup, pin
+    the postgres volume to its old name, update server `.env` APP_IMAGE, re-`up`
+    under the new project name, restart reverse-proxy). The postgres volume is
+    pinned to `adp-chat-client_platform-postgres` in compose so no data moves.
 - Backups live in `/root/adp-backups/`. Rollback tags accumulate as
-  `adp-chat-client:rollback-<prevrev>`.
+  `adp-business-gateway:rollback-<prevrev>`.
 
 ## Preflight (before touching prod, from the repo root, all read-only)
 
@@ -72,7 +81,7 @@ Then assemble and build the image:
 ```bash
 make build_server
 rsync -aL --exclude='__pycache__' --exclude='.*' build/server/ build/docker/server/
-cd build && docker build --platform linux/amd64 --load -t adp-chat-client:<newtag> -f ../docker/Dockerfile . && cd -
+cd build && docker build --platform linux/amd64 --load -t adp-business-gateway:<newtag> -f ../docker/Dockerfile . && cd -
 ```
 
 **Docker Hub is flaky from here.** If `docker build` fails on
@@ -81,8 +90,8 @@ changed this round** (only source/stdlib), overlay onto the last good image
 instead of contacting the registry:
 
 ```bash
-printf 'FROM adp-chat-client:<lastgoodtag>\nCOPY docker/server /app\n' > build/Dockerfile.overlay
-docker build --platform linux/amd64 --load -t adp-chat-client:<newtag> -f build/Dockerfile.overlay build
+printf 'FROM adp-business-gateway:<lastgoodtag>\nCOPY docker/server /app\n' > build/Dockerfile.overlay
+docker build --platform linux/amd64 --load -t adp-business-gateway:<newtag> -f build/Dockerfile.overlay build
 ```
 
 Only valid when `uv.lock`/deps are unchanged — the overlay skips `uv sync`.
@@ -91,14 +100,14 @@ Verify the image actually contains the change before shipping (cheap, catches a
 stale build):
 
 ```bash
-docker run --rm --platform linux/amd64 --entrypoint sh adp-chat-client:<newtag> -c \
+docker run --rm --platform linux/amd64 --entrypoint sh adp-business-gateway:<newtag> -c \
   'grep -o "CURRENT_PLATFORM_SCHEMA_VERSION = [0-9]*" core/migration.py; python -c "import core.platform_worker; print(\"imports ok\")"'
 ```
 
 ## Ship the image
 
 ```bash
-docker save adp-chat-client:<newtag> | gzip -1 > /tmp/adp-<newtag>.tar.gz
+docker save adp-business-gateway:<newtag> | gzip -1 > /tmp/adp-<newtag>.tar.gz
 scp -q /tmp/adp-<newtag>.tar.gz xdimspace-01:/root/
 ssh xdimspace-01 'gunzip -c /root/adp-<newtag>.tar.gz | docker load'
 ```
@@ -110,7 +119,7 @@ ssh xdimspace-01 'cd /opt/tencent-adp-gateway && TS=$(date +%Y%m%d%H%M%S) && \
   docker compose exec -T postgres pg_dump -U adp_chat -d adp_chat -Fc > /root/adp-backups/adp_chat-rev<cur>-$TS.dump && \
   docker compose exec -T postgres sh -c "cat > /tmp/v.dump && pg_restore -l /tmp/v.dump | grep -c \"TABLE DATA\"; rm -f /tmp/v.dump" < /root/adp-backups/adp_chat-rev<cur>-$TS.dump'
 # tag the image currently in service as the rollback point BEFORE retagging
-ssh xdimspace-01 'cd /opt/tencent-adp-gateway && docker tag adp-chat-client:local adp-chat-client:rollback-rev<cur>'
+ssh xdimspace-01 'cd /opt/tencent-adp-gateway && docker tag adp-business-gateway:local adp-business-gateway:rollback-rev<cur>'
 ```
 
 `pg_restore -l` must list a non-zero `TABLE DATA` count — that proves the dump is
@@ -120,7 +129,7 @@ restorable, not just written.
 
 ```bash
 ssh xdimspace-01 'cd /opt/tencent-adp-gateway && \
-  docker tag adp-chat-client:<newtag> adp-chat-client:local && \
+  docker tag adp-business-gateway:<newtag> adp-business-gateway:local && \
   docker compose up -d && \
   docker compose restart reverse-proxy'
 ```
@@ -147,7 +156,7 @@ App-only (schema still compatible — the usual case):
 
 ```bash
 ssh xdimspace-01 'cd /opt/tencent-adp-gateway && \
-  docker tag adp-chat-client:rollback-rev<prev> adp-chat-client:local && \
+  docker tag adp-business-gateway:rollback-rev<prev> adp-business-gateway:local && \
   docker compose up -d && docker compose restart reverse-proxy'
 ```
 
