@@ -15,8 +15,8 @@ import {
   ErrorCircleIcon,
 } from 'tdesign-icons-vue-next'
 import PlatformShell from '@/components/PlatformShell.vue'
-import AdminChannelManagement from '@/components/AdminChannelManagement.vue'
-import PlatformSelect from '@/components/PlatformSelect.vue'
+import AdminChannelManagement from '@/components/admin/AdminChannelManagement.vue'
+import PlatformSelect from '@/components/admin/PlatformSelect.vue'
 import {
   createEnterprise,
   createPlatformUser,

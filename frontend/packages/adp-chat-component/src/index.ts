@@ -2,7 +2,7 @@
  * ADP Chat Component 入口
  *
  * 本组件库不再是对外可嵌入的 SDK，只服务平台管理端的 `/admin/adp-chat`
- * 调试页（`client/packages/app/src/pages/AdminAdpChat.vue`）。因此导出面
+ * 调试页（`frontend/packages/app/src/pages/admin/AdminAdpChat.vue`）。因此导出面
  * 收敛为该页面实际消费的部分：一个布局组件、axios 拦截器配置和三个类型。
  *
  * 全局挂载入口（原 `./main` 的 default 导出与 `./mounters`）随 UMD 产物一并
