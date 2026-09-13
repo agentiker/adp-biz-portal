@@ -62,14 +62,7 @@ pack: build
 	-mkdir build/docker
 	# 通过rsync -L把符号链接替换为实际文件
 	rsync -avL --exclude='__pycache__' --exclude='.*' build/server/ build/docker/server/
-	cd build && docker build -t adp-chat-client -f ../docker/Dockerfile .
-
-push_image:
-	docker tag adp-chat-client mirrors.tencent.com/ti-machine-learning/adp-chat-client:0.0.2
-	docker push mirrors.tencent.com/ti-machine-learning/adp-chat-client:0.0.2
-
-pull_image:
-	docker pull mirrors.tencent.com/ti-machine-learning/adp-chat-client:0.0.2
+	cd build && docker build -t adp-business-gateway -f ../docker/Dockerfile .
 
 # ----------------- deploy -----------------
 

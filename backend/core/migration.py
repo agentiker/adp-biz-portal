@@ -51,7 +51,7 @@ from model.platform import (
 )
 
 
-MIGRATION_LOCK_KEY = "adp-chat-client-schema-migration"
+MIGRATION_LOCK_KEY = "adp-business-gateway-schema-migration"
 MIGRATION_STATUS_APPLIED = "applied"
 MIGRATION_STATUS_ROLLED_BACK = "rolled_back"
 
