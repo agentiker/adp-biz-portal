@@ -1,7 +1,7 @@
 [project]
-name = "adp-chat-client"
+name = "adp-business-gateway-backend"
 version = "0.1.0"
-description = "backend for the adp-chat-client"
+description = "backend for adp-business-gateway"
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [

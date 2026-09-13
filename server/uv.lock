@@ -3,7 +3,7 @@ revision = 1
 requires-python = "==3.12.*"
 
 [[package]]
-name = "adp-chat-client"
+name = "adp-business-gateway-backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "asyncpg" },
     { name = "cos-python-sdk-v5" },
+    { name = "cryptography" },
     { name = "greenlet" },
     { name = "jwcrypto" },
     { name = "limits" },
@@ -44,6 +45,7 @@ requires-dist = [
     { name = "aiohttp", specifier = "==3.12.13" },
     { name = "asyncpg", specifier = "==0.30.0" },
     { name = "cos-python-sdk-v5", specifier = ">=1.9.30" },
+    { name = "cryptography", specifier = ">=46.0.0" },
     { name = "greenlet", specifier = "==3.2.3" },
     { name = "jwcrypto", specifier = ">=1.5.6" },
     { name = "limits", specifier = ">=5.6.0" },
