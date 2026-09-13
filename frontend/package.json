@@ -1,0 +1,16 @@
+{
+  "name": "adp-business-gateway-frontend",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.0 <21 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "cd packages/app && npm run dev",
+    "build": "mkdir ../backend/static; export NODE_OPTIONS='--max-old-space-size=4096' && npm run build_component && npm run build_app",
+    "build_component": "cd packages/adp-chat-component && npm run build && cd ../../../backend/static && rm -rf adp-chat-component && cp -r ../../frontend/packages/adp-chat-component/dist adp-chat-component",
+    "build_app": "cd packages/app && npm run build && cd ../../../backend/static && rm -rf app && cp -r ../../frontend/packages/app/dist app"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}

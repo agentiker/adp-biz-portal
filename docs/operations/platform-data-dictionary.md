@@ -1,6 +1,6 @@
 # 统一业务平台数据字典
 
-本文以 `server/model/platform.py` 和当前迁移定义为准，描述平台新增表、关键字段、关联关系和敏感数据边界。字段名保留代码中的 PascalCase 写法；实际数据库列名与模型一致。旧聊天表仍由原项目维护，不在本字典中重新定义。
+本文以 `backend/model/platform.py` 和当前迁移定义为准，描述平台新增表、关键字段、关联关系和敏感数据边界。字段名保留代码中的 PascalCase 写法；实际数据库列名与模型一致。旧聊天表仍由原项目维护，不在本字典中重新定义。
 
 ## 数据边界
 
@@ -95,4 +95,4 @@ platform_execution_context ──< platform_tool_call
 | 11 | `platform_channel_identity_scope_schema` | 渠道身份改为平台用户级，清空历史企业归属并将兼容字段改为 nullable `SET NULL` |
 | 12 | `platform_channel_execution_scope_schema` | 执行上下文 `PlatformSessionId` 与渠道身份 `ExternalIdentityId` 改为 nullable，新增 `platform_inbound_message.ReplyWindowExpiresAt` 与 `platform_channel_replay_marker` 表，并在活跃渠道身份上建立部分唯一索引；存在重复活跃绑定时迁移停止并要求人工撤销 |
 
-迁移详情以 `server/core/migration.py` 为准；生产升级必须使用 `server/migrate.py`，不能通过应用启动阶段隐式修改 schema。
+迁移详情以 `backend/core/migration.py` 为准；生产升级必须使用 `backend/migrate.py`，不能通过应用启动阶段隐式修改 schema。

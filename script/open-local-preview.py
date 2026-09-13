@@ -12,7 +12,7 @@ from dotenv import dotenv_values
 parser = argparse.ArgumentParser()
 parser.add_argument("--print-url", action="store_true")
 args = parser.parse_args()
-settings = dotenv_values(Path(__file__).resolve().parents[1] / "server" / ".env")
+settings = dotenv_values(Path(__file__).resolve().parents[1] / "backend" / ".env")
 base_url = settings.get("SERVICE_API_URL", "").rstrip("/")
 if urlparse(base_url).hostname not in {"127.0.0.1", "localhost", "::1"}:
     raise SystemExit("This helper is restricted to localhost.")

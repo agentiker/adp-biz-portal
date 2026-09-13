@@ -2,7 +2,7 @@
 
 - 日期：2026-09-08
 - 关联：[ROADMAP.md](../../ROADMAP.md) M3；[统一业务接入平台方案](2026-09-04-unified-business-platform-design.md)；[Admin 渠道管理设计](2026-09-06-admin-channel-management-design.md)
-- 基线提交：本仓库 `53a6d5e`（`server/integrations/channels/` + `core/channel_replay.py` + `core/channel_identity.py`）
+- 基线提交：本仓库 `53a6d5e`（`backend/integrations/channels/` + `core/channel_replay.py` + `core/channel_identity.py`）
 
 ## 1. 目的与范围
 
@@ -107,7 +107,7 @@
 - 边界与设计意图一致——「协议留适配器，身份/范围/权限/Agent 留平台服务」在代码中成立，强于三家（它们把 runtime/全局态塞进适配器）。
 
 结构债（有据）：
-- `server/router/platform.py` = **2266 行**，远超 800 上限，是 god-orchestrator（HTTP+鉴权+注册+回调路由+编排）。
+- `backend/router/platform.py` = **2266 行**，远超 800 上限，是 god-orchestrator（HTTP+鉴权+注册+回调路由+编排）。
 - crypto 内联在 451 行的 `wechat_official_account.py`（约 61 行 crypto），企微一来会复制第二份并顶 800 上限——重演三家坏味道。
 
 ### 6.2 是否单独成包
@@ -115,7 +115,7 @@
 - **仓库内一等包 + 按渠道重构：要，且在客服/企微落地前做。** 该层将从 709 行增至数千行。目标结构：
 
 ```
-server/channels/
+backend/channels/
   contracts.py        # 中性契约：InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities
   registry.py
   _wechat/
@@ -130,7 +130,7 @@ server/channels/
 ```
 
 ### 6.3 关键一步：契约中性化
-现耦合方向为 channels → `core.delivery`。应反转：把 `InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities` 收进 `channels/contracts.py`（或中性 `server/contracts/`），令 **core 依赖契约**。改动便宜（挪 dataclass），但把「未来是否真拆包」变为零重构随时可做。
+现耦合方向为 channels → `core.delivery`。应反转：把 `InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities` 收进 `channels/contracts.py`（或中性 `backend/contracts/`），令 **core 依赖契约**。改动便宜（挪 dataclass），但把「未来是否真拆包」变为零重构随时可做。
 
 ### 6.4 契约做实
 `ChannelAdapter.normalize(self, **kwargs: Any) -> Any` 与 registry 存 `Any` 是弱鸭子契约。渠道一多，应收成带类型签名 + 明确返回 envelope 类型（呼应 LangBot EBA 从 `hasattr` 转 manifest 声明的教训）。

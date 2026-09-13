@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SERVER_ROOT = PROJECT_ROOT / "server"
+SERVER_ROOT = PROJECT_ROOT / "backend"
 sys.path.insert(0, str(SERVER_ROOT))
 
 from app_factory import create_app  # noqa: E402
@@ -81,7 +81,7 @@ async def _bootstrap(name: str, phone: str, password: str) -> tuple[str, bool]:
     try:
         async with sessionmaker() as db:
             # Local account provisioning is not a schema migration. Run
-            # ``server/.venv/bin/python server/migrate.py upgrade`` first.
+            # ``backend/.venv/bin/python backend/migrate.py upgrade`` first.
             await Migration.validate_startup(db)
             user = await find_platform_user_by_phone(db, normalized_phone)
             created = user is None
