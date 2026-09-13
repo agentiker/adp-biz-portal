@@ -11,12 +11,12 @@
 
 ## 常用只读检查
 
-在加载了正确 `server/.env` 的受控终端执行：
+在加载了正确 `backend/.env` 的受控终端执行：
 
 ```bash
-server/.venv/bin/python server/migrate.py --help
+backend/.venv/bin/python backend/migrate.py --help
 cd server && .venv/bin/python worker.py --help
-server/.venv/bin/python -m compileall -q server
+backend/.venv/bin/python -m compileall -q server
 git diff --check
 ```
 
@@ -55,7 +55,7 @@ curl -sS -H "Authorization: Bearer <platform-session-token>" \
 **处理**：
 
 1. 停止继续放量，确认没有旧 Worker 正在写任务。
-2. 用发布工单中的数据库连接执行 `server/.venv/bin/python server/migrate.py upgrade --applied-by "<release-id>"`。
+2. 用发布工单中的数据库连接执行 `backend/.venv/bin/python backend/migrate.py upgrade --applied-by "<release-id>"`。
 3. 检查 `platform_migration` 的版本、checksum 和状态；不要让 Web 进程执行 `metadata.create_all()` 或手工建表。
 4. 若数据库由更新版本迁移，先回滚应用代码到兼容版本；数据库降级需要备份、审批和显式 `--allow-data-loss`，流程见 `release-and-rollback.md`。
 

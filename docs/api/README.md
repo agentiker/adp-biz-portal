@@ -14,4 +14,4 @@ Run the contract and generated-output checks before committing:
 make platform_api_check
 ```
 
-The check validates YAML structure, local `$ref` targets, operation metadata, parity with `/api/v1` routes declared in `server/router/platform.py`, and whether `client/packages/app/src/platform/generated.ts` is current. `types.ts` re-exports the generated models so application code consumes the contract-derived names.
+The check validates YAML structure, local `$ref` targets, operation metadata, parity with `/api/v1` routes declared in `backend/router/platform.py`, and whether `frontend/packages/app/src/platform/generated.ts` is current. `types.ts` re-exports the generated models so application code consumes the contract-derived names.

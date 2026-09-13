@@ -13,18 +13,18 @@
 ### Task 1: 建立协议 helper 和适配器
 
 **Files:**
-- Create: `server/integrations/channels/wechat_official_account.py`
-- Modify: `server/integrations/channels/registry.py`
-- Modify: `server/integrations/channels/__init__.py`
-- Test: `server/test/unit_test/test_wechat_official_account.py`
+- Create: `backend/integrations/channels/wechat_official_account.py`
+- Modify: `backend/integrations/channels/registry.py`
+- Modify: `backend/integrations/channels/__init__.py`
+- Test: `backend/test/unit_test/test_wechat_official_account.py`
 
 覆盖 GET 签名、时间窗、进程内 nonce 重放保护、明文 XML 安全解析、文本消息标准化，以及未知发送结果返回 `uncertain`。
 
 ### Task 2: 接入公网回调路由
 
 **Files:**
-- Modify: `server/router/platform.py`
-- Test: `server/test/unit_test/test_wechat_official_account.py`
+- Modify: `backend/router/platform.py`
+- Test: `backend/test/unit_test/test_wechat_official_account.py`
 
 增加服务号验证和 POST 回调路由。回调只读取已启用凭据、调用适配器、写入 `record_inbound_message`，不在请求内调用 Worker/ADP。
 

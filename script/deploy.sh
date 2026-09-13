@@ -59,9 +59,9 @@ check_env() {
 }
 
 check_dev_env() {
-    if [ ! -f "$ROOT_DIR/server/.env" ]; then
-        echo "错误: 未找到 server/.env: $ROOT_DIR/server/.env"
-        echo "Error: server/.env file not found: $ROOT_DIR/server/.env"
+    if [ ! -f "$ROOT_DIR/backend/.env" ]; then
+        echo "错误: 未找到 backend/.env: $ROOT_DIR/backend/.env"
+        echo "Error: backend/.env file not found: $ROOT_DIR/backend/.env"
         exit 1
     fi
 }
@@ -70,13 +70,13 @@ load_dev_env() {
     cd "$ROOT_DIR"
     check_dev_env
     set -a
-    source server/.env
+    source backend/.env
     set +a
 }
 
 validate_dev_db_env() {
     if [ "$PGSQL_HOST" != "localhost" ] && [ "$PGSQL_HOST" != "127.0.0.1" ]; then
-        echo "dev_withdb requires PGSQL_HOST to be localhost or 127.0.0.1 in server/.env" >&2
+        echo "dev_withdb requires PGSQL_HOST to be localhost or 127.0.0.1 in backend/.env" >&2
         exit 1
     fi
 }
@@ -108,8 +108,8 @@ debug_instance() {
     docker run --name adp-chat-client-db-$INSTANCE -d -e POSTGRES_PASSWORD=$PGSQL_PASSWORD -v ./volume/db:/var/lib/postgresql/data --network adp-chat-client-network-$INSTANCE postgres:17
     cd -
 
-	cp $INSTANCE_DIR/$INSTANCE/.env server/
-	docker run --name adp-chat-client-$INSTANCE -d -p $SERVER_HTTP_PORT:8000 -v ./server/:/app/ -v ./client/:/client/ --network adp-chat-client-network-$INSTANCE adp-chat-client
+	cp $INSTANCE_DIR/$INSTANCE/.env backend/
+	docker run --name adp-chat-client-$INSTANCE -d -p $SERVER_HTTP_PORT:8000 -v ./backend/:/app/ -v ./frontend/:/client/ --network adp-chat-client-network-$INSTANCE adp-chat-client
 }
 
 ### 封装 login 逻辑

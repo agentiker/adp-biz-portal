@@ -46,7 +46,7 @@ if ! COMPOSE_ENV_FILE="$ROOT_DIR/docker/.env.example" \
 fi
 
 cli_status="passed"
-if ! "$ROOT_DIR/server/.venv/bin/python" "$ROOT_DIR/server/migrate.py" --help >"$cli_log" 2>&1; then
+if ! "$ROOT_DIR/backend/.venv/bin/python" "$ROOT_DIR/backend/migrate.py" --help >"$cli_log" 2>&1; then
   cli_status="failed"
 fi
 
@@ -54,7 +54,7 @@ migration_status="passed"
 if ! (
   cd "$ROOT_DIR"
   PLATFORM_TEST_DATABASE_URL="$database_url" \
-    server/.venv/bin/pytest server/test/integration/test_platform_migration_postgres.py -q -s
+    backend/.venv/bin/pytest backend/test/integration/test_platform_migration_postgres.py -q -s
 ) >"$migration_log" 2>&1; then
   migration_status="failed"
 fi

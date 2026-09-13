@@ -14,7 +14,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "docs/api/openapi.yaml"
-OUTPUT_PATH = ROOT / "client/packages/app/src/platform/generated.ts"
+OUTPUT_PATH = ROOT / "frontend/packages/app/src/platform/generated.ts"
 
 
 def load_spec() -> dict[str, Any]:

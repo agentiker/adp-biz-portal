@@ -27,13 +27,13 @@ curl -fsS http://127.0.0.1:8000/readyz
 
 `/healthz` 只表示 API 进程存活，不访问 PostgreSQL 或第三方服务；`/readyz` 会检查 PostgreSQL 连通性、迁移历史和当前 revision。Compose 的 API/Worker 会等待 `migrate` 成功后再启动，`reverse-proxy` 等待 API 健康后对外提供 HTTP 入口，数据库数据保存在 `platform-postgres` 卷中。公网生产环境仍应在该入口配置受控 HTTPS（或放在云负载均衡之后），不能把数据库端口暴露到公网。
 
-在发布机或受控运维终端执行以下检查，命令中的数据库连接由 `server/.env` 提供：
+在发布机或受控运维终端执行以下检查，命令中的数据库连接由 `backend/.env` 提供：
 
 ```bash
 git rev-parse --verify HEAD
-server/.venv/bin/python --version
-server/.venv/bin/python server/migrate.py --help
-server/.venv/bin/python -m compileall -q server
+backend/.venv/bin/python --version
+backend/.venv/bin/python backend/migrate.py --help
+backend/.venv/bin/python -m compileall -q server
 git diff --check
 ```
 
@@ -59,7 +59,7 @@ git diff --check
 
    ```bash
    MIGRATION_ACTOR="release-<release>"
-   server/.venv/bin/python server/migrate.py upgrade --applied-by "$MIGRATION_ACTOR"
+   backend/.venv/bin/python backend/migrate.py upgrade --applied-by "$MIGRATION_ACTOR"
    ```
 
    也可以使用仓库目标：
@@ -96,7 +96,7 @@ git diff --check
 降级命令必须显式提供 `--allow-data-loss`，例如回退到 revision `3`：
 
 ```bash
-server/.venv/bin/python server/migrate.py downgrade \
+backend/.venv/bin/python backend/migrate.py downgrade \
   --target 3 \
   --allow-data-loss \
   --applied-by "rollback-<release>"
@@ -105,7 +105,7 @@ server/.venv/bin/python server/migrate.py downgrade \
 降级后只能启动与目标 revision 兼容的旧版本。若需要恢复新版本，先确认备份/数据恢复策略，再执行：
 
 ```bash
-server/.venv/bin/python server/migrate.py upgrade --applied-by "reupgrade-<release>"
+backend/.venv/bin/python backend/migrate.py upgrade --applied-by "reupgrade-<release>"
 ```
 
 ### 从备份恢复
@@ -146,7 +146,7 @@ PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1
 
 ```bash
 PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1:5432/adp_chat_client_local' \
-  server/.venv/bin/pytest server/test/integration/test_platform_migration_postgres.py -q -s
+  backend/.venv/bin/pytest backend/test/integration/test_platform_migration_postgres.py -q -s
 ```
 
-结果为 `2 passed in 1.73s`；证据见 `output/tests/m1-mig-01-migration.json`、`output/tests/m3-identity-01-platform-scope-migration.json` 和 `server/test/integration/test_platform_migration_postgres.py`。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。
+结果为 `2 passed in 1.73s`；证据见 `output/tests/m1-mig-01-migration.json`、`output/tests/m3-identity-01-platform-scope-migration.json` 和 `backend/test/integration/test_platform_migration_postgres.py`。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。
