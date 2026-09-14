@@ -4,50 +4,51 @@
 
 # ----------------- init (aggregate) -----------------
 
-# 一次性初始化所有依赖：client npm 依赖 + 组件库产物 + server Python 依赖
+# 一次性初始化所有依赖：frontend npm 依赖 + 组件库产物 + backend Python 依赖
 init: init_client init_server
 
-# ----------------- client -----------------
+# ----------------- frontend -----------------
 
 init_client:
-	cd client && npm install
+	cd frontend && npm install
 	$(MAKE) init_component
 
 # 组件库需要 build 产物（dist/es/adp-chat-component.css 等）才能被 app 引用
 init_component:
-	cd client/packages/adp-chat-component && npm run build
+	cd frontend/packages/adp-chat-component && npm run build
 
 client:
-	cd client && npm run build
+	cd frontend && npm run build
 
 test_client:
-	cd client && npm run test --ws
+	cd frontend && npm run test --ws
 
-# ----------------- server -----------------
+# ----------------- backend -----------------
 
 init_server:
-	cd server; uv sync
+	cd backend; uv sync
 
 test_server:
-	cd server; uv sync --all-extras
-	source server/.venv/bin/activate; cd server; pytest test/unit_test -W ignore::DeprecationWarning
+	cd backend; uv sync --all-extras
+	source backend/.venv/bin/activate; cd backend; pytest test/unit_test -W ignore::DeprecationWarning
 
 migrate:
-	server/.venv/bin/python server/migrate.py upgrade --applied-by "$${MIGRATION_ACTOR:-make-migration}"
+	backend/.venv/bin/python backend/migrate.py upgrade --applied-by "$${MIGRATION_ACTOR:-make-migration}"
 
 # ----------------- pack -----------------
+# build/server 与 docker/server 为构建暂存标签，与源码目录 backend/ 解耦，勿改
 
 build_server:
 	-mkdir build
-	rsync -avr --exclude='__pycache__' --exclude='.*' server/ build/server/
+	rsync -avr --exclude='__pycache__' --exclude='.*' backend/ build/server/
 
 build_client:
 	-mkdir build
-	rsync -avr --exclude='node_modules' --exclude='.*' client/ build/client/
+	rsync -avr --exclude='node_modules' --exclude='.*' frontend/ build/client/
 	docker run -v ./build:/build/ -w /build node:22-bullseye-slim sh -c "cd client && npm i && npm run build"
 
 build_component:
-	cd client && npm run build_component
+	cd frontend && npm run build_component
 
 build:
 	-mkdir build
@@ -61,14 +62,7 @@ pack: build
 	-mkdir build/docker
 	# 通过rsync -L把符号链接替换为实际文件
 	rsync -avL --exclude='__pycache__' --exclude='.*' build/server/ build/docker/server/
-	cd build && docker build -t adp-chat-client -f ../docker/Dockerfile .
-
-push_image:
-	docker tag adp-chat-client mirrors.tencent.com/ti-machine-learning/adp-chat-client:0.0.2
-	docker push mirrors.tencent.com/ti-machine-learning/adp-chat-client:0.0.2
-
-pull_image:
-	docker pull mirrors.tencent.com/ti-machine-learning/adp-chat-client:0.0.2
+	cd build && docker build -t adp-business-gateway -f ../docker/Dockerfile .
 
 # ----------------- deploy -----------------
 
@@ -99,16 +93,16 @@ dev_withdb:
 	npx concurrently "bash script/deploy.sh dev_withdb" "bash script/deploy.sh wait_devdb && make run_server" "make run_client" "make run_component_example" --names db,server,ui,component --prefix-colors magenta,blue,green,yellow --kill-others
 
 run_client:
-	set -a && source server/.env && set +a; cd client; npm run dev
+	set -a && source backend/.env && set +a; cd frontend; npm run dev
 
 run_component_example:
-	set -a && source server/.env && set +a; cd client/packages/adp-chat-component-example/vue-init-example; npm run dev
+	set -a && source backend/.env && set +a; cd frontend/packages/adp-chat-component-example/vue-init-example; npm run dev
 
 run_server:
-	source server/.venv/bin/activate; set -a && source server/.env && set +a; cd server; sanic app_factory:create_app --factory --reload -H 0.0.0.0 -p $$SERVER_HTTP_PORT
+	source backend/.venv/bin/activate; set -a && source backend/.env && set +a; cd backend; sanic app_factory:create_app --factory --reload -H 0.0.0.0 -p $$SERVER_HTTP_PORT
 
 run_worker:
-	source server/.venv/bin/activate; set -a && source server/.env && set +a; cd server; python worker.py
+	source backend/.venv/bin/activate; set -a && source backend/.env && set +a; cd backend; python worker.py
 
 # ----------------- unified platform API -----------------
 

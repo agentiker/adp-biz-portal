@@ -15,8 +15,8 @@ cache
 deploy
 .codebuddy/
 .vercel
-server/static/
-server/logs/
+backend/static/
+backend/logs/
 yarn.lock
 .playwright-cli/
 .playwright-mcp/

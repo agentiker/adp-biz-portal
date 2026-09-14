@@ -19,7 +19,7 @@
 
 当前已完成的本地任务：旧应用与企业 Workspace 绑定模型、旧兼容路由收口、平台级 ADP/渠道配置边界、停用即时失效和管理审计、Worker/Portal 本地编排、服务端 Agent/ADP Provider 边界、撤权后的待发送任务失效、渠道凭据加密存储与管理员管理边界、渠道身份绑定状态机、公共 OpenAPI 与前端类型生成链路、Docker Compose 部署基线、健康探针、数据字典/排障/发布回滚文档、运维只读状态聚合入口、账号开通 SOP/验收用例/培训材料。当前代码迁移目标为 revision 11：revision 10 负责把渠道凭据改为平台级，revision 11 负责清空渠道身份的历史企业关联并将兼容字段改为 nullable。后台 UI 交互收尾已完成；本轮正在移除身份列表的企业列并复核四列表格响应式。继续执行的外部任务仍是真实 ADP Agent/M3/渠道协议联调；真实 M3、ADP Workspace 和渠道账号到位后再进入对应联调批次。
 
-安全专项进度：`M4-SEC-01` 已完成本地脱敏和权限回归。`server/util/security_logging.py` 统一处理嵌套凭据、Authorization/Bearer、口令、临时密钥、JSON 错误和签名 URL；相关日志入口已改为脱敏或摘要。分进程执行的安全日志、认证安全、平台配置和运维状态测试共 `44 passed`，结果保存在 `output/tests/m4-sec-01-*.txt`。这证明本地代码边界，不代表生产日志管道、密钥管理服务或真实第三方联调已完成。
+安全专项进度：`M4-SEC-01` 已完成本地脱敏和权限回归。`backend/util/security_logging.py` 统一处理嵌套凭据、Authorization/Bearer、口令、临时密钥、JSON 错误和签名 URL；相关日志入口已改为脱敏或摘要。分进程执行的安全日志、认证安全、平台配置和运维状态测试共 `44 passed`，结果保存在 `output/tests/m4-sec-01-*.txt`。这证明本地代码边界，不代表生产日志管道、密钥管理服务或真实第三方联调已完成。
 
 绑定收口说明：`IntegrationConnection` 与 `EnterpriseExternalAccount` 仍保留为旧兼容授权来源，但一期平台唯一 ADP 应用、新渠道实例和渠道身份均不绑定企业。渠道身份只证明外部渠道标识对应哪个平台用户；新绑定不写入 `EnterpriseId`，历史字段仅作为 nullable 兼容列。客户端 `ApplicationId`/`WorkspaceId` 只在 legacy binding 路径保留；新消息链路先由平台渠道凭据验签/解密并解析平台用户，再由 Worker 按消息执行时的有效 membership 解析企业和业务权限，最后转发给唯一 ADP 应用。若用户拥有多个有效企业且消息没有服务端可信的明确企业范围，Worker 必须拒绝执行并提示需要明确企业范围。真实 Workspace 归属和跨企业隔离仍需 `M0-ADP-01`、`M0-EXT-02` 提供外部契约与样本，不能以本地测试替代第三方联调。
 
@@ -69,17 +69,17 @@
 
 | 现有部分 | 检查结果 | 重构处理 |
 |---|---|---|
-| client/packages/app | Vue 3、TypeScript、TDesign、Pinia，已有聊天页面和登录页 | 保留作为客户门户基础，增加手机号登录和绑定流程 |
-| client/packages/adp-chat-component | 已有流式回复、消息展示、会话交互等 | 保留展示组件；屏蔽客户不需要的工具安装、渠道修改、终端等能力 |
-| server/vendor | 已有 Tencent 及 OpenAI-compatible 等提供方抽象 | 复用协议代码，包装到新的 AgentProvider；不让业务模块依赖 ADP 原始字段 |
-| server/model/account.py | 账号包含 admin/normal 两种角色，未建客户企业和业务范围模型 | 增加企业、成员、角色权限、员工负责企业、账号状态和认证会话 |
-| server/model/chat.py | 会话主要按 AccountId、ApplicationId 记录 | 增加渠道、参与人、平台会话与供应商会话映射、执行轮次 |
-| server/core/chat.py | 渠道会话存在不写本地会话、交由供应商管理的分支 | 改为本平台统一记录各渠道归属；禁止由客户端开关绕过归属校验 |
-| server/router/forward.py | 登录后可按 Action 格式匹配并动态转发，未体现业务级权限白名单 | 普通用户端取消通用转发；管理端改成明确动作、明确权限、固定字段 |
-| server/router/chat.py | 客户端可提交 ApplicationId、CustomVariables、IsChannel | 客户端只传允许的消息参数；身份、范围、目标 Agent 由服务端解析 |
-| server/app_factory.py | 应用配置启动时从 APP_CONFIGS 加载 | 迁移到可版本化的配置管理，密钥使用独立安全存储 |
-| server/util/tca.py | 请求日志会记录 payload，可能包含 AppKey | 上线前改为字段白名单日志，并统一脱敏 |
-| server/core/migration.py | 主要是启动时检查表、创建表 | 已改为显式版本化迁移 runner，部署时执行；运行账号只校验版本，不负责建库 |
+| frontend/packages/app | Vue 3、TypeScript、TDesign、Pinia，已有聊天页面和登录页 | 保留作为客户门户基础，增加手机号登录和绑定流程 |
+| frontend/packages/adp-chat-component | 已有流式回复、消息展示、会话交互等 | 保留展示组件；屏蔽客户不需要的工具安装、渠道修改、终端等能力 |
+| backend/vendor | 已有 Tencent 及 OpenAI-compatible 等提供方抽象 | 复用协议代码，包装到新的 AgentProvider；不让业务模块依赖 ADP 原始字段 |
+| backend/model/account.py | 账号包含 admin/normal 两种角色，未建客户企业和业务范围模型 | 增加企业、成员、角色权限、员工负责企业、账号状态和认证会话 |
+| backend/model/chat.py | 会话主要按 AccountId、ApplicationId 记录 | 增加渠道、参与人、平台会话与供应商会话映射、执行轮次 |
+| backend/core/chat.py | 渠道会话存在不写本地会话、交由供应商管理的分支 | 改为本平台统一记录各渠道归属；禁止由客户端开关绕过归属校验 |
+| backend/router/forward.py | 登录后可按 Action 格式匹配并动态转发，未体现业务级权限白名单 | 普通用户端取消通用转发；管理端改成明确动作、明确权限、固定字段 |
+| backend/router/chat.py | 客户端可提交 ApplicationId、CustomVariables、IsChannel | 客户端只传允许的消息参数；身份、范围、目标 Agent 由服务端解析 |
+| backend/app_factory.py | 应用配置启动时从 APP_CONFIGS 加载 | 迁移到可版本化的配置管理，密钥使用独立安全存储 |
+| backend/util/tca.py | 请求日志会记录 payload，可能包含 AppKey | 上线前改为字段白名单日志，并统一脱敏 |
+| backend/core/migration.py | 主要是启动时检查表、创建表 | 已改为显式版本化迁移 runner，部署时执行；运行账号只校验版本，不负责建库 |
 
 原页面中的“渠道配置”主要是在操作 ADP 渠道，不等于本平台已经具备多渠道统一身份和数据权限。不能简单搬到后台就认为该能力完成。
 
@@ -395,12 +395,12 @@ M3 只读按业务语义判断，不按 GET/POST 方法判断；查询接口也�
 
 建议逐步演进成：
 
-    client/packages/
+    frontend/packages/
       app/                  客户门户
       admin/                新增管理后台
       adp-chat-component/   复用的聊天展示组件
       shared/               共享 API 类型和基础组件
-    server/
+    backend/
       api/v1/
         portal/             客户 API
         admin/              管理 API

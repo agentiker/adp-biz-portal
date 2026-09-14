@@ -13,7 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "docs/api/openapi.yaml"
-ROUTER_PATH = ROOT / "server/router/platform.py"
+ROUTER_PATH = ROOT / "backend/router/platform.py"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 

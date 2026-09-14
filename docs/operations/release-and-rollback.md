@@ -27,13 +27,13 @@ curl -fsS http://127.0.0.1:8000/readyz
 
 `/healthz` 只表示 API 进程存活，不访问 PostgreSQL 或第三方服务；`/readyz` 会检查 PostgreSQL 连通性、迁移历史和当前 revision。Compose 的 API/Worker 会等待 `migrate` 成功后再启动，`reverse-proxy` 等待 API 健康后对外提供 HTTP 入口，数据库数据保存在 `platform-postgres` 卷中。公网生产环境仍应在该入口配置受控 HTTPS（或放在云负载均衡之后），不能把数据库端口暴露到公网。
 
-在发布机或受控运维终端执行以下检查，命令中的数据库连接由 `server/.env` 提供：
+在发布机或受控运维终端执行以下检查，命令中的数据库连接由 `backend/.env` 提供：
 
 ```bash
 git rev-parse --verify HEAD
-server/.venv/bin/python --version
-server/.venv/bin/python server/migrate.py --help
-server/.venv/bin/python -m compileall -q server
+backend/.venv/bin/python --version
+backend/.venv/bin/python backend/migrate.py --help
+backend/.venv/bin/python -m compileall -q server
 git diff --check
 ```
 
@@ -51,15 +51,15 @@ git diff --check
 2. 使用受控的 `pg_dump` 生成自定义格式备份，并将文件保存到独立介质。示例中的文件名和路径必须替换为发布工单指定的位置：
 
    ```bash
-   pg_dump --format=custom --no-owner --file=/secure/backup/adp-chat-client-<release>-<timestamp>.dump "$DATABASE_URL"
-   sha256sum /secure/backup/adp-chat-client-<release>-<timestamp>.dump
+   pg_dump --format=custom --no-owner --file=/secure/backup/adp-business-gateway-<release>-<timestamp>.dump "$DATABASE_URL"
+   sha256sum /secure/backup/adp-business-gateway-<release>-<timestamp>.dump
    ```
 
 3. 使用部署数据库账号执行可重复的升级。`MIGRATION_ACTOR` 应使用工单中的服务身份，而不是个人密码：
 
    ```bash
    MIGRATION_ACTOR="release-<release>"
-   server/.venv/bin/python server/migrate.py upgrade --applied-by "$MIGRATION_ACTOR"
+   backend/.venv/bin/python backend/migrate.py upgrade --applied-by "$MIGRATION_ACTOR"
    ```
 
    也可以使用仓库目标：
@@ -96,7 +96,7 @@ git diff --check
 降级命令必须显式提供 `--allow-data-loss`，例如回退到 revision `3`：
 
 ```bash
-server/.venv/bin/python server/migrate.py downgrade \
+backend/.venv/bin/python backend/migrate.py downgrade \
   --target 3 \
   --allow-data-loss \
   --applied-by "rollback-<release>"
@@ -105,12 +105,26 @@ server/.venv/bin/python server/migrate.py downgrade \
 降级后只能启动与目标 revision 兼容的旧版本。若需要恢复新版本，先确认备份/数据恢复策略，再执行：
 
 ```bash
-server/.venv/bin/python server/migrate.py upgrade --applied-by "reupgrade-<release>"
+backend/.venv/bin/python backend/migrate.py upgrade --applied-by "reupgrade-<release>"
 ```
 
 ### 从备份恢复
 
 当数据完整性受到影响时，优先恢复到隔离数据库并验证，不要直接覆盖线上库。恢复操作使用平台既有数据库运维流程；至少完成表计数、迁移历史、账号登录和一条脱敏业务查询验证后，才决定切换连接配置。
+
+## 项目重命名割接（adp-chat-client → adp-business-gateway）
+
+一次性操作：把 compose 项目名、镜像名与 DB 迁移锁 key 从 `adp-chat-client` 切到 `adp-business-gateway`。含短暂停机，需单独批准。PostgreSQL 命名卷已在 `docker-compose.yml` 钉死为 `adp-chat-client_platform-postgres`，**数据原地复用、不搬运**。
+
+1. 备份（兜底）：`docker compose exec -T postgres pg_dump -U adp_chat -d adp_chat -Fc > /root/adp-backups/adp_chat-pre-rename-<ts>.dump`，`pg_restore -l` 校验 `TABLE DATA` 非零。
+2. 保留回滚镜像：`docker tag adp-chat-client:local adp-chat-client:rollback-pre-rename`。
+3. 载入新镜像（本地 `docker save adp-business-gateway:<tag>` → scp → `docker load`），`docker tag adp-business-gateway:<tag> adp-business-gateway:local`。
+4. 更新服务端 `.env`（机密，不经 git）：`APP_IMAGE=adp-business-gateway:local`。
+5. 旧项目停机再以新名拉起：`docker compose down`（旧 `adp-chat-client` 项目，**不加 `-v`**）→ `docker compose up -d`（新 `adp-business-gateway` 项目）→ `docker compose restart reverse-proxy`（必做，nginx 缓存旧 api IP）。
+6. 校验：公网 `/healthz`=ok、`/readyz`=ready 且 `schemaRevision` 正确；migrate/worker/api 日志无异常。
+7. 回滚：`.env` 改回 `APP_IMAGE=adp-chat-client:rollback-pre-rename`（或旧 `:local`）并用旧 compose 文件 `up`；数据可从步骤 1 dump 恢复。卷名不变，回滚不丢数据。
+
+迁移锁 key 变更为 `adp-business-gateway-schema-migration`（纯运行时 advisory lock、无持久化）；只需保证割接期间不新旧 `migrate` 并发。
 
 ## 演练记录模板
 
@@ -146,7 +160,7 @@ PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1
 
 ```bash
 PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1:5432/adp_chat_client_local' \
-  server/.venv/bin/pytest server/test/integration/test_platform_migration_postgres.py -q -s
+  backend/.venv/bin/pytest backend/test/integration/test_platform_migration_postgres.py -q -s
 ```
 
-结果为 `2 passed in 1.73s`；证据见 `output/tests/m1-mig-01-migration.json`、`output/tests/m3-identity-01-platform-scope-migration.json` 和 `server/test/integration/test_platform_migration_postgres.py`。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。
+结果为 `2 passed in 1.73s`；证据见 `output/tests/m1-mig-01-migration.json`、`output/tests/m3-identity-01-platform-scope-migration.json` 和 `backend/test/integration/test_platform_migration_postgres.py`。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。
