@@ -194,3 +194,23 @@ async def test_adp_provider_vendor_exception_does_not_leak_error():
     ).execute(replace(_request(), agent_id="shipment-agent"))
     assert response.status == "upstream_error"
     assert "secret-token" not in response.summary
+
+
+@pytest.mark.asyncio
+async def test_business_context_only_in_hidden_variables_and_never_streamed():
+    calls = []
+    class Vendor:
+        async def chat(self, **kwargs):
+            calls.append(kwargs)
+            yield b'data: {"Type":"text.delta","Text":"unverified"}\n\n'
+    class Sink:
+        async def emit(self, text):
+            pytest.fail("unverified business text was streamed")
+        async def close(self):
+            pass
+    request = replace(_request(), context_token="pct_fixture_private_token")
+    await ADPAgentProvider(agent_id=request.agent_id, application_id="app-test", vendor=Vendor()).execute(request, sink=Sink())
+    assert request.context_token not in repr(request)
+    assert request.context_token not in str(calls[0]["contents"])
+    assert calls[0]["custom_variables"]["platform_context_token"] == request.context_token
+    assert calls[0]["custom_variables"]["platform_run_id"] == request.run_id

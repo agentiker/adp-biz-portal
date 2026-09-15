@@ -78,17 +78,16 @@ def _customer_code(record: Mapping[str, Any]) -> str | None:
 
 def _query_matches(record: Mapping[str, Any], query: str) -> bool:
     query_upper = query.upper()
-    values = [
-        _first(record, "query", "Query", "bill_no", "BillNo", "BLNo", "BlNo", "BillOfLading", "billOfLading",
-               "container_no", "ContainerNo", "ContainerNumber", "tracking_no", "TrackingNo", "Code"),
-    ]
-    # If an upstream record has no identifier field, keep it. M3 search has
-    # already applied the query, while explicit identifiers are rechecked.
-    identifiers = [str(value).upper() for value in values if value not in (None, "")]
-    return not identifiers or any(query_upper in value or value in query_upper for value in identifiers)
+    identifiers = [str(record[key]).upper() for key in (
+        "query", "Query", "OrderNo", "order_no", "bill_no", "BillNo", "BLNo", "BlNo",
+        "BillOfLading", "billOfLading", "container_no", "ContainerNo", "ContainerNumber",
+        "containerNumber", "tracking_no", "TrackingNo", "Code",
+    ) if record.get(key) not in (None, "")]
+    return bool(identifiers) and any(query_upper in value for value in identifiers)
 
 
 _EVIDENCE_FIELDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("订单号", "M3 / shipment.lookup", ("OrderNo", "order_no")),
     ("提单号", "M3 / shipment.lookup", ("bill_no", "BillNo", "BLNo", "BlNo", "BillOfLading", "billOfLading")),
     ("箱号", "M3 / shipment.lookup", ("container_no", "ContainerNo", "ContainerNumber", "containerNumber")),
     ("船名 / 航次", "M3 / shipment.schedule", ("vessel_voyage", "VesselVoyage", "Vessel", "vessel", "Voyage", "voyage")),
@@ -179,13 +178,9 @@ class M3LookupAdapter:
         if self.use_mock:
             records: Any = self.mock_records
             if records is None:
-                records = [] if ("UNKNOWN" in normalized_query or "不存在" in normalized_query) else [{
-                    "CustomerCode": allowed_customer,
-                    "BillNo": normalized_query,
-                    "VesselVoyage": "EVER GIVEN · 118E",
-                    "ETA": "2026-09-24 08:00 (local)",
-                    "CurrentMilestone": "已离港 · 新加坡",
-                }]
+                from integrations.m3.mock import MOCK_RECORDS
+                records = list(MOCK_RECORDS)
+
         else:
             try:
                 records = await self._fetch(normalized_query, allowed_customer)
@@ -208,7 +203,7 @@ class M3LookupAdapter:
 
         candidates = [
             record for record in _records(records)
-            if (_customer_code(record) in (None, allowed_customer)) and _query_matches(record, normalized_query)
+            if (_customer_code(record) == allowed_customer) and _query_matches(record, normalized_query)
         ]
         denied = [record for record in _records(records) if _customer_code(record) not in (None, allowed_customer)]
         if len(candidates) > 1:
@@ -228,11 +223,27 @@ class M3LookupAdapter:
                 audit_outcome="access_denied" if denied else "not_found",
             )
 
+        evidence = _evidence(candidates[0])
+        if self.use_mock:
+            for item in evidence:
+                item["source"] = item["source"].replace("M3 /", "M3 Mock /", 1)
         return M3LookupResult(
             status="found",
             query=normalized_query,
             title="已找到 1 条可访问记录",
-            summary="以下结果来自当前企业授权范围。未返回的字段表示 M3 暂无可核实数据。",
-            evidence=_evidence(candidates[0]),
+            summary=("【模拟数据，仅供联调】" if self.use_mock else "") + "以下结果来自当前企业授权范围。未返回的字段表示 M3 暂无可核实数据。",
+            evidence=evidence,
             audit_outcome="found",
         )
+
+    async def schedule(self, *, query: str, customer_code: str) -> M3LookupResult:
+        return await self._section(query=query, customer_code=customer_code, section="schedule")
+
+    async def milestones(self, *, query: str, customer_code: str) -> M3LookupResult:
+        return await self._section(query=query, customer_code=customer_code, section="milestones")
+
+    async def _section(self, *, query: str, customer_code: str, section: str) -> M3LookupResult:
+        # These are projections of the lookup contract, not invented upstream APIs.
+        result = await self.lookup(query=query, customer_code=customer_code)
+        result.evidence = [item for item in result.evidence if item["source"].endswith(f"shipment.{section}")]
+        return result

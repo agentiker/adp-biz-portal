@@ -26,7 +26,6 @@ import {
   deleteAdpApp,
   disablePlatformUser,
   getAdminConfig,
-  getAdminAdpConfig,
   getAdminConversation,
   getAdminOverview,
   listAdpApps,
@@ -42,7 +41,7 @@ import {
   updateEnterprise,
   updatePlatformUserAccess,
 } from '@/platform/platformService'
-import type { AdpConfigStatus, AdpApp, AdminAuditEvent, AdminConfigState, AdminConversationSummary, AdminConversationDetail, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
+import type { AdpApp, AdminAuditEvent, AdminConfigState, AdminConversationSummary, AdminConversationDetail, AdminEnterprise, AdminOverview, AdminUser, PlatformConfigPayload, PlatformRole } from '@/platform/types'
 import { logout } from '@/service/login'
 import { usePlatformStore } from '@/stores/platform'
 
@@ -91,7 +90,6 @@ const accessRole = ref<PlatformRole>('customer')
 const accessEnterpriseId = ref<string>('')
 const accessActionLoading = ref(false)
 const accessFormError = ref('')
-const adpConfig = ref<AdpConfigStatus | null>(null)
 const platformStore = usePlatformStore()
 
 const roleOptions: Array<{ value: PlatformRole; label: string }> = [
@@ -134,7 +132,7 @@ const pageTitle = computed(() => ({
 const resourceMeta = computed(() => ({
   enterprises: { eyebrow: '客户目录', title: '企业管理', description: '登记入驻企业的名称、社会统一识别码与联系人信息；企业成员账号在「平台用户」维护。', icon: UsergroupIcon },
   users: { eyebrow: '身份治理', title: '平台用户', description: '为企业成员分配账号、角色与可见业务范围。', icon: UserIcon },
-  bindings: { eyebrow: '平台配置', title: 'ADP 应用配置', description: '一期平台只有一个 ADP 应用。应用凭据来自服务器 .env，企业和渠道均不参与 ADP 应用绑定。', icon: ApiIcon },
+  bindings: { eyebrow: '平台配置', title: 'ADP 应用配置', description: '管理应用及加密凭据。业务调用优先使用企业绑定的应用，未绑定时使用平台默认应用；未配置或绑定应用停用时停止调用。', icon: ApiIcon },
   channels: { eyebrow: '消息入口', title: '渠道管理', description: '配置渠道实例、凭据和渠道身份，查看每个接入的真实验证边界。', icon: ApiIcon },
   'agents-tools': { eyebrow: '能力编排', title: 'Agent 与工具', description: '登记的 Agent 与工具目录接口尚未接入，当前不展示演示数据。', icon: SettingIcon },
   conversations: { eyebrow: '可追溯性', title: '历史对话', description: '跨企业查看对话、执行轮次与证据（只读）。业务正文不会在这里全量展示。', icon: HistoryIcon },
@@ -190,9 +188,8 @@ const loadData = async () => {
       enterprises.value = enterpriseRows
     }
     if (view.value === 'bindings') {
-      const [appRows, config] = await Promise.all([listAdpApps(), getAdminAdpConfig()])
+      const appRows = await listAdpApps()
       adpApps.value = appRows
-      adpConfig.value = config
     }
     if (view.value === 'audit') auditEvents.value = await listAuditEvents()
     if (view.value === 'conversations') {
@@ -596,11 +593,7 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
     <template v-else-if="view === 'bindings'">
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreateAdpApp"><ApiIcon />新增 ADP 应用</button></div></section>
       <section class="resource-panel admin-panel adp-apps-panel"><div class="resource-toolbar"><div class="toolbar-heading"><p class="section-kicker">应用注册表</p><strong class="toolbar-title">ADP 应用</strong></div><span class="resource-count">{{ adpApps.length }} 个应用</span></div><div v-if="loading && !adpApps.length" class="resource-loading">正在加载 ADP 应用…</div><div v-else-if="adpApps.length" class="resource-table"><div class="resource-table-head"><span>应用</span><span>Vendor / AgentId</span><span>状态</span><span>操作</span></div><div v-for="app in adpApps" :key="app.id" class="resource-row"><span class="resource-name"><ApiIcon /><strong>{{ app.name }}<small>{{ app.applicationId }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ app.vendor }} · {{ app.serviceVendor }}</strong><small>{{ app.agentId }} · Key ****{{ app.appKeyFingerprint }}</small></span><span class="row-status" :class="`row-status--${app.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ app.status === 'active' ? '启用' : '停用' }}<em v-if="app.isDefault" class="default-badge">默认</em></span><span class="row-actions"><button class="text-action" :disabled="adpAppActionId === app.id || app.isDefault || app.status !== 'active'" @click="setDefaultAdpApp(app)">设为默认</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="openEditAdpApp(app)">编辑</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="toggleAdpAppStatus(app)">{{ app.status === 'active' ? '停用' : '启用' }}</button><button class="text-action text-action--danger" :disabled="adpAppActionId === app.id" @click="removeAdpApp(app)">删除</button></span></div></div></section>
-      <section v-if="adpConfig" class="resource-panel admin-panel adp-config-panel">
-        <div class="admin-panel-heading"><div><p class="section-kicker">回退配置</p><h2>服务器 .env 默认应用</h2></div><span class="row-status" :class="`row-status--${adpConfig.configured ? 'success' : 'warning'}`"><i></i>{{ adpConfig.configured ? '配置完整' : '配置不完整' }}</span></div>
-        <div class="adp-config-summary"><div><span>应用标识</span><strong>{{ adpConfig.applicationId || '未配置' }}</strong></div><div><span>供应商</span><strong>{{ adpConfig.vendor || '未配置' }}</strong></div><div><span>APP_CONFIGS</span><strong>{{ adpConfig.applicationCount }} 个应用</strong></div><div><span>配置来源</span><strong>{{ adpConfig.source }}</strong></div></div>
-        <p class="adp-config-note">未配置数据库 ADP 应用、或企业未绑定、且无默认应用时，平台回退到此 .env 应用。企业可在「企业管理」中绑定上方注册表中的应用。</p>
-      </section>
+      <p class="adp-config-note">请先新增应用并设为平台默认，或在企业管理中绑定应用。业务调用不再回退到服务器默认配置。</p>
     </template>
     <template v-else-if="view === 'channels'">
       <AdminChannelManagement />

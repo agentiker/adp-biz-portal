@@ -18,6 +18,9 @@ from integrations.channels.wecom_bot.gateway import _MsgidGuard, run_wecom_bot_t
 from integrations.channels.wecom_bot.ws_client import WecomBotWsConfig, WecomBotWsGateway
 from model.account import Account, AccountRole, AccountStatus
 from model.platform import (
+    PlatformAdpApp,
+    PlatformExecutionContext, PlatformToolCall, PlatformToolDefinition,
+    PlatformAuthSession, PlatformAuditEvent,
     EnterpriseStatus,
     PlatformChannelIdentity,
     PlatformChannelIdentityStatus,
@@ -57,10 +60,12 @@ async def bot_sessionmaker():
         connect_args={"server_settings": {"search_path": f'"{schema}",public'}},
     )
     tables = [
-        Account.__table__, PlatformEnterprise.__table__, PlatformUser.__table__,
+        Account.__table__, PlatformAdpApp.__table__, PlatformEnterprise.__table__, PlatformUser.__table__,
         PlatformMembership.__table__, PlatformChannelIdentity.__table__,
         PlatformConversation.__table__, PlatformExecutionRun.__table__,
         PlatformEvidence.__table__, PlatformMessage.__table__,
+        PlatformAuthSession.__table__, PlatformExecutionContext.__table__,
+        PlatformToolDefinition.__table__, PlatformToolCall.__table__, PlatformAuditEvent.__table__,
     ]
     async with engine.begin() as c:
         await c.run_sync(lambda s: Account.metadata.create_all(s, tables=tables, checkfirst=False))
@@ -294,3 +299,76 @@ async def test_ws_gateway_ignores_event_callback(bot_sessionmaker):
     )
     await gw.serve_once()
     assert [f for f in ws.sent if f.get("cmd") == "aibot_respond_msg"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["found", "no_callback", "revoked"])
+async def test_adp_bot_uses_recorded_callback_evidence(bot_sessionmaker, monkeypatch, mode):
+    from types import SimpleNamespace
+    from core.platform import AccountUnauthorized
+    with_callback = mode != "no_callback"
+    from integrations.adp.provider import ADPAgentProvider
+    from core.platform import ensure_platform_tools
+    from config import tagentic_config
+    from test.app_bootstrap import ensure_app
+    ensure_app()
+    from router.platform import AdpShipmentLookupApi
+
+    await _seed_identity(bot_sessionmaker, bind=True)
+    monkeypatch.setattr(tagentic_config, "ADP_TOOL_SERVICE_TOKEN", "test-service")
+    monkeypatch.setattr(tagentic_config, "M3_USE_MOCK", True)
+    async with bot_sessionmaker() as db:
+        enterprise = (await db.execute(select(PlatformEnterprise))).scalar_one()
+        enterprise.CustomerCode = "MOCK-ENT-A"
+        await ensure_platform_tools(db)
+        await db.commit()
+    rec = _Recorder()
+    tokens = []
+
+    class Vendor:
+        async def chat(self, **kwargs):
+            variables = kwargs["custom_variables"]
+            tokens.append(variables["platform_context_token"])
+            if with_callback:
+                async with bot_sessionmaker() as callback_db:
+                    request = SimpleNamespace(
+                        ctx=SimpleNamespace(db=callback_db),
+                        headers={"X-ADP-Service-Token": "test-service",
+                                 "X-Platform-Context-Token": tokens[-1],
+                                 "X-ADP-Request-Id": variables["platform_tool_request_id"] + ":lookup"},
+                        json={"query": "MOCK-BL-A001"},
+                    )
+                    response = await AdpShipmentLookupApi().post(request)
+                    assert response.status == 200
+            if mode == "revoked":
+                async with bot_sessionmaker() as revoke_db:
+                    user = (await revoke_db.execute(select(PlatformUser))).scalar_one()
+                    user.Status = PlatformStatus.DISABLED
+                    await revoke_db.commit()
+            yield b'data: {"Type":"text.delta","Text":"FABRICATED ARRIVAL"}\n\n'
+
+    turn = run_wecom_bot_turn(
+        bot_sessionmaker, channel=WECOM_BOT, channel_instance_id="bot-1", envelope=_envelope(),
+        provider=ADPAgentProvider(agent_id="test-agent", application_id="test-app", vendor=Vendor()),
+        reply_stream=rec.push, guard=_MsgidGuard(),
+    )
+    if mode == "revoked":
+        with pytest.raises(AccountUnauthorized):
+            await turn
+        assert rec.frames == [("<think></think>", False)]
+        async with bot_sessionmaker() as db:
+            contexts = list((await db.execute(select(PlatformExecutionContext))).scalars())
+            assert len(contexts) == 1 and contexts[0].RevokedAt is not None
+        return
+    result = await turn
+    assert result["status"] == "streamed"
+    assert rec.frames[-1][1] is True
+    assert all("FABRICATED" not in content and tokens[0] not in content for content, _ in rec.frames)
+    async with bot_sessionmaker() as db:
+        run = (await db.execute(select(PlatformExecutionRun))).scalar_one()
+        assert run.Status == ("found" if with_callback else "upstream_error")
+        message = (await db.execute(select(PlatformMessage))).scalar_one()
+        assert message.Body in rec.frames[-1][0]
+        assert ("ALPHA" in message.Body) is with_callback
+        contexts = list((await db.execute(select(PlatformExecutionContext))).scalars())
+        assert len(contexts) == 1 and contexts[0].RevokedAt is not None

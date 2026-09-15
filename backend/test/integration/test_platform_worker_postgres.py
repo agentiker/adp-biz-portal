@@ -28,6 +28,7 @@ from integrations.adp.provider import AgentResponse
 from integrations.m3.adapter import M3LookupAdapter
 from model.account import Account, AccountRole, AccountStatus
 from model.platform import (
+    PlatformAdpApp,
     PlatformAuditEvent,
     PlatformAuthSession,
     PlatformConversation,
@@ -77,6 +78,7 @@ async def platform_sessionmaker():
     )
     tables = [
         Account.__table__,
+        PlatformAdpApp.__table__,
         PlatformEnterprise.__table__,
         PlatformUser.__table__,
         PlatformMembership.__table__,
@@ -242,7 +244,7 @@ async def test_channel_message_runs_without_any_browser_session(platform_session
         sessionmaker=platform_sessionmaker,
         handlers=build_platform_delivery_handlers(
             platform_sessionmaker,
-            adapter_factory=M3LookupAdapter(use_mock=True),
+            adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
         ),
         worker_id="platform-worker-channel-sessionless",
     )
@@ -310,7 +312,7 @@ async def test_channel_message_still_requires_an_unambiguous_enterprise(platform
         sessionmaker=platform_sessionmaker,
         handlers=build_platform_delivery_handlers(
             platform_sessionmaker,
-            adapter_factory=M3LookupAdapter(use_mock=True),
+            adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
         ),
         worker_id="platform-worker-channel-ambiguous",
     )
@@ -337,7 +339,7 @@ async def test_worker_resolves_single_membership_when_channel_payload_has_no_ent
         sessionmaker=platform_sessionmaker,
         handlers=build_platform_delivery_handlers(
             platform_sessionmaker,
-            adapter_factory=M3LookupAdapter(use_mock=True),
+            adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
         ),
         worker_id="platform-worker-dynamic-enterprise",
     )
@@ -396,7 +398,7 @@ async def test_worker_rejects_ambiguous_memberships_when_channel_payload_has_no_
         sessionmaker=platform_sessionmaker,
         handlers=build_platform_delivery_handlers(
             platform_sessionmaker,
-            adapter_factory=M3LookupAdapter(use_mock=True),
+            adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
         ),
         worker_id="platform-worker-ambiguous-enterprise",
     )
@@ -522,7 +524,7 @@ async def test_worker_handles_twenty_concurrent_queries_baseline(platform_sessio
 
     handlers = build_platform_delivery_handlers(
         platform_sessionmaker,
-        adapter_factory=M3LookupAdapter(use_mock=True),
+        adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
     )
     workers = [
         DeliveryWorker(
@@ -648,8 +650,9 @@ async def test_worker_persists_lookup_evidence_and_idempotent_reply(platform_ses
         assert run.Query == "BL-WORKER-001"
         assert len(messages) == 2
         assert [message.Direction for message in messages] == ["inbound", "assistant"]
-        assert len(evidence) == 6
+        assert len(evidence) == 7
         assert {item.Label for item in evidence} == {
+            "订单号",
             "提单号",
             "箱号",
             "船名 / 航次",
@@ -823,7 +826,7 @@ async def test_worker_rejects_disabled_account_without_retry(platform_sessionmak
         sessionmaker=platform_sessionmaker,
         handlers=build_platform_delivery_handlers(
             platform_sessionmaker,
-            adapter_factory=M3LookupAdapter(use_mock=True),
+            adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
         ),
         worker_id="platform-worker-rejection-test",
     )
@@ -942,7 +945,7 @@ async def test_account_revocation_fails_queued_reply_without_claiming_it(platfor
         sessionmaker=platform_sessionmaker,
         handlers=build_platform_delivery_handlers(
             platform_sessionmaker,
-            adapter_factory=M3LookupAdapter(use_mock=True),
+            adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "CUST-WORKER", "BillNo": "BL-WORKER-001"}]),
         ),
         worker_id="access-queue-revocation-business",
     )

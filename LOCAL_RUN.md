@@ -10,7 +10,7 @@
 backend/.venv/bin/python backend/migrate.py upgrade --applied-by local-migration
 ```
 
-迁移命令可重复执行；当前代码要求 schema revision `12`。需要回滚时必须明确确认会删除目标 revision 创建的表和数据：
+迁移命令可重复执行；当前代码要求 schema revision `16`。需要回滚时必须明确确认会删除目标 revision 创建的表和数据：
 
 ```bash
 backend/.venv/bin/python backend/migrate.py downgrade --target 3 --allow-data-loss --applied-by local-rollback
@@ -35,11 +35,11 @@ make run_worker
 Worker 从 PostgreSQL 消费 `platform.inbound.process` 和 `platform.reply` 任务。仅处理一条任务后退出可运行：
 
 ```bash
-cd server
+cd backend
 ./.venv/bin/python worker.py --once
 ```
 
-Worker 默认使用受控的 M3 Provider。只有显式设置 `M3_USE_MOCK=true` 才会使用本地 fixture；未配置 `M3_BASE_URL` 且未启用 Mock 时，任务会持久化为 `upstream_error`，不会伪造业务结果。
+Worker 按企业从数据库解析 ADP 应用。工具数据只有显式设置 `M3_USE_MOCK=true` 才使用固定 Mock；这不会替代 ADP 应用。未配置可用应用时拒绝执行。
 
 在另一个终端打开并登录本地预览账号：
 
@@ -61,22 +61,11 @@ backend/.venv/bin/python script/bootstrap-local-admin.py
 
 ## 配置真实 ADP 应用
 
-编辑 backend/.env（已被 Git 忽略，文件权限为 600）：
+在管理后台「ADP 应用配置」录入应用 ID、AppKey、SecretAppId、SecretId 和 SecretKey，选择实际 Vendor/ServiceVendor 并启用，设为平台默认或在企业中明确绑定。业务运行不再读取 `.env` 默认应用；显式绑定停用时不会切换到其它应用。
 
-- 公有云：填写 TC_SECRET_ID、TC_SECRET_KEY，以及 APP_CONFIGS 中的 ApplicationId 和 AppKey。
-- 独立站：设置 ServiceVendor=ChinaTencentADP，并填写 ADP_SECRET_ID / ADP_SECRET_KEY。
-- 启用统一业务 Worker 的真实 ADP Agent 时，额外设置 `ADP_AGENT_CONFIGS`，例如：
-  `ADP_AGENT_CONFIGS='[{"agentId":"shipment-agent","applicationId":"server-configured-app-id"}]'`。
-  `applicationId` 必须同时存在于服务端 `APP_CONFIGS`，并且对应 Vendor 必须支持 `chat`；多个映射时必须设置 `ADP_DEFAULT_AGENT_ID`。
-  这些映射由服务端配置维护，客户端请求中的 `agentId` 不参与授权，也不能切换应用。
-- TC_SECRET_APPID、COS、语音等按实际需要配置；本次不主动开通任何付费服务。
-- 初始 APP_CONFIGS=[]，可以启动界面，但没有可用智能体，不能进行真实聊天。
-- 不要将密钥提交 Git、贴到聊天里或放入截图。
+`backend/.env` 保留数据库、平台密钥、`PLATFORM_CHANNEL_CREDENTIAL_KEY`、`ADP_TOOL_SERVICE_TOKEN` 等基础设施配置。`APP_CONFIGS=[]` 可为空，仅旧管理员调试入口使用。不要把真实密钥提交 Git 或贴到日志、截图中。
 
-未配置 `ADP_AGENT_CONFIGS` 时，Worker 使用受控 M3 Provider；这只用于本地 M3 契约/Mock 验证。
-配置映射但应用、Vendor 或 Agent 选择不合法时，Worker fail closed 并持久化 `upstream_error`，不会回退到模拟结果。
-
-保存配置后重启后端，再运行登录脚本。正常启动时项目会访问 ADP 获取应用信息；错误配置可能导致启动失败。
+固定 M3 Mock、测试企业和连接器设置见 [ADP/M3 联调说明](docs/plans/2026-09-16-adp-m3-mock-connector.md)。正常业务查询需要可用的数据库 ADP 应用以及云端连接器回调；没有工具回执时返回失败提示。
 
 ## 数据与日志
 
@@ -88,12 +77,12 @@ backend/.venv/bin/python script/bootstrap-local-admin.py
 ## 构建与依赖
 
 ```bash
-cd server
+cd backend
 uv sync --frozen
-cd ../client
+cd ../frontend
 npm ci --no-audit --no-fund
 npm run build
 ```
 
 官方初始 Python 锁文件缺少源码需要的 pydash、COS SDK 等已声明依赖，已通过 uv sync 更新 backend/uv.lock。
-页面未加入模拟模型、模拟回答或模拟 M3 数据。
+M3 固定 Mock 仅供显式启用的联调环境使用；真实联调进度以 ROADMAP 为准。

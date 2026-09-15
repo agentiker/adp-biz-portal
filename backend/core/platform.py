@@ -1015,7 +1015,7 @@ async def load_execution_context(
         await db.execute(
             select(PlatformExecutionContext).where(
                 PlatformExecutionContext.TokenHash == execution_token_hash(token)
-            )
+            ).with_for_update()
         )
     ).scalar_one_or_none()
     now = utc_now()
@@ -1120,7 +1120,11 @@ async def claim_tool_call(
             and previous_context.AgentId == execution.context.AgentId
             and previous_context.Channel == execution.context.Channel
         )
-        if same_scope and existing.Status == "started":
+        if (same_scope and existing.Status == "started"
+                and existing.ToolName == tool_name
+                and existing.QueryHash == (hashlib.sha256(query.strip().upper().encode("utf-8")).hexdigest() if query else None)):
+            existing.ExecutionContextId = execution.context.Id
+            db.add(existing)
             return existing
         raise PlatformForbidden("工具请求已处理")
     call = PlatformToolCall(

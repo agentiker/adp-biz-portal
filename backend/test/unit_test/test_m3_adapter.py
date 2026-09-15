@@ -37,7 +37,7 @@ async def test_lookup_normalizes_query_passes_customer_scope_and_returns_allowli
     assert result.query == "BL-123"
     assert client.calls == [{"query": "BL-123", "customer_code": "ENT-001"}]
     assert {item["label"] for item in result.evidence} == {
-        "提单号", "箱号", "船名 / 航次", "预计抵港", "当前节点", "实际抵港",
+        "订单号", "提单号", "箱号", "船名 / 航次", "预计抵港", "当前节点", "实际抵港",
     }
     assert all("InternalCost" not in item for item in result.evidence)
     bill = next(item for item in result.evidence if item["label"] == "提单号")
@@ -99,3 +99,21 @@ async def test_lookup_rejects_invalid_query_and_unconfigured_provider():
 async def test_lookup_does_not_accept_empty_customer_scope():
     with pytest.raises(ValueError, match="customer_code"):
         await M3LookupAdapter(client=StubM3Client([])).lookup(query="BL-123", customer_code="")
+
+
+@pytest.mark.asyncio
+async def test_fixed_mock_scope_unknown_and_section_contracts():
+    adapter = M3LookupAdapter(use_mock=True)
+    for query in ("MOCK-BL-A001", "MOCK-CONT-A001", "MOCK-ORDER-A001"):
+        result = await adapter.lookup(query=query, customer_code="MOCK-ENT-A")
+        assert result.status == "found"
+        assert "模拟数据" in result.summary
+    foreign = await adapter.lookup(query="MOCK-BL-B001", customer_code="MOCK-ENT-A")
+    missing = await adapter.lookup(query="DOES-NOT-EXIST", customer_code="MOCK-ENT-A")
+    assert (foreign.status, foreign.evidence, foreign.summary) == (missing.status, missing.evidence, missing.summary)
+    schedule = await adapter.schedule(query="MOCK-BL-A001", customer_code="MOCK-ENT-A")
+    assert {i["label"] for i in schedule.evidence} == {"船名 / 航次", "预计抵港"}
+    milestones = await adapter.milestones(query="MOCK-BL-B001", customer_code="MOCK-ENT-B")
+    assert all(not i["known"] and i["value"] == "暂无数据" for i in milestones.evidence)
+    unowned = M3LookupAdapter(use_mock=True, mock_records=[{"BillNo": "UNOWNED"}])
+    assert (await unowned.lookup(query="UNOWNED", customer_code="MOCK-ENT-A")).status == "not_found"

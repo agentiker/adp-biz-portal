@@ -22,14 +22,14 @@ from typing import Any, Awaitable, Callable, Mapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.channel_identity import resolve_active_channel_identity
-from core.platform import permissions_for_role, require_permission, utc_now, PlatformContext
+from core.platform import issue_execution_context, load_execution_context, permissions_for_role, require_permission, utc_now, PlatformContext
 from core.platform_worker import (
     _execute_provider,
     _provider_agent_id,
     _result_payload,
     allowlisted_evidence,
 )
-from integrations.adp.provider import AgentRequest
+from integrations.adp.provider import ADPAgentProvider, AgentRequest
 from integrations.channels.stream_sink import SnapshotStreamSink
 from integrations.channels.text_format import to_plain_text
 from model.account import Account, AccountStatus
@@ -39,6 +39,7 @@ from model.platform import (
     PlatformEnterprise,
     PlatformEvidence,
     PlatformExecutionRun,
+    PlatformExecutionContext,
     PlatformMembership,
     PlatformMessage,
     PlatformStatus,
@@ -116,6 +117,8 @@ async def run_wecom_bot_turn(
         return {"status": "duplicate"}
 
     db = sessionmaker()
+    execution = None
+    execution_id = None
     try:
         identity = await resolve_active_channel_identity(
             db, channel=channel, channel_instance_id=channel_instance_id,
@@ -157,7 +160,7 @@ async def run_wecom_bot_turn(
         require_permission(context, "shipment.read")
 
         # Resolve the ADP application for this enterprise; the process-level
-        # provider (from .env) is the fallback when no DB app is configured.
+        # provider argument is only an explicit test dependency.
         from integrations.adp.registry import resolve_provider_for_enterprise
 
         resolved_provider = await resolve_provider_for_enterprise(
@@ -172,6 +175,17 @@ async def run_wecom_bot_turn(
         db.add(conversation)
         await db.flush()
         run_id = f"run_{uuid.uuid4().hex}"
+        raw_token = ""
+        execution = None
+        if isinstance(resolved_provider, ADPAgentProvider):
+            raw_token, execution = await issue_execution_context(
+                db, platform_context=context, channel=channel,
+                agent_id=_provider_agent_id(resolved_provider), enterprise_id=str(enterprise.Id),
+                conversation_id=str(conversation.Id), run_id=run_id,
+            )
+            execution_id = execution.Id
+            # The HTTP callback uses another connection and must see this scope.
+            await db.commit()
         request = AgentRequest(
             agent_id=_provider_agent_id(resolved_provider),
             conversation_id=str(conversation.Id),
@@ -181,6 +195,7 @@ async def run_wecom_bot_turn(
             customer_code=str(enterprise.CustomerCode),
             trace_id=message.trace_id or "wecom-bot",
             visitor_id=f"platform:{enterprise.Id}:{account.Id}",
+            context_token=raw_token,
         )
 
         sink = SnapshotStreamSink(reply_stream, render=_wecom_think_render)
@@ -188,8 +203,20 @@ async def run_wecom_bot_turn(
         try:
             raw = await _execute_provider(resolved_provider, request, sink=sink)
         finally:
-            await sink.close()
+            if execution is None:
+                await sink.close()
         result = _result_payload(raw, query=query.upper())
+        if execution is not None:
+            from core.adp_evidence import reconcile_tool_result
+            # Discard pre-provider identity-map objects so concurrent revocation
+            # is checked against current database values before the final reply.
+            db.expunge_all()
+            current = await load_execution_context(db, token=raw_token, tool_name="shipment.lookup",
+                                                   request_id=f"final:{run_id}")
+            execution = current.context
+            result = await reconcile_tool_result(db, context_id=execution.Id, query=query)
+            execution.RevokedAt = utc_now()
+            db.add(execution)
         evidence = allowlisted_evidence(result.get("evidence"))
 
         run = PlatformExecutionRun(
@@ -213,9 +240,18 @@ async def run_wecom_bot_turn(
             TraceId=message.trace_id,
         ))
         await db.commit()
+        if execution is not None:
+            await sink.emit(str(result["summary"]))
+            await sink.close()
         return {"status": "streamed", "frames": sink.frames, "conversationId": str(conversation.Id)}
     except Exception:
         await db.rollback()
         raise
     finally:
         await db.close()
+        if execution_id is not None:
+            async with sessionmaker() as cleanup:
+                row = await cleanup.get(PlatformExecutionContext, execution_id)
+                if row is not None and row.RevokedAt is None:
+                    row.RevokedAt = utc_now()
+                    await cleanup.commit()

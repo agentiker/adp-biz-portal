@@ -2,7 +2,7 @@
 
 > 关联方案：[docs/plans/2026-09-04-unified-business-platform-design.md](docs/plans/2026-09-04-unified-business-platform-design.md)
 
-更新时间：2026-09-08
+更新时间：2026-09-16
 总目标：完成统一业务接入平台方案落地，并完成前端 UI/UX 收尾。
 
 ## 状态规则
@@ -19,8 +19,8 @@
 |---|---|---|---|
 | M0 技术验证与风险收敛 | 部分完成 | 风险边界和验证清单已整理 | M3/渠道/ADP 的真实文档、权限、样本和联调 |
 | M1 业务底座与后台 | 本地第一版和安全回归完成 | 企业、用户、角色、范围、登录、配置、ADP Chat 调试入口、后台浏览器验收和响应式收尾；旧路径安全回归和版本化迁移已完成 | 上游 Workspace 归属闭环、真实跨企业隔离证据、生产多实例限流存储 |
-| M2 官网 + M3 只读闭环 | 本地 Worker/Portal 编排和 ADP Provider 边界完成，真实第三方闭环未完成 | 执行上下文、服务端 Agent 映射、ADP SSE/证据边界、M3 受控 Provider、任务队列、可运行 Worker、API 接线、Portal 会话持久化、隔离验收、重试边界和撤权后的待发送任务失效 | 真实渠道接入、真实 ADP Agent 联调、真实 M3 |
-| M3 多渠道接入 | 本地统一框架与 Web 渠道 E2E 已完成，微信服务号明文/AES 协议边界已覆盖，真实渠道协议未联调 | 渠道契约/能力声明/注册表、标准入站出站边界、Web 异步入站状态查询、durable inbound -> Worker -> Agent/M3 Provider -> Portal 回复闭环、重复消息幂等和本地隔离验证；平台级渠道凭据边界已完成，渠道身份的平台用户级作用域正在纠偏；微信服务号支持明文与安全模式回调验签/解密/AppID 校验 | 微信客服、企微适配器、真实身份样本、发送协议和真实联调；跨进程重放保护 |
+| M2 官网 + M3 只读闭环 | 本地 Mock/HTTP 连接器与回执回复已完成，真实 ADP 联调 BLOCKED | 执行上下文、服务端 Agent 映射、ADP SSE/证据边界、M3 受控 Provider、任务队列、可运行 Worker、API 接线、Portal 会话持久化、隔离验收、重试边界和撤权后的待发送任务失效 | 真实渠道接入、真实 ADP Agent 联调、真实 M3 |
+| M3 多渠道接入 | 本地框架/Web E2E 完成；微信服务号已由用户确认验收，企微已有真实 WS 验证 | 渠道契约/能力声明/注册表、标准入站出站边界、Web 异步入站状态查询、durable inbound -> Worker -> Agent/M3 Provider -> Portal 回复闭环、重复消息幂等和本地隔离验证；平台级渠道凭据边界已完成，渠道身份的平台用户级作用域正在纠偏；微信服务号支持明文与安全模式回调验签/解密/AppID 校验 | 微信客服、企微适配器、真实身份样本、发送协议和真实联调；跨进程重放保护 |
 | M4 试运行与交付 | 本地部署基线、文档、发布基础、账号开通材料和安全专项回归完成，生产交付未开始 | OpenAPI/前端类型契约已生成并校验；Docker Compose、环境模板、健康探针、数据字典、排障手册、发布/迁移/回滚运行手册、账号开通 SOP/验收/培训材料已补齐；迁移 CLI、本地隔离 schema 演练和日志/密钥/口令脱敏与权限回归已完成 | 生产部署权限、真实备份恢复、RPO/RTO、压测、正式发布和真实第三方培训交付 |
 
 当前验证基线：本轮部署基线已通过 Compose 配置解析、健康探针定向测试、Python 编译、OpenAPI/前端类型契约检查、渠道框架单测、Web PostgreSQL E2E、一次本地 PostgreSQL 备份恢复演练和 `git diff --check`；验证均为与变更直接相关的定向命令，不重复全量后端或浏览器测试。真实 ADP/M3/渠道联调仍不在本地验证范围内。
@@ -39,7 +39,10 @@
 
 部署进展（2026-09-13，项目重命名割接 + 迁移 14→16）：将分支 `refactor/rebrand-adp-business-gateway`（提交 `daeed27`，`adp-chat-client`→`adp-business-gateway` 全量重命名：compose 项目名/镜像名/DB 迁移锁 key、目录 `client`→`frontend`/`server`→`backend`、前端分层重组）以镜像 `adp-business-gateway:daeed27` 部署到 `xdimspace-01`。本轮仅项目自身包名变、第三方依赖闭包未变，故按 skill overlay 到上一个在役镜像 `adp-chat-client:9f6495b` 构建（Docker Hub 拉 `python:3.12-slim` 仍 EOF）。**割接前** `pg_dump -Fc` 备份到 `/root/adp-backups/adp_chat-pre-rename-20260913184250.dump`（204K，`pg_restore -l` 列出 31 个 TABLE DATA，可恢复），并把在役镜像 tag 为 `adp-chat-client:rollback-pre-rename`。`docker-compose.yml` 把 `platform-postgres` 命名卷**钉死**为 `adp-chat-client_platform-postgres`：`down` 旧项目 → 换 compose → `up` 新项目 `adp-business-gateway`，**数据原地复用**（compose 提示卷属旧项目的 warning 为良性，未新建空卷）；已重启 reverse-proxy。**实测生产 DB 割接前在 revision 14**（非预期的 16），`compose up` 的一次性 `migrate` 增量应用 revision 15（`platform_enterprise_contact`）与 16（`platform_adp_app`）到 16，业务数据完整（审计 94、消息 72、会话 35 等行数保留）。公网 `/healthz`=ok、`/readyz`=ready schemaRevision **16**；api/worker/wecom-ws-gateway/reverse-proxy 均 healthy。已知 `[TCADP.get_info] 450006` 元信息报错为既有问题、与本次无关。服务器 `.env`（无 `APP_IMAGE` 行，走 compose 默认 `adp-business-gateway:local`）、PostgreSQL 数据卷未触碰。回滚：app 用 `adp-chat-client:rollback-pre-rename` + 旧 compose `docker-compose.pre-rename.yml`（已留在服务器）`up`；如需回退 schema 到 14，从上述 dump 恢复（15/16 为增量表，`migrate.py downgrade --target 14 --allow-data-loss` 亦可）。
 
-当前任务计数：`50 / 66` 项已完成，`16` 项未完成（其中 `7` 项 `BLOCKED`、`7` 项 `IN PROGRESS`、`2` 项 `TODO`）。新增并完成 `M1-ADMIN-03`（DONE 2026-09-11，组件库收敛为纯 ADP agent chat 调试组件 + 直通 ADP 旧路由权限收紧到管理员 + docs 逐页清理）与 `M1-ADMIN-04`（DONE 2026-09-11，消除调试页双侧边栏、两栏重写 + 会话列表所有权回迁 + token 续期，真实浏览器验收通过并修复一处「新建会话」自递归阻塞回归）。`M3-WECHAT-CS-01` 转入 `IN PROGRESS`（微信客服协议核心 + 共享 crypto + 迁移 14 游标已落地并单测，网络投递/编排/联调未完成）。新增 `M3-WECHAT-OA-04`（DONE，公众号卡片改为免登录只读结果页 + 迁移 revision 13）。新增 `M2-ADP-ROUTE-01`（DONE，Worker 默认路由平台唯一 ADP 应用、不以 M3 为前置）与 `M3-WECHAT-OA-03`（IN PROGRESS，ACK+流式+Markdown+图文卡片，对齐 ADP 原生体感，含一处有意的证据校验范围变更）。首个真实微信认证服务号已接入并完成绑定/入站/出站真实联调。新增 `M3-REFACTOR-01`（渠道适配层结构化 + 契约中性化 + crypto 统一 + `channel_ingress` seam，作为微信客服/企微适配器前置）。多渠道适配参考调研（openclaw-china / AstrBot / LangBot）已完成并定为库级借鉴、不迁宿主：见 `docs/plans/2026-09-08-channel-adapter-reference-research.md`。`M3-PLATFORM-SCOPE-01` 已完成：平台唯一 ADP 应用由服务器 `.env` 提供，渠道实例独立于企业，企业范围只在消息身份鉴权和业务执行阶段生效。新增并完成 `M2-CHANNEL-FIX-01`（渠道投递与企业范围偏差纠正）和 `M2-TEST-FIX-01`（测试基座路由重复注册修复）。`M3-IDENTITY-01` 正在纠正历史实现中渠道身份固定关联企业、以及渠道执行依赖浏览器登录态的偏差；真实 ADP/M3/微信第三方联调仍未完成。
+当前任务计数：`50 / 69` 项已完成，`19` 项未完成（其中 `9` 项 `BLOCKED`、`8` 项 `IN PROGRESS`、`2` 项 `TODO`）。
+
+本轮进展（2026-09-16）：`M2-ORCH-MOCK-01` 完成固定双企业 M3 数据、三个 HTTP 工具、隐藏上下文、回执驱动回复及 Worker/企微 Bot 本地验证。`M3-WECHAT-OA-03` 按用户明确反馈标记已验收。`M4-ADP-CFG-01` 本地业务运行取消 `.env` 应用回退，改用数据库绑定/默认应用；远程 `.env` 未修改。`M2-ORCH-01` 与 `M4-ADP-CFG-01` 的真实验收仍需发布代码、录入应用、导入 ADP 连接器和验证云端隐藏参数映射，标记 BLOCKED。9 月 13 日生产已经迁移至 revision 16，不再把迁移 16 当作未完成前置。此前任务中的 server/client 路径、环境应用映射与原始流式行为属于历史记录，当前以本轮补充及 [连接器联调方案](docs/plans/2026-09-16-adp-m3-mock-connector.md) 为准。
+
 ## M0：技术验证与风险收敛
 
 ### 已处理
@@ -250,8 +253,19 @@
   - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q` 由“收集中断”变为 `165 passed`（需本地库先 `python migrate.py upgrade` 到 revision 12）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration -q` 为 `28 passed`。
   - 边界：与 `.env` 无关的纯本地测试基座修复；不改变生产路由集合，legacy 兼容 API 回归（`test_legacy_route_security_api.py` 等）在迁移后的库上全部通过。
 
+- [x] `M2-ORCH-MOCK-01` 实现固定 M3 Mock、ADP HTTP 连接器与本轮回执驱动的业务回复。
+  - 状态：`DONE`（2026-09-16，仅本地 Mock/连接器契约验收，从 `M2-ORCH-01` 拆出）。
+  - 完成文件：`backend/integrations/m3/{mock,adapter}.py`、`backend/router/platform.py`、`backend/integrations/adp/provider.py`、`backend/core/{platform,platform_worker,adp_evidence}.py`、`backend/integrations/channels/wecom_bot/gateway.py`；连接器契约 `docs/api/adp-tools.openapi.yaml`，操作说明 `docs/plans/2026-09-16-adp-m3-mock-connector.md`。
+  - 验证环境：本机 Python 3.12 虚拟环境，独立测试库 `adp_biz_portal_orch_test`，每个集成夹具创建随机隔离 schema 并清理；未写开发库。虚拟环境 pytest 脚本 shebang 仍指向旧目录，使用 `backend/.venv/bin/python -m pytest`。
+  - 验证命令：显式设置 `PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://jyxc-dz-0100610@localhost/adp_biz_portal_orch_test'` 后运行 `backend/.venv/bin/python -m pytest backend/test/integration/test_adp_connector_postgres.py backend/test/integration/test_platform_worker_postgres.py backend/test/integration/test_adp_app_registry_postgres.py backend/test/integration/test_wecom_bot_stream_postgres.py backend/test/integration/test_web_channel_e2e_postgres.py -q`。42 项通过；覆盖真实 HTTP handler、三个操作、错误鉴权/范围/长度、跨企业/不存在、重放、缺少回执/冲突、令牌撤销、查询期间撤权、持久化和最终帧。
+  - 定向单测：同一 Python 执行 `test_m3_adapter.py`、`test_agent_provider.py`、`test_worker_agent_routing.py`、`test_platform_worker_retry.py`、`test_delivery.py`、`test_security_logging.py`（均位于 `backend/test/unit_test/`）40 项通过；`test_platform_config.py` 25 项通过。`make platform_api_check`、前端 `npm run type-check`、改动 Python 语法检查、连接器 YAML 引用/三路由/双鉴权检查和 `git diff --check` 通过。
+  - 遗留问题：Mock 不代表真实 M3/ADP 联调；schedule/milestones 是 lookup 数据投影。业务回答等待本轮回执，模型文本不直接向用户流出；发布后需回归渠道体验。仅见既有 websockets.legacy 与 utcfromtimestamp 弃用告警。
+  - 范围：三个只读工具、两企业固定样例、隐藏执行上下文、回执证据合并、Worker/企微 Bot、OpenAPI 导入文档和隔离数据库回归；真实 ADP 云端配置由父任务验收。
+
 - [ ] `M2-ORCH-01` 串入消息处理、Agent/ADP 执行、M3 查询、证据校验和回复发送。
-  - 状态：`IN PROGRESS`（2026-09-06）
+  - 状态：`BLOCKED`（2026-09-16，本地子任务 `M2-ORCH-MOCK-01` 已完成，等待真实 ADP 连接器配置和参数映射验收）。
+  - 解除方式：发布本轮代码，在 ADP 云端导入连接器、配置服务凭据和隐藏变量，用 Portal/渠道真实发起 Mock 查询并留存审计与拒绝用例；正式 M3 数据仍单独依赖 `M2-M3-02`。
+  - 本轮范围（2026-09-15 启动，现已拆出本地验收子项）：按用户授权先以固定虚构 M3 数据接通 ADP HTTP 连接器，覆盖 lookup/schedule/milestones 语义、隐藏上下文传递、服务鉴权、企业隔离、回调证据与回复闭环。真实 M3 仍由 `M2-M3-02` 验收，真实 ADP 隐藏变量回调需 `M0-ADP-01` 条件；本地模拟不替代云端验收。
   - 验收：模型不能决定身份/权限；关键船名、航次、时间和状态均可映射到本轮证据。
   - 本轮完成（2026-09-06，本地 Worker/Portal 编排）：入站任务在服务端重新校验账号、会话、企业范围和 `shipment.read` 权限；创建并持久化 execution run、入站/assistant 消息、受控 evidence；通过独立 `AgentProvider` 边界执行 Agent 请求；创建 `platform.reply` 任务；官网回复通过 Portal 持久化结果视为已投递；非官网渠道未配置真实发送器时明确失败或标记发送结果不确定，不伪报成功。
   - 代码证据：`server/core/platform_worker.py`、`server/integrations/adp/provider.py`、`server/test/unit_test/test_agent_provider.py`、`server/test/integration/test_platform_worker_postgres.py`、`output/tests/m2-orch-01-worker.json`。
@@ -259,7 +273,7 @@
   - 运行接线：新增 `server/worker.py`、`Makefile run_worker` 和 `LOCAL_RUN.md` 启动说明。默认使用受控 M3 Provider；只有显式 `M3_USE_MOCK=true` 才使用 fixture，未配置真实 M3 时返回持久化 `upstream_error`，不会静默伪造结果。
   - 本轮新增 Provider 边界（2026-09-06，本地定向验证）：`server/integrations/adp/provider.py` 新增服务端映射的 `ADPAgentProvider`，解析 ADP SSE 文本增量、受控 trace/request ID、显式 evidence 白名单和 `error` 事件；未知事件忽略，供应商异常只落类型，不泄露 AppKey/Token。`AgentRequest.visitor_id` 固定为 `platform:<enterprise UUID>:<account UUID>`，不使用姓名、手机号或客户端 `agentId`。`server/worker.py` 仅从服务端 `ADP_AGENT_CONFIGS` 选择 Agent/Application，映射缺失、应用不存在或 Vendor 不支持 `chat` 时 fail closed。
   - 验证命令与结果：`server/.venv/bin/pytest server/test/unit_test/test_agent_provider.py -q`，`6 passed`；`server/.venv/bin/python -m py_compile server/config/tcadp_config.py server/integrations/adp/provider.py server/core/platform_worker.py server/worker.py server/test/unit_test/test_agent_provider.py`、`git diff --check` 通过。Worker PostgreSQL 集成验收仍覆盖 `13 passed`，并新增 VisitorId 格式断言；证据写入 `output/tests/m2-orch-01-adp-provider.json`。
-  - 当前仍未满足完成条件：真实 ADP Agent 编排、真实 M3 数据和微信/企微发送协议尚未联调；本地撤权后的旧上下文和待发送任务失效已由 `M2-ACCESS-03` 完成，真实第三方联调仍待外部条件。
+  - 当前未满足条件：真实 ADP Agent 的隐藏上下文和工具回调未验收、真实 M3 未接入；微信服务号已验收和企微已有 WS 记录不能替代本轮业务工具端到端验收。
 
 - [ ] `M2-M3-02` 使用真实 M3 数据验证订单、提单、箱号、船名、航次、预计/实际船期和未知状态处理。
   - 状态：`BLOCKED`
@@ -320,19 +334,21 @@
   - 真实联调进展（2026-09-08→09，认证服务号 + 安全模式，生产 `adp.xdimspace.cn`）：这是首个接入的真实渠道账号，`M0-CHANNEL-01`/`M3-QA-01` 的「至少一个可用渠道账号」前置已满足（其余真实渠道仍缺）。真实微信端到端验证：服务器配置 URL 验证（明文 GET）通过；入站 AES 安全模式验签+解密+身份解析（绑定后 `processed`）；出站客服消息真实投递成功（`platform.reply` succeeded，`stable_token`+`custom/send` 真实调通）。修复两个真实环境暴露的缺陷：(a) errcode `40164` IP 不在白名单——需将服务器出口 IP 加入公众号 IP 白名单；(b) UTF-8 编码——aiohttp `json=` 默认 `ensure_ascii=True` 使中文投递为 `\uXXXX` 字面量，改为 `ensure_ascii=False`+UTF-8 bytes+`charset=utf-8` header，由真实投递验证。
 
 - [x] `M2-ADP-ROUTE-01` Worker 默认路由到平台唯一 ADP 应用，业务网关不以 M3 配置为前置。
+  - 2026-09-16 当前实现已由 M4-ADP-CFG-01 替代：企业绑定/平台默认均来自数据库；以下环境变量路由是历史修复记录。
   - 状态：`DONE`（2026-09-08，本地实现 + 生产验证消息到达 ADP）
   - 背景：`worker.py::build_agent_provider` 原逻辑为 `ADP_AGENT_CONFIGS` 为空即回落本地 M3 provider、绕过 ADP。生产未配 `ADP_AGENT_CONFIGS`，每条消息去查 M3 配置、查不到即 `upstream_error`（客户收到「业务系统暂时不可用」）。与方案 §6.2「校验通过后才转发给一期全平台唯一的 ADP 应用，其运行配置由 `APP_CONFIGS` 提供」不符——M3 是否接入 ADP agent 属 agent 侧工具配置、不确定，不能作为消息到达 ADP 的前置。
   - 修复：优先级改为 ① `ADP_AGENT_CONFIGS` 显式映射（行为不变）；② `APP_CONFIGS` 恰好一项 → 平台唯一 ADP 应用（与 API `_adp_config_status()` 同口径）；③ 仅当 `M3_USE_MOCK`/`M3_BASE_URL` 刻意配置才用本地 M3 provider（开发）；④ 全空 → 无 vendor 的 ADP provider，消息诚实报 upstream error 并 ERROR 日志，不用本地替身冒充生产。多 `APP_CONFIGS` 无显式映射时 fail closed。
   - 验证：`test_worker_agent_routing.py`（8 passed，含「缺 M3 不阻断到达 ADP」回归主项）、全量 204 passed。生产：修复后真实微信消息成功到达 ADP 并返回回答（此前恒 upstream_error）。
   - 遗留风险：生产 `DescribeApp` 元信息接口仍报 `450006-用户未登录或者未注册`；`chat` 走通说明其授权有效，但二者共用 `TC_SECRET_*`，元信息接口授权需腾讯云侧确认。
 
-- [ ] `M3-WECHAT-OA-03` 对齐 ADP 原生对话体感：ACK + 流式输出 + Markdown 适配 + 图文卡片。
-  - 状态：`IN PROGRESS`（2026-09-09，本地实现与回归完成、已部署；真实微信流式/卡片体感待用户验收）
+- [x] `M3-WECHAT-OA-03` 对齐 ADP 原生对话体感：ACK + 流式输出 + Markdown 适配 + 图文卡片。
+  - 2026-09-16 业务编排补充：M2-ORCH-MOCK-01 对私有业务查询恢复本轮工具回执校验后回复；旧渠道验收成立，本轮业务路径发布后仍需回归。
+  - 状态：`DONE`（2026-09-15，用户确认实际已验收；最终范围为 ACK + 完整答案 + 图文卡片）
   - 背景：核实 `vendor/tcadp/tcadp.py::chat` 为真 SSE 流（`Stream: enable`+`Incremental: true`，逐行 `readline` 逐事件 `yield`，vendor 零攒批），流被 `ADPAgentProvider` 累积收敛成一次性全文。目标对齐 ADP 原生：先 ACK 再流式。
   - 完成证据：`ADPAgentProvider.execute` 新增可选 `sink`，边收 `text.delta` 边转发；`_execute_provider` 按签名探测，旧 `execute(request)` provider 不受影响。新增 `stream_sink.py::ChannelStreamSink`（句末/段落分块、每块独立幂等键 `platform-stream:<inbound>:<seq>`、失败即停不中断 run、上限 12 块下限 60 字防 `45009`）与 `text_format.py`（markdown→纯文本，emoji/换行保留；`split_at_boundary` 供切分）。回调 5 秒内返回被动 ACK「已收到，正在为你查询…」（加密模式同样加密）。`wechat_transport.send_news`+`send_result_card` 追发 `msgtype=news` 图文卡片（标题+摘要+回 Portal 链接，需 `PLATFORM_PUBLIC_BASE_URL`，未配置则跳过）。回复任务见 `streamedChunks>0` 不重发正文、只补卡片。
   - 有意的范围变更（安全）：按用户明确指示「鉴权通过后直接转发 ADP 流式给客户端」，流式文本不再经发送前证据白名单校验，`allowlisted_evidence()` 移到流结束后运行（Portal 侧仍保留完整校验记录与证据）。偏离方案「关键业务结论校验后返回」。前置权限校验（execution context + tool claim）仍在流开始前完成。若模型流出不实业务结论需重新评估。
   - 验证：`test_text_format.py`（17）、`test_stream_sink.py`（13，含幂等/断点续发/失败不中断/限流/向后兼容）、`test_wechat_transport.py`（31，含卡片与 UTF-8）；全量 237 passed、集成 28 passed。
-  - 待验收（真实微信）：ACK 秒回、答案分条流入、结尾图文卡片、中文/emoji 正常、markdown 清理；worker 日志核对分块数/卡片投递/`45009`。分块节奏（`min_chars`/`max_chunks`）可调。
+  - 历史验收清单（用户于 2026-09-15 确认完成）：ACK 秒回、答案分条流入、结尾图文卡片、中文/emoji 正常、markdown 清理；worker 日志核对分块数/卡片投递/`45009`。分块节奏（`min_chars`/`max_chunks`）可调。
   - 范围调整（2026-09-09，公众号改单条输出）：核实微信公众号平台**无真流式/可更新消息原语**（`custom/send` 发离散消息、图文卡片静态不可改；对照三方——openclaw-china 公众号 `custom/send` 多条 chunk、AstrBot 被动占位、LangBot `officialaccount` 仅 `drop/passive`，均无真流式；LangBot 的真流式在**企业微信智能机器人** `wecombot.push_stream_chunk`/`stream_id`）。故公众号分条「假流式」无收益，改为 **ACK + 一条完整答案（`msgtype=text`）+ 结尾图文卡片（`msgtype=news`，与 openclaw msgtype 用法一致）**。实现：`_build_stream_sink` 仅在 sender 声明 `supports_incremental_stream` 时建流式 sink（公众号未声明 → 单条完整答案）；`ChannelStreamSink`/`text_format` 保留供 `M3-WECOM-01` 企微机器人真流式复用；worker 非流式回复路径在发完正文后追发图文卡片（卡片失败不失败回复）；`WechatOfficialAccountSender.send` 用 `text_format.to_plain_text` 清 markdown（保持原分条路径的清理不退化）。真流式明确归 `M3-WECOM-01`（企微机器人）与 Portal 网页端（已有 SSE）。
   - 修复 45002 长文本被拒（2026-09-09）：生产真实 800 字报告未出卡片，worker 日志 `errcode=45002`。根因：`wechat_transport._text_body` 按**字符**截断（`MAX_TEXT_CHARS=2000`），而微信客服文本限制是**字节（~2048）**；2000 汉字≈6000 字节 → 45002 → 文本发送失败 → 回复任务在发文本这步中止 → 其后的卡片根本没发（DB 里留下 1 条已铸 token 的孤儿行为证）。改为按字节截断 `MAX_TEXT_BYTES=2000`（字符边界切）+ 追加「…（完整内容见下方卡片）」预览；文本发送成功后卡片才追发。落实调研中 openclaw「按字节切分」教训。新增中文字节截断单测。验证：`pytest test/unit_test -q`（`253 passed`）、集成（`30 passed`）、`make platform_api_check`（42/51）通过。
   - 验证命令与结果：`server/.venv/bin/pytest test/unit_test -q`（`240 passed`，新增 `_build_stream_sink` 能力门控 2 项、sender markdown 清理 1 项）；`PLATFORM_TEST_DATABASE_URL=... server/.venv/bin/pytest test/integration/test_web_channel_e2e_postgres.py test/integration/test_platform_worker_postgres.py test/integration/test_delivery_postgres.py -q`（`22 passed`）；`make platform_api_check`（41 操作/50 schema，类型已同步，无 API 变更）、`git diff --check` 通过。
@@ -364,7 +380,7 @@
   - 状态：`DONE`（2026-09-15；建立 `backend/channels` 一等包与中性 contracts，core ingress/delivery 和现有适配器改为依赖 contracts；保留 integrations 路径作为兼容实现入口）。作为 `M3-WECHAT-CS-01` 和 `M3-WECOM-01` 的结构前置。
   - 范围：`server/channels/`（从 `integrations/channels/` 提升）；`channels/contracts.py` 收敛 `InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities` 使 core 依赖契约而非反向；`channels/_wechat/{crypto,crypto_json,token,text}.py` 供公众号/客服/企微复用；`ChannelAdapter.normalize` 收成带类型签名并新增 `get_launcher_id` 会话键钩子；把「验签→normalize→replay→身份→入队」从 2266 行的 `router/platform.py` 抽到 `core/channel_ingress.py`（鉴权仍留平台服务侧，不进渠道包）。
   - 验收：适配器仍不触碰 DB/models/identity/credentials/replay；渠道包依赖仅指向 `contracts`；每文件 <400 行、crypto 单份；现有 `M3-FRAMEWORK-01`/`M3-WECHAT-OA-01` 测试全绿且行为不变。
-  - 完成证据：`backend/channels/contracts.py`、`backend/channels/__init__.py`；`backend/core/channel_ingress.py`、`backend/core/delivery.py` 与渠道适配器改用中性契约；兼容导出保留既有调用方。验证：`backend/.venv/bin/pytest backend/test/unit_test -q`、`backend/.venv/bin/python -m compileall -q backend`、`git diff --check`（均通过）。
+  - 完成证据：`backend/channels/contracts.py`、`backend/channels/__init__.py`；`backend/core/channel_ingress.py`、`backend/core/delivery.py` 与渠道适配器改用中性契约；兼容导出保留既有调用方。验证记录更正（2026-09-16）：此前记载的全量 unit/compileall 通过缺少可核验执行结果，不作为本轮验收证据；本轮实际执行范围和结果见 `M2-ORCH-MOCK-01`。
   - 偏差/遗留：历史包路径 `backend/integrations/channels` 暂保留，待后续版本在无外部导入约束时物理迁移；真实第三方联调仍按各渠道任务状态执行。
   - 依据：`docs/plans/2026-09-08-channel-adapter-reference-research.md` §6。
 - [x] `M3-CRED-01` 实现渠道凭据加密存储、轮换、最小权限读取和脱敏展示。
@@ -464,11 +480,13 @@
   - 验证：`test/integration/test_admin_conversations_postgres.py`(3) 覆盖跨企业列出/分页/`platform.manage` 拒绝 + 详情按 id 读；后端 `337 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
   - 未完成：生产部署（无 schema 变更，app-only）。
 - [ ] `M4-ADP-CFG-01` ADP 应用配置化 + 多应用（按企业绑定、凭据 DB 加密、Admin 可编辑）。
-  - 状态：`IN PROGRESS`（2026-09-11，后端 + 前端本地完成并测试；未部署；真实 ADP 应用联调待录入）。
+  - 状态：`BLOCKED`（2026-09-16，数据库应用唯一来源的本地实现与验证已完成，待应用配置和真实路由验收）。
+  - 本轮完成：`backend/worker.py` 不再构造 `.env` 默认 Provider；`integrations/adp/registry.py` 仅解析 DB 企业绑定/启用默认应用，绑定失效不回退、每应用签名凭据必填。Worker 与企微 Bot 使用该注册表；`Admin.vue` 移除 `.env` 回退卡片；README、LOCAL_RUN 和环境模板同步。验证见 `M2-ORCH-MOCK-01`，其中注册表集成覆盖绑定/默认选择、停用拒绝、加密与缓存刷新，前端类型检查通过。
+  - 本轮调整（2026-09-15 启动，本地实现现已完成）：业务运行仅从数据库 ADP 应用注册表解析企业绑定/默认应用，取消服务器 `.env` ADP 默认应用隐式回退；绑定停用时拒绝跨应用回退。保留基础设施配置和旧管理调试兼容配置，部署前须录入并验证数据库应用。
   - 已完成：新表 `PlatformAdpApp`（AppKey 等经 Fernet 加密存 Ciphertext + 非密字段明文，`IsDefault` 部分唯一索引保证至多一个活跃默认）+ `PlatformEnterprise.AdpAppId` FK（ON DELETE SET NULL），迁移 **revision 16**（新表 + ALTER 加列 + FK + 部分唯一索引，混合式；fresh 0→16 与增量均验证）；`channel_credentials` 抽 `decrypt_ciphertext` 供复用；`integrations/adp/registry.resolve_provider_for_enterprise`（企业绑定→默认→`.env` 回退三级，按 ApplicationId+UpdatedAt 缓存 provider，编辑即失效）替换单例——接入 `platform_worker`（每回合按企业解析）与 `wecom_bot/gateway`（回合内解析）；`core/adp_app.py` CRUD（create/update/list/delete，设默认互斥、停用清默认、rotate AppKey）；router `AdminAdpAppList/DetailApi`（`platform.manage`，序列化不吐密钥、只给指纹末 8 位，写审计，改动清 provider 缓存）+ 企业 create/update 接受 `adpAppId`。前端「ADP 应用配置」页改为应用注册表（列表 + 新建/编辑/设默认/停用/删除 + .env 回退信息卡），企业表单加「ADP 应用」下拉（空=平台默认）。OpenAPI 加 4 路径 + `AdpApp`/`Create`/`Update` schema + 企业 schema 补 `adpAppId`（51 ops）并重生成类型。
   - 验证：迁移 16 fresh + 增量 up 通过（表/列/FK/索引存在）；`test/integration/test_adp_app_registry_postgres.py`(5) 覆盖加密往返/序列化不含密钥/三级解析/缓存按 UpdatedAt 失效/默认互斥/停用清默认/重复 ApplicationId 拒绝；后端 `342 passed`；`make platform_api_check` 通过；前端 `type-check` 通过。
   - 迭代（2026-09-11，验收反馈 4 项）：① 「暂时无法加载管理数据」+ ③ 创建 ADP 应用 `permission denied for table platform_adp_app`：本地开发库 `adp_chat_client_local` 的 rev-16 表因以 OS 用户身份迁移导致 owner 错配，`GRANT ALL PRIVILEGES ON TABLE platform_adp_app TO adp_chat_client_local` 修复（`SET ROLE` 下 INSERT 往返验证通过，应用角色可写）；② ADP 应用配置页布局：`.resource-toolbar` 内裸 `<h2>` 默认外边距撑破固定行高，改为 `.toolbar-heading`/`.toolbar-title`（flex 列 + 归零边距）；④ **每个 ADP 应用必填 `TC_SECRET_APPID`/`TC_SECRET_ID`/`TC_SECRET_KEY`/`AppKey`**：四项均随 AppKey 一起 Fernet 加密存 `Ciphertext`（`create_adp_app` 四项必填、`update_adp_app` 解密→合并→重加密支持单项轮换）；`registry._build_provider` 把 `SecretId`/`SecretKey`/`SecretAppId` 注入 vendor 配置，`vendor/tcadp/tcadp.py:tc_config()` 用它们覆盖全局 `.env`，使每个应用用自己的腾讯云密钥签名 API；OpenAPI `Create/UpdateAdpAppRequest` 补三项（Create 必填）并重生成类型；前端弹窗加三个必填密钥字段。新增单测覆盖三项必填校验、per-app 密钥落到 vendor 配置、单项轮换保留其它项；后端相关集成套件 `21 passed`、`unit 286 passed`、`platform_api_check` 通过、前端 `type-check` 通过；本地已重建前端(`build_app`)+组件(`build_component`，顺带补齐并发合入 M1-ADMIN-03/04 遗留的 `adp-chat-component` dist 类型)并重启本地服务（`/readyz` schemaRevision 16、`/api/v1/admin/adp-apps` 鉴权 401 不再 500）。
-  - 未完成：生产部署（迁移 16）；录入真实 ADP 应用后按企业路由的真机验收（沿用现有渠道联调路径）。
+  - 阻塞与解除：生产迁移 16 已于 2026-09-13 完成；本轮代码尚未发布、未修改远程 `.env`。发布前须在后台录入可用数据库 ADP 应用，确认企业绑定/默认配置，再验证真实路由与工具回调。完成前不删除服务器基础设施配置；旧调试凭据清理须在业务迁移验收之后进行。
 
 ## 每个 TODO 的完成标准
 

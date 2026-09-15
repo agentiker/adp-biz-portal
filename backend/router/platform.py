@@ -189,8 +189,8 @@ def _execution_token_from_request(request: Request) -> str:
 
 def _tool_request_id(request: Request) -> str:
     value = request.headers.get("X-ADP-Request-Id", "").strip()
-    if not value:
-        raise PlatformBadRequest("缺少工具请求 ID")
+    if not value or len(value) > 128:
+        raise PlatformBadRequest("工具请求 ID 必须为 1–128 字符")
     return value
 
 
@@ -1669,34 +1669,42 @@ class PlatformInboundApi(HTTPMethodView):
 class AdpShipmentLookupApi(HTTPMethodView):
     """Internal ADP tool callback; browser sessions are never accepted here."""
 
+    operation = "lookup"
+
     async def post(self, request: Request):
         _require_adp_service(request)
         request_id = _tool_request_id(request)
         execution = await load_execution_context(
             request.ctx.db,
             token=_execution_token_from_request(request),
-            tool_name="shipment.lookup",
+            tool_name=f"shipment.{self.operation}",
             request_id=request_id,
         )
         body = _body(request)
         query = body.get("query")
-        if not isinstance(query, str) or not query.strip():
-            raise PlatformBadRequest("请输入提单号或箱号")
+        if not isinstance(query, str) or not query.strip() or len(query.strip()) > 128:
+            raise PlatformBadRequest("请输入不超过 128 字符的订单号、提单号或箱号")
         supplied_conversation = body.get("conversationId")
         if supplied_conversation not in (None, "") and str(supplied_conversation) != str(execution.context.ConversationId):
             raise PlatformForbidden("会话不属于当前执行上下文")
+
+        for field, expected in (("runId", execution.context.RunId), ("agentId", execution.context.AgentId)):
+            if body.get(field) not in (None, "") and str(body[field]) != str(expected):
+                raise PlatformForbidden("请求不属于当前执行上下文")
+        if set(body) - {"query", "conversationId", "runId", "agentId"}:
+            raise PlatformBadRequest("工具请求包含不支持的字段")
 
         trace_id = _trace_id(request)
         call = await claim_tool_call(
             request.ctx.db,
             execution=execution,
-            tool_name="shipment.lookup",
+            tool_name=f"shipment.{self.operation}",
             request_id=request_id,
             trace_id=trace_id,
             query=query,
         )
         try:
-            result = await _m3_adapter().lookup(query=query, customer_code=execution.enterprise.CustomerCode)
+            result = await getattr(_m3_adapter(), self.operation)(query=query, customer_code=execution.enterprise.CustomerCode)
         except Exception:  # Keep provider details out of the internal contract and logs.
             result = M3LookupResult(
                 status="upstream_error",
@@ -1721,7 +1729,7 @@ class AdpShipmentLookupApi(HTTPMethodView):
             trace_id=trace_id,
             outcome=result.audit_outcome or result.status,
             metadata={
-                "tool": "shipment.lookup",
+                "tool": f"shipment.{self.operation}",
                 "runId": execution.context.RunId,
                 "contextId": str(execution.context.Id),
                 "enterpriseId": str(execution.enterprise.Id),
@@ -1733,6 +1741,14 @@ class AdpShipmentLookupApi(HTTPMethodView):
         if execution.context.ConversationId:
             payload["conversationId"] = str(execution.context.ConversationId)
         return json(payload)
+
+
+class AdpShipmentScheduleApi(AdpShipmentLookupApi):
+    operation = "schedule"
+
+
+class AdpShipmentMilestonesApi(AdpShipmentLookupApi):
+    operation = "milestones"
 
 
 async def _default_channel_instance_id(request: Request, channel: str) -> str:
@@ -2637,6 +2653,8 @@ app.add_route(PlatformInboundApi.as_view(), "/api/internal/platform/inbound")
 app.add_route(AdpExecutionContextApi.as_view(), "/api/internal/adp/execution-context")
 app.add_route(AdminAdpChatContextApi.as_view(), "/api/v1/admin/adp-chat/context")
 app.add_route(AdpShipmentLookupApi.as_view(), "/api/internal/adp/tools/shipment/lookup")
+app.add_route(AdpShipmentScheduleApi.as_view(), "/api/internal/adp/tools/shipment/schedule")
+app.add_route(AdpShipmentMilestonesApi.as_view(), "/api/internal/adp/tools/shipment/milestones")
 app.add_route(ChannelIdentityConfirmApi.as_view(), "/api/internal/channel-identities/confirm")
 app.add_route(OpsStatusApi.as_view(), "/api/v1/ops/status")
 app.add_route(AdminOverviewApi.as_view(), "/api/v1/admin/overview")

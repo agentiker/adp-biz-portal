@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import tagentic_config
@@ -42,6 +42,7 @@ from core.platform import (
     utc_now,
 )
 from integrations.adp.provider import (
+    ADPAgentProvider,
     AgentProvider,
     AgentRequest,
     AgentResponse,
@@ -60,6 +61,7 @@ from model.platform import (
     PlatformDeliveryTask,
     PlatformEvidence,
     PlatformExecutionRun,
+    PlatformExecutionContext,
     PlatformEnterprise,
     PlatformInboundMessage,
     PlatformMessage,
@@ -457,13 +459,18 @@ async def process_platform_inbound_task(
             permissions=permissions_for_role(user.Role),
         )
         require_permission(context, "shipment.read")
-        # Resolve the ADP application for this enterprise (DB registry, with the
-        # .env single provider as fallback when no DB app applies).
-        from integrations.adp.registry import resolve_provider_for_enterprise
+        # Resolve the database application; adapter/provider injection is for tests.
+        from integrations.adp.registry import AdpAppConfigError, resolve_provider_for_enterprise
 
-        resolved_provider = await resolve_provider_for_enterprise(
-            db, enterprise, fallback=lambda: agent_provider
-        )
+        try:
+            resolved_provider = await resolve_provider_for_enterprise(
+                db, enterprise, fallback=lambda: (
+                    agent_provider if agent_provider is not None
+                    else ControlledLookupAgentProvider(adapter) if adapter is not None else None
+                )
+            )
+        except AdpAppConfigError as exc:
+            raise DeliveryRejectedError("adp_application_not_configured") from exc
         provider = _resolve_agent_provider(resolved_provider, adapter)
 
         query = (inbound.Text or "").strip()
@@ -550,6 +557,12 @@ async def process_platform_inbound_task(
                 TraceId=trace_id,
             ))
 
+        # Retried runs get a new token; the previous attempt must not call back.
+        await db.execute(update(PlatformExecutionContext).where(
+            PlatformExecutionContext.RunId == run_id,
+            PlatformExecutionContext.AccountId == account.Id,
+            PlatformExecutionContext.RevokedAt.is_(None),
+        ).values(RevokedAt=utc_now()))
         raw_context_token, execution = await issue_execution_context(
             db,
             platform_context=context,
@@ -657,6 +670,7 @@ async def process_platform_inbound_task(
             customer_code=str(enterprise.CustomerCode),
             trace_id=trace_id or "platform-worker",
             visitor_id=f"platform:{enterprise.Id}:{account.Id}",
+            context_token=raw_context_token if isinstance(provider, ADPAgentProvider) else "",
         )
         sink = await _build_stream_sink(
             reply_sender,
@@ -678,6 +692,14 @@ async def process_platform_inbound_task(
         raise
     except Exception:
         result = _upstream_error_result(query.upper())
+    finally:
+        # Close the callback window even when the provider fails or retries.
+        async with sessionmaker() as cleanup:
+            await cleanup.execute(update(PlatformExecutionContext).where(
+                PlatformExecutionContext.Id == execution.Id,
+                PlatformExecutionContext.RevokedAt.is_(None),
+            ).values(RevokedAt=utc_now()))
+            await cleanup.commit()
 
     final_db = sessionmaker()
     try:
@@ -695,6 +717,13 @@ async def process_platform_inbound_task(
         ).scalar_one_or_none()
         if final_call is None or final_inbound is None or final_run is None:
             raise DeliveryTaskError("编排记录不存在")
+        active_context = (await final_db.execute(select(PlatformExecutionContext).where(
+            PlatformExecutionContext.Id == execution.Id,
+        ).with_for_update())).scalar_one()
+        active_context.RevokedAt = utc_now()
+        if isinstance(provider, ADPAgentProvider):
+            from core.adp_evidence import reconcile_tool_result
+            result = await reconcile_tool_result(final_db, context_id=execution.Id, query=query)
         evidence = _allowlisted_evidence(result.get("evidence"))
         await complete_tool_call(
             final_db,

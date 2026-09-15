@@ -43,6 +43,9 @@ async def adp_sessionmaker(monkeypatch):
     # Ensure Fernet keyring + a fake vendor so provider building is deterministic.
     from test.app_bootstrap import ensure_app
     ensure_app()
+    from cryptography.fernet import Fernet
+    from config import tagentic_config
+    monkeypatch.setattr(tagentic_config, "PLATFORM_CHANNEL_CREDENTIAL_KEY", Fernet.generate_key().decode())
     from app_factory import TAgenticApp
     monkeypatch.setitem(TAgenticApp.vendors, "test-vendor", _FakeVendor)
     from integrations.adp import registry
@@ -73,7 +76,7 @@ async def adp_sessionmaker(monkeypatch):
 
 
 def _fallback_provider():
-    return SimpleNamespace(agent_id="env-default", application_id="ENV-APP")
+    return SimpleNamespace(agent_id="injected-test", application_id="TEST-APP")
 
 
 @pytest.mark.asyncio
@@ -91,9 +94,9 @@ async def test_create_encrypts_and_serialize_hides_secret(adp_sessionmaker):
 async def test_resolve_uses_enterprise_binding_then_default_then_fallback(adp_sessionmaker):
     from integrations.adp import registry
     async with adp_sessionmaker() as db:
-        # No DB apps yet -> fallback (.env provider).
+        # No DB apps yet -> explicit test injection.
         prov = await registry.resolve_provider_for_enterprise(db, SimpleNamespace(AdpAppId=None), fallback=_fallback_provider)
-        assert prov.application_id == "ENV-APP"
+        assert prov.application_id == "TEST-APP"
 
         default_app = await create_adp_app(db, name="Default", application_id="APP-DEF", app_key="k1", vendor="test-vendor", is_default=True)
         bound_app = await create_adp_app(db, name="Bound", application_id="APP-BOUND", app_key="k2", vendor="test-vendor")
@@ -197,3 +200,18 @@ async def test_partial_secret_rotation_keeps_other_fields(adp_sessionmaker):
         assert prov.vendor.config["SecretKey"] == "skey-new"
         assert prov.vendor.config["SecretId"] == "sid-orig"
         assert prov.vendor.config["SecretAppId"] == "appid-orig"
+
+
+@pytest.mark.asyncio
+async def test_missing_and_disabled_binding_never_fall_back(adp_sessionmaker):
+    from integrations.adp import registry
+    async with adp_sessionmaker() as db:
+        with pytest.raises(registry.AdpAppConfigError):
+            await registry.resolve_provider_for_enterprise(db, SimpleNamespace(AdpAppId=None))
+        await create_adp_app(db, name="Default", application_id="DEF", app_key="k", vendor="test-vendor", is_default=True)
+        bound = await create_adp_app(db, name="Bound", application_id="BOUND", app_key="k", vendor="test-vendor")
+        await update_adp_app(db, adp_app_id=str(bound.Id), status=str(AdpAppStatus.DISABLED))
+        await db.commit()
+        for app_id in (bound.Id, uuid.uuid4()):
+            with pytest.raises(registry.AdpAppConfigError):
+                await registry.resolve_provider_for_enterprise(db, SimpleNamespace(AdpAppId=app_id), fallback=_fallback_provider)

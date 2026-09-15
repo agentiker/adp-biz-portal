@@ -1,0 +1,192 @@
+openapi: 3.0.3
+info:
+  title: ADP 业务只读工具连接器
+  version: 1.0.0
+  description: 工具范围由平台执行上下文确定。仅用于平台业务回合；Mock 不代表真实 M3 联调。
+servers:
+- url: https://portal.example.com
+  description: 替换为 ADP 可访问的联调 HTTPS 域名
+security:
+- ServiceToken: []
+  ExecutionContext: []
+paths:
+  /api/internal/adp/tools/shipment/lookup:
+    post:
+      operationId: shipmentLookup
+      summary: 查询订单、提单或箱号的业务字段
+      parameters:
+      - name: X-ADP-Request-Id
+        in: header
+        required: true
+        description: platform_tool_request_id + 操作/调用后缀；同一请求 ID 的重放将被拒绝
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolQuery'
+      responses:
+        '200':
+          description: 查询结果；业务失败也通过 status 表达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+        '400':
+          description: 缺少请求 ID、参数不合法或含额外字段
+        '401':
+          description: 服务身份或执行令牌无效、过期或已撤销
+        '403':
+          description: 无工具权限、范围不匹配或请求重放
+  /api/internal/adp/tools/shipment/schedule:
+    post:
+      operationId: shipmentSchedule
+      summary: 查询船名、航次和预计抵港
+      parameters:
+      - name: X-ADP-Request-Id
+        in: header
+        required: true
+        description: platform_tool_request_id + 操作/调用后缀；同一请求 ID 的重放将被拒绝
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolQuery'
+      responses:
+        '200':
+          description: 查询结果；业务失败也通过 status 表达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+        '400':
+          description: 缺少请求 ID、参数不合法或含额外字段
+        '401':
+          description: 服务身份或执行令牌无效、过期或已撤销
+        '403':
+          description: 无工具权限、范围不匹配或请求重放
+  /api/internal/adp/tools/shipment/milestones:
+    post:
+      operationId: shipmentMilestones
+      summary: 查询当前节点和实际抵港
+      parameters:
+      - name: X-ADP-Request-Id
+        in: header
+        required: true
+        description: platform_tool_request_id + 操作/调用后缀；同一请求 ID 的重放将被拒绝
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolQuery'
+      responses:
+        '200':
+          description: 查询结果；业务失败也通过 status 表达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+        '400':
+          description: 缺少请求 ID、参数不合法或含额外字段
+        '401':
+          description: 服务身份或执行令牌无效、过期或已撤销
+        '403':
+          description: 无工具权限、范围不匹配或请求重放
+components:
+  securitySchemes:
+    ServiceToken:
+      type: apiKey
+      in: header
+      name: X-ADP-Service-Token
+    ExecutionContext:
+      type: apiKey
+      in: header
+      name: X-Platform-Context-Token
+      description: 每轮 platform_context_token 隐藏运行变量，禁止模型生成或覆盖
+  schemas:
+    ToolQuery:
+      type: object
+      additionalProperties: false
+      required:
+      - query
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: 完整订单号、提单号或箱号
+          example: MOCK-BL-A001
+        conversationId:
+          type: string
+          description: 隐藏变量 platform_conversation_id
+        runId:
+          type: string
+          description: 隐藏变量 platform_run_id
+        agentId:
+          type: string
+          description: 隐藏变量 platform_agent_id
+    Evidence:
+      type: object
+      required:
+      - label
+      - value
+      - source
+      - known
+      - capturedAt
+      properties:
+        label:
+          type: string
+        value:
+          type: string
+        source:
+          type: string
+        known:
+          type: boolean
+        capturedAt:
+          type: string
+          format: date-time
+    ToolResult:
+      type: object
+      required:
+      - status
+      - query
+      - title
+      - summary
+      - evidence
+      - traceId
+      properties:
+        status:
+          type: string
+          enum:
+          - found
+          - not_found
+          - needs_clarification
+          - upstream_error
+        query:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        traceId:
+          type: string
+        conversationId:
+          type: string
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/Evidence'

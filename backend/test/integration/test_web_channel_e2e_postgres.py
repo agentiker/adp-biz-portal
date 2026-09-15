@@ -16,7 +16,7 @@ from core.platform_worker import PLATFORM_INBOUND_TASK_TYPE, PLATFORM_REPLY_TASK
 from integrations.m3.adapter import M3LookupAdapter
 from model.account import Account, AccountRole, AccountStatus
 from model.platform import (
-    PlatformAuditEvent, PlatformAuthSession, PlatformConversation, PlatformDeliveryTask, PlatformEnterprise,
+    PlatformAdpApp, PlatformAuditEvent, PlatformAuthSession, PlatformConversation, PlatformDeliveryTask, PlatformEnterprise,
     PlatformEvidence, PlatformExecutionContext, PlatformExecutionRun, PlatformInboundMessage,
     PlatformMembership, PlatformMessage, PlatformToolCall, PlatformToolDefinition, PlatformUser,
     PlatformRole, PlatformStatus,
@@ -46,7 +46,7 @@ async def factory():
         pool_pre_ping=True,
         connect_args={"server_settings": {"search_path": f'"{schema}",public'}},
     )
-    tables = [Account.__table__, PlatformEnterprise.__table__, PlatformUser.__table__, PlatformMembership.__table__, PlatformAuthSession.__table__, PlatformConversation.__table__, PlatformExecutionRun.__table__, PlatformEvidence.__table__, PlatformMessage.__table__, PlatformInboundMessage.__table__, PlatformDeliveryTask.__table__, PlatformToolDefinition.__table__, PlatformExecutionContext.__table__, PlatformToolCall.__table__, PlatformAuditEvent.__table__]
+    tables = [PlatformAdpApp.__table__, Account.__table__, PlatformEnterprise.__table__, PlatformUser.__table__, PlatformMembership.__table__, PlatformAuthSession.__table__, PlatformConversation.__table__, PlatformExecutionRun.__table__, PlatformEvidence.__table__, PlatformMessage.__table__, PlatformInboundMessage.__table__, PlatformDeliveryTask.__table__, PlatformToolDefinition.__table__, PlatformExecutionContext.__table__, PlatformToolCall.__table__, PlatformAuditEvent.__table__]
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: Account.metadata.create_all(c, tables=tables, checkfirst=False))
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -80,7 +80,7 @@ async def test_web_message_runs_to_portal_reply_once(factory):
         duplicate, duplicate_task, duplicate_created = await record_inbound_message(db, message=InboundMessageInput(**kwargs), task_type=PLATFORM_INBOUND_TASK_TYPE, task_payload={},)
         await db.commit()
     assert created is True and duplicate_created is False and duplicate.Id == inbound.Id and duplicate_task is None
-    worker = DeliveryWorker(sessionmaker=factory, handlers=build_platform_delivery_handlers(factory, adapter_factory=M3LookupAdapter(use_mock=True)), worker_id="web-e2e")
+    worker = DeliveryWorker(sessionmaker=factory, handlers=build_platform_delivery_handlers(factory, adapter_factory=M3LookupAdapter(use_mock=True, mock_records=[{"CustomerCode": "E2E-001", "BillNo": "BL-E2E-001"}])), worker_id="web-e2e")
     assert await worker.run_once() is True
     assert await worker.run_once() is True
     async with factory() as db:

@@ -28,7 +28,7 @@
 
 ## 本地运行
 
-要求 Python 3.12、Node.js 22、PostgreSQL 14+ 和 uv。创建 `backend/.env`，配置数据库、`SECRET_KEY`、`APP_CONFIGS`；真实 ADP 还需 `TC_SECRET_ID`、`TC_SECRET_KEY` 和 AppKey。请勿提交真实凭据或客户数据。
+要求 Python 3.12、Node.js 22、PostgreSQL 14+ 和 uv。创建 `backend/.env`，配置数据库、`SECRET_KEY` 和 `PLATFORM_CHANNEL_CREDENTIAL_KEY`；ADP 应用及其凭据在管理后台录入。请勿提交真实凭据或客户数据。
 
 ```bash
 cd backend && uv sync --frozen
@@ -64,21 +64,19 @@ curl http://127.0.0.1:8000/readyz
 
 ## ADP 配置
 
-Worker 只使用服务端配置选择 Agent，客户端的 `agentId`、`ApplicationId` 和 `WorkspaceId` 不参与授权。单一应用示例：
+业务 Worker 和企微 Bot 使用数据库「ADP 应用配置」：优先选择企业绑定的启用应用，未绑定时使用启用的平台默认应用。显式绑定失效或没有可用应用时拒绝执行，不回退到服务器 `.env`。客户端的 `agentId`、`ApplicationId` 和 `WorkspaceId` 不参与授权。
 
-```bash
-APP_CONFIGS='[{"Vendor":"Tencent","ApplicationId":"your-application-id","Comment":"platform agent","AppKey":"your-app-key","ServiceVendor":"ChinaTencentCloud"}]'
-```
+在管理后台录入应用 ID、AppKey 和每个应用自己的腾讯云签名凭据，再设为默认或绑定企业。`APP_CONFIGS` 仅供旧管理员调试入口使用，可以保持 `[]`；数据库、加密密钥和工具服务 Token 等基础设施仍由环境变量配置。
 
-多个 Agent 使用 `ADP_AGENT_CONFIGS` 和 `ADP_DEFAULT_AGENT_ID` 显式映射。未配置可用应用时，Worker 记录 `upstream_error`，不会伪造回答。ADP 独立站应用可配置 `ADP_SECRET_ID`、`ADP_SECRET_KEY`，并声明 `ServiceVendor: "ChinaTencentADP"`。
+已提供订单/提单/箱号、船期、节点三个 HTTP 工具连接器。固定 Mock 和 ADP 参数映射见 [联调说明](docs/plans/2026-09-16-adp-m3-mock-connector.md)，导入文件为 [adp-tools.openapi.yaml](docs/api/adp-tools.openapi.yaml)。Mock 只在显式设置 `M3_USE_MOCK=true` 时启用，不能代替真实 ADP/M3 验收。
 
 ## 测试与检查
 
 ```bash
-backend/.venv/bin/pytest backend/test/unit_test -q
-PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://user:password@127.0.0.1:5432/test_db' backend/.venv/bin/pytest backend/test/integration -q
+backend/.venv/bin/python -m pytest backend/test/unit_test -q
+PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://user:password@127.0.0.1:5432/test_db' backend/.venv/bin/python -m pytest backend/test/integration -q
 cd frontend/packages/app && npm run type-check && npm run build-only
-cd ../.. && make platform_api_check
+cd ../../.. && make platform_api_check
 git diff --check
 ```
 

@@ -33,6 +33,7 @@ class AgentRequest:
     customer_code: str
     trace_id: str
     visitor_id: str = ""
+    context_token: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +327,9 @@ class ADPAgentProvider:
             title=normalized_query,
         )
         contents = [{"Type": "text", "Text": normalized_query}]
+        # Private business answers are rendered from recorded tool evidence.
+        if request.context_token:
+            sink = None
         answer_parts: list[str] = []
         # ADP streams reasoning as text.delta under a separate message whose
         # Type is "thought"; the answer is the "reply" message. We classify each
@@ -342,7 +346,14 @@ class ADPAgentProvider:
                 is_new_conversation=False,
                 conversation_cb=callback,
                 search_network=True,
-                custom_variables={},
+                custom_variables=({
+                    "platform_context_token": request.context_token,
+                    "platform_conversation_id": request.conversation_id,
+                    "platform_run_id": request.run_id,
+                    "platform_agent_id": request.agent_id,
+                    "platform_application_id": self.application_id,
+                    "platform_tool_request_id": f"adp:{request.run_id}",
+                } if request.context_token else {}),
             )
             async for item in stream:
                 for payload in _sse_payloads(item):

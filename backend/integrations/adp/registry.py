@@ -2,9 +2,8 @@
 
 Multiple ADP applications can be configured in the database (with Fernet-encrypted
 AppKeys). Each enterprise may bind one via ``PlatformEnterprise.AdpAppId``; a
-platform default (``IsDefault``) is used otherwise. When no DB app applies (empty
-registry, no default), the caller's ``fallback`` — the server ``.env`` single
-provider — is used, so behavior is unchanged until apps are configured.
+platform default (``IsDefault``) is used otherwise. No configured application fails closed. The optional fallback is only an
+explicit dependency injection hook for local tests, never a runtime .env source.
 
 Providers are cached per app id + ``UpdatedAt`` so an Admin edit rebuilds the
 vendor with the new credentials without a restart.
@@ -45,7 +44,7 @@ async def _load_app(db: Any, enterprise: Any) -> PlatformAdpApp | None:
         bound = await db.get(PlatformAdpApp, app_id)
         if bound is not None and str(bound.Status) == str(AdpAppStatus.ACTIVE):
             return bound
-        # A bound-but-missing/disabled app falls through to the platform default.
+        raise AdpAppConfigError("bound ADP application is unavailable")
     return (await db.execute(
         select(PlatformAdpApp).where(
             PlatformAdpApp.IsDefault.is_(True),
@@ -63,6 +62,8 @@ def _build_provider(app: PlatformAdpApp) -> AgentProvider:
         raise AdpAppConfigError(f"adp app {app.ApplicationId} secret unavailable: {type(exc).__name__}") from exc
     if not isinstance(payload, dict) or not str(payload.get("AppKey") or "").strip():
         raise AdpAppConfigError(f"adp app {app.ApplicationId} is missing AppKey")
+    if any(not str(payload.get(key) or "").strip() for key in ("SecretId", "SecretKey", "SecretAppId")):
+        raise AdpAppConfigError("ADP application requires all per-application signing credentials")
     vendor_cls = TAgenticApp.vendors.get(app.Vendor)
     if vendor_cls is None:
         raise AdpAppConfigError(f"adp app vendor not registered: {app.Vendor}")
@@ -91,12 +92,15 @@ def _build_provider(app: PlatformAdpApp) -> AgentProvider:
 
 
 async def resolve_provider_for_enterprise(
-    db: Any, enterprise: Any, *, fallback: Callable[[], AgentProvider | None]
+    db: Any, enterprise: Any, *, fallback: Callable[[], AgentProvider | None] | None = None
 ) -> AgentProvider | None:
-    """Resolve the provider for ``enterprise``; ``fallback`` supplies the .env one."""
+    """Resolve a DB application, or an explicitly injected test provider."""
     app = await _load_app(db, enterprise)
     if app is None:
-        return fallback()
+        injected = fallback() if fallback is not None else None
+        if injected is not None:
+            return injected
+        raise AdpAppConfigError("configure an active ADP application in Admin")
     cache_key = str(app.Id)
     version = _cache_version(app)
     cached = _provider_cache.get(cache_key)
