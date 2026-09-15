@@ -648,3 +648,7 @@ export async function revokeAdpApiKey(id: string): Promise<import('./types').Adp
 export async function revealAdpApiKey(id: string): Promise<import('./types').RevealedAdpApiKey> {
   return httpService.post(`/api/v1/admin/adp-api-keys/${id}/reveal`, {})
 }
+
+export async function deleteAdpApiKey(id: string): Promise<{ deleted: boolean }> {
+  return httpService.post(`/api/v1/admin/adp-api-keys/${id}/delete`, {})
+}

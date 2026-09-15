@@ -460,13 +460,13 @@ async def test_revision_17_key_upgrade_and_rollback(migration_sessionmaker, monk
         account_id = uuid.uuid4()
         db.add(Account(Id=account_id, Name="migration sentinel", Role=AccountRole.ADMIN, Status=AccountStatus.ACTIVE))
         await db.commit()
-        assert await Migration.upgrade(db) == 18
+        assert await Migration.upgrade(db) == 19
         _, secret = await create_api_key(db, "migration test")
         await db.commit()
         await require_connector_key(db, secret)
         assert await Migration.downgrade(db, target_version=16, allow_data_loss=True) == 16
         assert await db.get(Account, account_id) is not None
-        assert await Migration.upgrade(db) == 18
+        assert await Migration.upgrade(db) == 19
 
 
 @pytest.mark.asyncio
@@ -485,3 +485,15 @@ async def test_revision_18_preserves_legacy_key(migration_sessionmaker):
         assert await require_connector_key(db, secret) == str(key_id)
         with pytest.raises(PlatformBadRequest):
             await reveal_api_key(db, str(key_id))
+
+
+@pytest.mark.asyncio
+async def test_revision_19_upgrade_and_rollback(migration_sessionmaker):
+    async with migration_sessionmaker() as db:
+        await Migration.upgrade(db, target_version=18)
+        await db.execute(text('ALTER TABLE platform_adp_api_key DROP COLUMN IF EXISTS "DeletedAt"'))
+        await db.commit()
+        assert await Migration.upgrade(db) == 19
+        await db.execute(text('SELECT "DeletedAt" FROM platform_adp_api_key'))
+        assert await Migration.downgrade(db, target_version=18, allow_data_loss=True) == 18
+        assert await Migration.upgrade(db) == 19

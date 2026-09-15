@@ -722,6 +722,29 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/adp-api-keys/{key_id}/delete:
+    post:
+      tags: [Administration]
+      operationId: deleteAdpApiKey
+      summary: deleteAdpApiKey (platform.manage required)
+      parameters:
+        - in: path
+          name: key_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Soft delete and revoke the key; omit from future lists (no-store)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/admin/adp-api-keys/{key_id}/reveal:
     post:
       tags: [Administration]

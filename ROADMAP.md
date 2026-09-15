@@ -489,7 +489,9 @@
   - 阻塞与解除：生产迁移 16 已于 2026-09-13 完成；本轮代码尚未发布、未修改远程 `.env`。发布前须在后台录入可用数据库 ADP 应用，确认企业绑定/默认配置，再验证真实路由与工具回调。完成前不删除服务器基础设施配置；旧调试凭据清理须在业务迁移验收之后进行。
 
 - [x] `M4-ADP-KEY-01` Admin 管理 ADP 连接器 API Key。
-  - 状态：`DONE`（2026-09-16，独立开放接口页面及可重复查看 Key 已实现并验证）。
+  - 状态：`DONE`（2026-09-16，固定 API Key 列宽与单元格内滚动；软删除、列表过滤和鉴权失效已实现并验证，迁移 19）。
+  - 修复及扩展验证（2026-09-16）：`AdminAdpApiKeys.vue` 使用 table-layout:fixed 和固定列比例，明文在单元格内滚动；新增删除操作。后端 `DeletedAt` 软删除保留记录并撤销，列表/查看/工具鉴权排除已删除项，删除要求 platform.manage 并写审计；OpenAPI、方案及运行文档同步。显式 `PLATFORM_TEST_DATABASE_URL=postgresql+asyncpg://jyxc-dz-0100610@localhost/adp_biz_portal_orch_test`，venv `python -m pytest backend/test/integration/test_adp_api_key_postgres.py backend/test/integration/test_platform_migration_postgres.py -q` 在随机隔离 schema 中 9 passed。`make platform_api_check`（56 operations / 62 schemas）、`cd frontend && npm run build_app`（含类型检查）、`git diff --check` 通过。登录后的视觉交互待用户验收。
+  - 本地更新至 19：仓库外备份 `~/.local/state/adp-biz-portal/backups/local-before-rev19-20260916014526.dump`，`pg_restore -l` 验证通过；迁移 CLI upgrade 完成 18→19，重启 localhost:8000，readyz=200/schemaRevision 19，未登录 delete=401。未部署生产。
   - 本次完成证据（2026-09-16）：`AdminAdpApiKeys.vue`、Admin 路由/导航拆出「开放接口」；命名弹窗、名称/Key/创建时间/状态列表、默认隐藏、小眼睛查看、一键复制及撤销。`core/adp_api_key.py` 与管理 reveal API 使用加密副本、服务端权限、no-store 和脱敏审计，迁移 revision 18；README、LOCAL_RUN、连接器方案和 OpenAPI 同步。
   - 本次验证：显式测试数据库 `adp_biz_portal_orch_test` + 随机隔离 schema，venv `python -m pytest` 执行 `test_adp_api_key_postgres.py`、`test_platform_migration_postgres.py`、`test_adp_connector_postgres.py`、`test_wecom_bot_stream_postgres.py`，22 passed；`make platform_api_check`（55 operations / 62 schemas）、`cd frontend && npm run build_app`（包含类型检查）、`git diff --check` 通过。
   - 本地更新：仓库外备份 `~/.local/state/adp-biz-portal/backups/local-before-rev18-20260916013426.dump` 经 `pg_restore -l` 验证，迁移 17→18 后重启 localhost:8000；readyz=200/schemaRevision 18，未登录 reveal=401。页面入口 `/static/app/index#/admin/open-api`。浏览器登录后的交互尚待验收；不代表真实 ADP 联调完成。

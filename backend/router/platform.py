@@ -7,7 +7,7 @@ are all derived from the revocable platform session.
 
 from __future__ import annotations
 
-from core.adp_api_key import create_api_key, list_api_keys, revoke_api_key, serialize_api_key, require_connector_key, reveal_api_key
+from core.adp_api_key import create_api_key, list_api_keys, revoke_api_key, serialize_api_key, require_connector_key, reveal_api_key, delete_api_key
 
 import logging
 import json as stdlib_json
@@ -2126,6 +2126,15 @@ class AdminAdpApiKeyRevokeApi(HTTPMethodView):
         return json(payload, headers={"Cache-Control": "no-store"})
 
 
+class AdminAdpApiKeyDeleteApi(HTTPMethodView):
+    @platform_required
+    async def post(self, request: Request, key_id: str):
+        require_permission(_context(request), "platform.manage")
+        row = await delete_api_key(request.ctx.db, key_id)
+        await _commit_audit(request, action="adp_api_key.delete", target_type="platform_adp_api_key", target_id=str(row.Id))
+        return json({"deleted": True}, headers={"Cache-Control": "no-store"})
+
+
 class AdminAdpAppListApi(HTTPMethodView):
     @platform_required
     async def get(self, request: Request):
@@ -2722,3 +2731,5 @@ app.add_route(AdminAdpApiKeyListApi.as_view(), "/api/v1/admin/adp-api-keys")
 app.add_route(AdminAdpApiKeyRevokeApi.as_view(), "/api/v1/admin/adp-api-keys/<key_id:str>/revoke")
 
 app.add_route(AdminAdpApiKeyRevealApi.as_view(), "/api/v1/admin/adp-api-keys/<key_id:str>/reveal")
+
+app.add_route(AdminAdpApiKeyDeleteApi.as_view(), "/api/v1/admin/adp-api-keys/<key_id:str>/delete")

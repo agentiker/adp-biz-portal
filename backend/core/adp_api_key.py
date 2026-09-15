@@ -32,7 +32,7 @@ async def create_api_key(db, name):
 
 
 async def list_api_keys(db):
-    return (await db.execute(select(PlatformAdpApiKey).order_by(PlatformAdpApiKey.CreatedAt.desc()))).scalars().all()
+    return (await db.execute(select(PlatformAdpApiKey).where(PlatformAdpApiKey.DeletedAt.is_(None)).order_by(PlatformAdpApiKey.CreatedAt.desc()))).scalars().all()
 
 
 async def revoke_api_key(db, key_id):
@@ -41,7 +41,7 @@ async def revoke_api_key(db, key_id):
     except (ValueError, TypeError, AttributeError):
         raise PlatformBadRequest("API Key ID 格式无效")
     row = await db.get(PlatformAdpApiKey, parsed)
-    if row is None:
+    if row is None or row.DeletedAt is not None:
         raise PlatformNotFound("API Key 不存在")
     if row.RevokedAt is None:
         row.RevokedAt = datetime.now(UTC).replace(tzinfo=None)
@@ -55,6 +55,7 @@ async def require_connector_key(db, provided):
     key_id = (await db.execute(select(PlatformAdpApiKey.Id).where(
         PlatformAdpApiKey.KeyHash == hashlib.sha256(provided.encode()).hexdigest(),
         PlatformAdpApiKey.RevokedAt.is_(None),
+        PlatformAdpApiKey.DeletedAt.is_(None),
     ))).scalar_one_or_none()
     if key_id is None:
         raise AccountUnauthorized("连接器 API Key 无效")
@@ -67,8 +68,15 @@ async def reveal_api_key(db, key_id):
     except (ValueError, TypeError, AttributeError):
         raise PlatformBadRequest("API Key ID 格式无效")
     row = await db.get(PlatformAdpApiKey, parsed)
-    if row is None:
+    if row is None or row.DeletedAt is not None:
         raise PlatformNotFound("API Key 不存在")
     if not row.Ciphertext or not row.KeyVersion:
         raise PlatformBadRequest("历史 Key 未保存可解密副本，请新建 Key 后替换")
     return decrypt_ciphertext(row.Ciphertext, row.KeyVersion, fingerprint=row.KeyHash)
+
+
+async def delete_api_key(db, key_id):
+    row = await revoke_api_key(db, key_id)
+    row.DeletedAt = datetime.now(UTC).replace(tzinfo=None)
+    await db.flush()
+    return row

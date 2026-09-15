@@ -657,3 +657,4 @@ class PlatformAdpApiKey(Base):
     KeyVersion = Column(String(32), nullable=True)
     CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     RevokedAt = Column(DateTime, nullable=True)
+    DeletedAt = Column(DateTime, nullable=True)
