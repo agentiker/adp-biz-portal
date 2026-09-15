@@ -653,5 +653,7 @@ class PlatformAdpApiKey(Base):
     Name = Column(String(128), nullable=False)
     KeyHash = Column(String(64), nullable=False, unique=True)
     Prefix = Column(String(16), nullable=False)
+    Ciphertext = Column(Text, nullable=True)
+    KeyVersion = Column(String(32), nullable=True)
     CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     RevokedAt = Column(DateTime, nullable=True)

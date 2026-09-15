@@ -644,3 +644,7 @@ export async function createAdpApiKey(name: string): Promise<import('./types').C
 export async function revokeAdpApiKey(id: string): Promise<import('./types').AdpApiKey> {
   return httpService.post(`/api/v1/admin/adp-api-keys/${id}/revoke`, {})
 }
+
+export async function revealAdpApiKey(id: string): Promise<import('./types').RevealedAdpApiKey> {
+  return httpService.post(`/api/v1/admin/adp-api-keys/${id}/reveal`, {})
+}

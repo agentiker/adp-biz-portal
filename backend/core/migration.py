@@ -80,7 +80,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 17
+    CURRENT_PLATFORM_SCHEMA_VERSION = 18
     REVISIONS = (
         MigrationRevision(
             1,
@@ -186,6 +186,7 @@ class Migration:
             (PlatformAdpApp.__tablename__,),
         ),
         MigrationRevision(17, "platform_adp_api_key_schema", (PlatformAdpApiKey.__tablename__,)),
+        MigrationRevision(18, "platform_adp_api_key_encryption", ()),
     )
 
     @classmethod
@@ -673,6 +674,9 @@ class Migration:
                     await cls._apply_revision_15(db)
                 elif revision.version == 16:
                     await cls._apply_revision_16(db)
+                elif revision.version == 18:
+                    await db.execute(text('ALTER TABLE platform_adp_api_key ADD COLUMN IF NOT EXISTS "Ciphertext" TEXT'))
+                    await db.execute(text('ALTER TABLE platform_adp_api_key ADD COLUMN IF NOT EXISTS "KeyVersion" VARCHAR(32)'))
                 record = records.get(revision.version)
                 if record is None:
                     record = PlatformMigration(
@@ -734,6 +738,8 @@ class Migration:
 
             for version in range(current, target_version, -1):
                 revision = cls._revision(version)
+                if version == 18:
+                    await db.execute(text('ALTER TABLE platform_adp_api_key DROP COLUMN IF EXISTS "Ciphertext", DROP COLUMN IF EXISTS "KeyVersion"'))
                 if version == 16:
                     await db.execute(text('ALTER TABLE platform_enterprise DROP CONSTRAINT IF EXISTS fk_platform_enterprise_adp_app'))
                     await db.execute(text('ALTER TABLE platform_enterprise DROP COLUMN IF EXISTS "AdpAppId"'))

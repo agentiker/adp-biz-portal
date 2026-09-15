@@ -450,17 +450,38 @@ async def test_revision_12_rejects_migrating_duplicate_active_bindings(migration
 
 
 @pytest.mark.asyncio
-async def test_revision_17_key_upgrade_and_rollback(migration_sessionmaker):
+async def test_revision_17_key_upgrade_and_rollback(migration_sessionmaker, monkeypatch):
+    from cryptography.fernet import Fernet
+    from config import tagentic_config
+    monkeypatch.setattr(tagentic_config, "PLATFORM_CHANNEL_CREDENTIAL_KEY", Fernet.generate_key().decode())
     from core.adp_api_key import create_api_key, require_connector_key
     async with migration_sessionmaker() as db:
         await Migration.upgrade(db, target_version=16)
         account_id = uuid.uuid4()
         db.add(Account(Id=account_id, Name="migration sentinel", Role=AccountRole.ADMIN, Status=AccountStatus.ACTIVE))
         await db.commit()
-        assert await Migration.upgrade(db) == 17
+        assert await Migration.upgrade(db) == 18
         _, secret = await create_api_key(db, "migration test")
         await db.commit()
         await require_connector_key(db, secret)
         assert await Migration.downgrade(db, target_version=16, allow_data_loss=True) == 16
         assert await db.get(Account, account_id) is not None
-        assert await Migration.upgrade(db) == 17
+        assert await Migration.upgrade(db) == 18
+
+
+@pytest.mark.asyncio
+async def test_revision_18_preserves_legacy_key(migration_sessionmaker):
+    from core.adp_api_key import require_connector_key, reveal_api_key
+    from core.error.platform import PlatformBadRequest
+    import hashlib
+    async with migration_sessionmaker() as db:
+        await Migration.upgrade(db, target_version=17)
+        await db.execute(text('ALTER TABLE platform_adp_api_key DROP COLUMN IF EXISTS "Ciphertext", DROP COLUMN IF EXISTS "KeyVersion"'))
+        secret = 'adp_' + 'x' * 43
+        key_id = uuid.uuid4()
+        await db.execute(text('INSERT INTO platform_adp_api_key ("Id", "Name", "Prefix", "KeyHash") VALUES (:id, :name, :prefix, :hash)'), {'id':key_id, 'name':'legacy', 'prefix':secret[:12], 'hash':hashlib.sha256(secret.encode()).hexdigest()})
+        await db.commit()
+        await Migration.upgrade(db)
+        assert await require_connector_key(db, secret) == str(key_id)
+        with pytest.raises(PlatformBadRequest):
+            await reveal_api_key(db, str(key_id))

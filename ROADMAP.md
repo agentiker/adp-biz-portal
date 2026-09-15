@@ -489,10 +489,15 @@
   - 阻塞与解除：生产迁移 16 已于 2026-09-13 完成；本轮代码尚未发布、未修改远程 `.env`。发布前须在后台录入可用数据库 ADP 应用，确认企业绑定/默认配置，再验证真实路由与工具回调。完成前不删除服务器基础设施配置；旧调试凭据清理须在业务迁移验收之后进行。
 
 - [x] `M4-ADP-KEY-01` Admin 管理 ADP 连接器 API Key。
-  - 状态：`DONE`（2026-09-16，本地实现与验证；未部署）。
+  - 状态：`DONE`（2026-09-16，独立开放接口页面及可重复查看 Key 已实现并验证）。
+  - 本次完成证据（2026-09-16）：`AdminAdpApiKeys.vue`、Admin 路由/导航拆出「开放接口」；命名弹窗、名称/Key/创建时间/状态列表、默认隐藏、小眼睛查看、一键复制及撤销。`core/adp_api_key.py` 与管理 reveal API 使用加密副本、服务端权限、no-store 和脱敏审计，迁移 revision 18；README、LOCAL_RUN、连接器方案和 OpenAPI 同步。
+  - 本次验证：显式测试数据库 `adp_biz_portal_orch_test` + 随机隔离 schema，venv `python -m pytest` 执行 `test_adp_api_key_postgres.py`、`test_platform_migration_postgres.py`、`test_adp_connector_postgres.py`、`test_wecom_bot_stream_postgres.py`，22 passed；`make platform_api_check`（55 operations / 62 schemas）、`cd frontend && npm run build_app`（包含类型检查）、`git diff --check` 通过。
+  - 本地更新：仓库外备份 `~/.local/state/adp-biz-portal/backups/local-before-rev18-20260916013426.dump` 经 `pg_restore -l` 验证，迁移 17→18 后重启 localhost:8000；readyz=200/schemaRevision 18，未登录 reveal=401。页面入口 `/static/app/index#/admin/open-api`。浏览器登录后的交互尚待验收；不代表真实 ADP 联调完成。
+  - 范围调整：新增开放接口导航，新建弹窗、列表隐藏/查看/复制；新 Key 增加加密保存，管理员按需读取并审计，迁移 18。历史仅摘要 Key 无法恢复，保留原鉴权并提示重新创建。下述一次性展示为历史设计。
+  - 本地启动（2026-09-16）：按用户要求备份本地 `adp_chat_client_local`（仓库外 `~/.local/state/adp-biz-portal/backups/local-before-rev17-20260916011826.dump`，`pg_restore -l` 验证通过），运行 `backend/.venv/bin/python backend/migrate.py upgrade --applied-by local-preview` 升级到 17；`cd frontend && npm run build_app` 更新静态文件；以 venv `python -m sanic app_factory:create_app --factory --single-process --host=127.0.0.1 --port=8000` 重启。`/readyz`=200/schemaRevision 17，静态首页=200，未登录 Key 管理接口=401；已打开浏览器后台入口，登录后交互待用户查看。
   - 完成证据：`backend/core/adp_api_key.py`、`model/platform.py`、`router/platform.py`、`core/migration.py`（revision 17）；Admin「ADP 应用配置」新增 `AdminAdpApiKeys.vue`，支持命名创建、一次性显示/复制、列表及撤销。256 位随机 Key 仅存 SHA-256 摘要，API 管理要求 `platform.manage`，创建/撤销写脱敏审计；三个工具每次查库验证 Key，仍强制执行上下文。OpenAPI、类型和运行文档同步。
   - 验证：显式 `PLATFORM_TEST_DATABASE_URL=postgresql+asyncpg://jyxc-dz-0100610@localhost/adp_biz_portal_orch_test`，所有集成测试创建并清理随机隔离 schema。`backend/.venv/bin/python -m pytest backend/test/integration/test_adp_connector_postgres.py backend/test/integration/test_wecom_bot_stream_postgres.py -q`：14 passed；同一环境运行 `test_adp_api_key_postgres.py`、`test_platform_migration_postgres.py`、`backend/test/unit_test/test_security_logging.py`、`test_platform_migration.py`：17 passed。venv 的 pytest shebang 为旧目录，使用同一 venv 的 `python -m pytest`。`make platform_api_check`（54 operations / 61 schemas）、前端 `npm run type-check` / `npm run build-only`、`git diff --check` 通过。
-  - 遗留：未部署、未修改真实数据库或远程环境配置；发布需备份、迁移 17、在后台创建 Key 并更新 ADP 连接器。真实 ADP 联调仍 BLOCKED；Key 撤销不终止已通过鉴权的在途调用。
+  - 遗留：未部署生产或修改远程环境配置；本地开发库已按下述启动记录升级。生产发布需备份、迁移至 18、在后台创建 Key 并更新 ADP 连接器。真实 ADP 联调仍 BLOCKED；Key 撤销不终止已通过鉴权的在途调用。
   - 验证发现与范围补充：迁移 DDL 使用独立连接导致回滚锁等待，revision 16 回滚未移除企业应用外键；本项一并修复迁移事务连接与外键回滚顺序，验证 fresh/增量/回滚。
   - 范围：后台创建/列出/撤销、随机 Key 仅展示一次且只存摘要、工具接口数据库鉴权、权限与隔离测试、迁移 revision 17。旧内部适配器接口保留原服务 Token，连接器 Key 仅授权 shipment 工具。真实云端联调仍归 M2-ORCH-01。
 

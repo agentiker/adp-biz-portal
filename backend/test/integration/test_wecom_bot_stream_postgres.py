@@ -314,6 +314,9 @@ async def test_adp_bot_uses_recorded_callback_evidence(bot_sessionmaker, monkeyp
     ensure_app()
     from router.platform import AdpShipmentLookupApi
 
+    from cryptography.fernet import Fernet
+    from config import tagentic_config
+    monkeypatch.setattr(tagentic_config, "PLATFORM_CHANNEL_CREDENTIAL_KEY", Fernet.generate_key().decode())
     await _seed_identity(bot_sessionmaker, bind=True)
     from core.adp_api_key import create_api_key
     async with bot_sessionmaker() as key_db:

@@ -48,6 +48,11 @@ const router = createRouter({
       component: () => import('@/pages/admin/Admin.vue'),
     },
     {
+      path: '/admin/open-api',
+      name: 'admin-open-api',
+      component: () => import('@/pages/admin/Admin.vue'),
+    },
+    {
       path: '/admin/bindings',
       name: 'admin-bindings',
       component: () => import('@/pages/admin/Admin.vue'),

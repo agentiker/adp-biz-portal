@@ -6,9 +6,9 @@
 
 业务 Worker 和企微 Bot 只从数据库选择 ADP 应用：企业显式绑定 → 启用的平台默认应用。显式绑定已停用或不可用时拒绝执行；缺少可用应用时也拒绝执行，不回退到 `.env` 或本地 M3 Agent。
 
-1. 数据库迁移至 revision 17，在 API、Worker、企微网关使用相同的 `PLATFORM_CHANNEL_CREDENTIAL_KEY`。此密钥用于解密数据库中的应用及渠道凭据，必须持久保存。
+1. 数据库迁移至 revision 18，在 API、Worker、企微网关使用相同的 `PLATFORM_CHANNEL_CREDENTIAL_KEY`。此密钥用于解密数据库中的应用及渠道凭据，必须持久保存。
 2. 管理后台「ADP 应用配置」录入 ApplicationId、AppKey、TC SecretAppId、SecretId、SecretKey，按实际云环境设置 Vendor/ServiceVendor，启用并设为默认；如有多个应用，在企业配置中明确绑定。
-3. 在隔离联调环境设置 `M3_USE_MOCK=true`；在管理后台「ADP 应用配置 → 连接器 API Key」创建 Key 并立即保存。创建专用测试企业，CustomerCode 分别为 `MOCK-ENT-A`、`MOCK-ENT-B`，创建/绑定测试用户。不修改已有客户企业编码。
+3. 在隔离联调环境设置 `M3_USE_MOCK=true`；在管理后台「开放接口」通过「新建 API Key」填写名称创建 Key，再点击复制配置到连接器。创建专用测试企业，CustomerCode 分别为 `MOCK-ENT-A`、`MOCK-ENT-B`，创建/绑定测试用户。不修改已有客户企业编码。
 4. API、Worker/网关必须连接同一平台数据库。工具 HTTPS 域名必须可从 ADP 云端访问。
 5. `APP_CONFIGS=[]` 可保持为空；该配置只供旧管理员调试入口使用。数据库、服务鉴权、加密、渠道等基础设施配置仍在环境变量中。本次未修改远程服务器 `.env`。
 
@@ -74,8 +74,8 @@ backend/.venv/bin/python -m pytest \
 
 ## 连接器 API Key 管理（2026-09-16）
 
-管理接口要求服务端 `platform.manage` 权限。创建时生成 256 位随机密钥，返回一次明文并设置 `Cache-Control: no-store`；数据库 `platform_adp_api_key` 仅保存 SHA-256 摘要、显示前缀、名称、创建/撤销时间。列表不返回密钥或摘要；创建和撤销写入不含密钥的审计事件。
+管理接口要求服务端 `platform.manage` 权限。创建时生成 256 位随机密钥，创建和按需查看接口返回明文并设置 `Cache-Control: no-store`；数据库 `platform_adp_api_key` 保存 SHA-256 鉴权摘要、Fernet 加密副本与密钥版本、显示前缀、名称、创建/撤销时间。列表不返回密钥或摘要；创建、查看和撤销写入不含密钥的审计事件。
 
 Key 为平台连接器级凭据，仅授权三个 shipment 工具；每次工具调用仍须验证执行上下文及当前企业权限。Key 不授权旧入站身份/上下文签发接口，这些内部适配器接口保留 `ADP_TOOL_SERVICE_TOKEN`。工具鉴权每次查询数据库，撤销提交后的新鉴权立即失败；已通过鉴权的在途请求不会被中断。
 
-轮换：创建新 Key → 更新 ADP 连接器安全凭据 → 验证调用 → 撤销旧 Key。没有明文找回功能，遗失时重新创建。此次仅本地实现和测试，生产需先备份并迁移 16→17、创建 Key、更新 ADP 连接器，云端验收仍由 `M2-ORCH-01` 跟踪。
+轮换：创建新 Key → 更新 ADP 连接器安全凭据 → 验证调用 → 撤销旧 Key。独立「开放接口」页面列出名称、默认隐藏的 Key、创建时间和状态，支持小眼睛查看及一键复制；查看时重新校验服务端权限并记录审计。刷新后重新隐藏。历史仅保存摘要的 Key 继续有效，但无法还原，需新建替换才能查看。加密副本复用平台凭据密钥，必须保留对应版本的密钥。此次仅本地实现和测试，生产需先备份并迁移至 18、创建 Key、更新 ADP 连接器，云端验收仍由 `M2-ORCH-01` 跟踪。

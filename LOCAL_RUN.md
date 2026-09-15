@@ -63,7 +63,7 @@ backend/.venv/bin/python script/bootstrap-local-admin.py
 
 在管理后台「ADP 应用配置」录入应用 ID、AppKey、SecretAppId、SecretId 和 SecretKey，选择实际 Vendor/ServiceVendor 并启用，设为平台默认或在企业中明确绑定。业务运行不再读取 `.env` 默认应用；显式绑定停用时不会切换到其它应用。
 
-`backend/.env` 保留数据库、平台密钥、`PLATFORM_CHANNEL_CREDENTIAL_KEY`、旧内部适配器使用的 `ADP_TOOL_SERVICE_TOKEN` 等基础设施配置（不用于 shipment 连接器工具；连接器 Key 在 Admin 创建，需迁移 revision 17）。`APP_CONFIGS=[]` 可为空，仅旧管理员调试入口使用。不要把真实密钥提交 Git 或贴到日志、截图中。
+`backend/.env` 保留数据库、平台密钥、`PLATFORM_CHANNEL_CREDENTIAL_KEY`、旧内部适配器使用的 `ADP_TOOL_SERVICE_TOKEN` 等基础设施配置（不用于 shipment 连接器工具；连接器 Key 在 Admin「开放接口」创建、查看和复制，需迁移 revision 18）。`APP_CONFIGS=[]` 可为空，仅旧管理员调试入口使用。不要把真实密钥提交 Git 或贴到日志、截图中。
 
 固定 M3 Mock、测试企业和连接器设置见 [ADP/M3 联调说明](docs/plans/2026-09-16-adp-m3-mock-connector.md)。正常业务查询需要可用的数据库 ADP 应用以及云端连接器回调；没有工具回执时返回失败提示。
 

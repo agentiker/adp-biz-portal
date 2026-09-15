@@ -674,7 +674,7 @@ paths:
       summary: listAdpApiKeys (platform.manage required)
       responses:
         '200':
-          description: Connector key metadata; creation reveals the secret once (no-store)
+          description: Connector key response (no-store); plaintext only in create and authorized reveal responses
           content:
             application/json:
               schema:
@@ -694,7 +694,7 @@ paths:
             schema: { $ref: '#/components/schemas/CreateAdpApiKeyRequest' }
       responses:
         '201':
-          description: Connector key metadata; creation reveals the secret once (no-store)
+          description: Connector key response (no-store); plaintext only in create and authorized reveal responses
           content:
             application/json:
               schema:
@@ -714,11 +714,31 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Connector key metadata; creation reveals the secret once (no-store)
+          description: Connector key response (no-store); plaintext only in create and authorized reveal responses
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdpApiKey'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/adp-api-keys/{key_id}/reveal:
+    post:
+      tags: [Administration]
+      operationId: revealAdpApiKey
+      summary: revealAdpApiKey (platform.manage required)
+      parameters:
+        - in: path
+          name: key_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Connector key response (no-store); plaintext only in create and authorized reveal responses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevealedAdpApiKey'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1202,11 +1222,12 @@ components:
   schemas:
     AdpApiKey:
       type: object
-      required: [id, name, prefix, createdAt, revokedAt]
+      required: [id, name, prefix, createdAt, revokedAt, canReveal]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         prefix: { type: string }
+        canReveal: { type: boolean }
         createdAt: { type: string, format: date-time }
         revokedAt: { type: [string, 'null'], format: date-time }
     CreateAdpApiKeyRequest:
@@ -1214,13 +1235,18 @@ components:
       required: [name]
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
+    RevealedAdpApiKey:
+      type: object
+      required: [apiKey]
+      properties:
+        apiKey: { type: string }
     CreatedAdpApiKey:
       allOf:
         - $ref: '#/components/schemas/AdpApiKey'
         - type: object
           required: [apiKey]
           properties:
-            apiKey: { type: string, description: Revealed once; never stored in plaintext }
+            apiKey: { type: string, description: Encrypted at rest; administrator can reveal on demand }
     AdminAdpChatContext:
       type: object
       required: [contextToken, expiresAt]

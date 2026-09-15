@@ -127,6 +127,7 @@ export interface AdpApiKey {
   id: string
   name: string
   prefix: string
+  canReveal: boolean
   createdAt: string
   revokedAt: string | null
 }
@@ -417,6 +418,10 @@ export interface PortalSessionDetail {
   messages: Array<PortalMessage>
   runs: Array<PortalExecutionRun>
   result: ShipmentResult | null
+}
+
+export interface RevealedAdpApiKey {
+  apiKey: string
 }
 
 export interface RotateChannelCredentialRequest {

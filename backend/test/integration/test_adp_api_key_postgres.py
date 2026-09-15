@@ -15,6 +15,9 @@ from test.integration.test_admin_conversations_postgres import _admin_context, _
 
 @pytest.mark.asyncio
 async def test_admin_key_lifecycle_and_permissions(platform_sessionmaker, monkeypatch):
+    from cryptography.fernet import Fernet
+    from config import tagentic_config
+    monkeypatch.setattr(tagentic_config, "PLATFORM_CHANNEL_CREDENTIAL_KEY", Fernet.generate_key().decode())
     from test.app_bootstrap import ensure_app
     ensure_app()
     import router.platform as router
@@ -33,10 +36,14 @@ async def test_admin_key_lifecycle_and_permissions(platform_sessionmaker, monkey
         assert await require_connector_key(db, secret) == created['id']
         row = (await db.execute(select(PlatformAdpApiKey))).scalar_one()
         assert row.KeyHash != secret and secret not in str(serialize_api_key(row))
+        revealed = await router.AdminAdpApiKeyRevealApi().post(request, created['id'])
+        assert json.loads(revealed.body)['apiKey'] == secret
+        assert revealed.headers['Cache-Control'] == 'no-store'
+        assert row.Ciphertext and secret not in row.Ciphertext
         listed = await router.AdminAdpApiKeyListApi().get(request)
         assert secret not in listed.body.decode() and 'apiKey' not in json.loads(listed.body)[0]
         _install_context(monkeypatch, router, _admin_context(account_id, manage=False))
-        for method, args in [(router.AdminAdpApiKeyListApi().get, (request,)), (router.AdminAdpApiKeyListApi().post, (request,)), (router.AdminAdpApiKeyRevokeApi().post, (request, created['id']))]:
+        for method, args in [(router.AdminAdpApiKeyListApi().get, (request,)), (router.AdminAdpApiKeyListApi().post, (request,)), (router.AdminAdpApiKeyRevokeApi().post, (request, created['id'])), (router.AdminAdpApiKeyRevealApi().post, (request, created['id']))]:
             with pytest.raises(PlatformForbidden):
                 await method(*args)
         _install_context(monkeypatch, router, _admin_context(account_id))
@@ -51,5 +58,5 @@ async def test_admin_key_lifecycle_and_permissions(platform_sessionmaker, monkey
         assert replacement != secret
         await require_connector_key(db, replacement)
         audits = (await db.execute(select(PlatformAuditEvent))).scalars().all()
-        assert {a.Action for a in audits} == {'adp_api_key.create', 'adp_api_key.revoke'}
+        assert {a.Action for a in audits} == {'adp_api_key.create', 'adp_api_key.revoke', 'adp_api_key.reveal'}
         assert all(secret not in str(a.to_dict()) for a in audits)
