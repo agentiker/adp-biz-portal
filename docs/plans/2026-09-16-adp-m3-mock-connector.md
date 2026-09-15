@@ -107,3 +107,9 @@ Key 为平台连接器级凭据，仅授权三个 shipment 工具；每次工具
 响应包含文本 content 和 structuredContent；权限/上下文/重放校验失败返回 isError，不暴露内部异常。查询不到数据仍是正常业务结果。工具调用共用 HTTP 执行链，继续记录回执、审计及生成确定性业务回复。无新增数据库迁移（依赖现有 revision 19）。Origin 存在时只接受请求同源；无浏览器 Origin 的服务端客户端正常接入。
 
 隔离 PostgreSQL 验证见 test_mcp_postgres.py、test_mcp_protocol_postgres.py，并回归 test_adp_connector_postgres.py。ADP 云端能否配置 Bearer 凭据、传递动态上下文及唯一请求 ID 尚待真实验证；仅支持静态 Header 的客户端可以发现工具，但不能直接执行企业业务查询。M2-ORCH-01 保持 BLOCKED。
+
+## 服务器联调状态（2026-09-16）
+
+已按用户授权在 `https://adp.xdimspace.cn/mcp` 所在服务器开启固定 M3 Mock，API、Worker、企微网关均通过 Compose override 持久设置 `M3_USE_MOCK=true`，重建并检查生效；`.env` 未修改。该开关作用于这三个进程的 M3 适配器，固定数据仅包含 MOCK-ENT-A / MOCK-ENT-B。
+
+公网 MCP 初始化、三个工具发现和已删除 Key 拒绝通过；运行镜像内固定数据及跨企业过滤四例通过。服务器目前没有测试企业及绑定用户，需先补齐测试身份，再从 Portal/渠道发起查询；ADP 调试台单独发送文字没有平台业务上下文，不能代替该验收。真实 ADP 动态 Header 映射及工具回执尚未验收，M2-ORCH-01 保持 BLOCKED。部署配置、恢复方式和验证记录见 ROADMAP 的 M4-MCP-MOCK-01。
