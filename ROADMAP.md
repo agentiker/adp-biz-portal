@@ -39,7 +39,7 @@
 
 部署进展（2026-09-13，项目重命名割接 + 迁移 14→16）：将分支 `refactor/rebrand-adp-business-gateway`（提交 `daeed27`，`adp-chat-client`→`adp-business-gateway` 全量重命名：compose 项目名/镜像名/DB 迁移锁 key、目录 `client`→`frontend`/`server`→`backend`、前端分层重组）以镜像 `adp-business-gateway:daeed27` 部署到 `xdimspace-01`。本轮仅项目自身包名变、第三方依赖闭包未变，故按 skill overlay 到上一个在役镜像 `adp-chat-client:9f6495b` 构建（Docker Hub 拉 `python:3.12-slim` 仍 EOF）。**割接前** `pg_dump -Fc` 备份到 `/root/adp-backups/adp_chat-pre-rename-20260913184250.dump`（204K，`pg_restore -l` 列出 31 个 TABLE DATA，可恢复），并把在役镜像 tag 为 `adp-chat-client:rollback-pre-rename`。`docker-compose.yml` 把 `platform-postgres` 命名卷**钉死**为 `adp-chat-client_platform-postgres`：`down` 旧项目 → 换 compose → `up` 新项目 `adp-business-gateway`，**数据原地复用**（compose 提示卷属旧项目的 warning 为良性，未新建空卷）；已重启 reverse-proxy。**实测生产 DB 割接前在 revision 14**（非预期的 16），`compose up` 的一次性 `migrate` 增量应用 revision 15（`platform_enterprise_contact`）与 16（`platform_adp_app`）到 16，业务数据完整（审计 94、消息 72、会话 35 等行数保留）。公网 `/healthz`=ok、`/readyz`=ready schemaRevision **16**；api/worker/wecom-ws-gateway/reverse-proxy 均 healthy。已知 `[TCADP.get_info] 450006` 元信息报错为既有问题、与本次无关。服务器 `.env`（无 `APP_IMAGE` 行，走 compose 默认 `adp-business-gateway:local`）、PostgreSQL 数据卷未触碰。回滚：app 用 `adp-chat-client:rollback-pre-rename` + 旧 compose `docker-compose.pre-rename.yml`（已留在服务器）`up`；如需回退 schema 到 14，从上述 dump 恢复（15/16 为增量表，`migrate.py downgrade --target 14 --allow-data-loss` 亦可）。
 
-当前任务计数：`51 / 70` 项已完成，`19` 项未完成（其中 `9` 项 `BLOCKED`、`8` 项 `IN PROGRESS`、`2` 项 `TODO`）。
+当前任务计数：`52 / 71` 项已完成，`19` 项未完成（其中 `9` 项 `BLOCKED`、`8` 项 `IN PROGRESS`、`2` 项 `TODO`）。
 
 本轮进展（2026-09-16）：`M2-ORCH-MOCK-01` 完成固定双企业 M3 数据、三个 HTTP 工具、隐藏上下文、回执驱动回复及 Worker/企微 Bot 本地验证。`M3-WECHAT-OA-03` 按用户明确反馈标记已验收。`M4-ADP-CFG-01` 本地业务运行取消 `.env` 应用回退，改用数据库绑定/默认应用；远程 `.env` 未修改。`M2-ORCH-01` 与 `M4-ADP-CFG-01` 的真实验收仍需发布代码、录入应用、导入 ADP 连接器和验证云端隐藏参数映射，标记 BLOCKED。9 月 13 日生产已经迁移至 revision 16，不再把迁移 16 当作未完成前置。此前任务中的 server/client 路径、环境应用映射与原始流式行为属于历史记录，当前以本轮补充及 [连接器联调方案](docs/plans/2026-09-16-adp-m3-mock-connector.md) 为准。
 
@@ -502,6 +502,13 @@
   - 遗留：未部署生产或修改远程环境配置；本地开发库已按下述启动记录升级。生产发布需备份、迁移至 18、在后台创建 Key 并更新 ADP 连接器。真实 ADP 联调仍 BLOCKED；Key 撤销不终止已通过鉴权的在途调用。
   - 验证发现与范围补充：迁移 DDL 使用独立连接导致回滚锁等待，revision 16 回滚未移除企业应用外键；本项一并修复迁移事务连接与外键回滚顺序，验证 fresh/增量/回滚。
   - 范围：后台创建/列出/撤销、随机 Key 仅展示一次且只存摘要、工具接口数据库鉴权、权限与隔离测试、迁移 revision 17。旧内部适配器接口保留原服务 Token，连接器 Key 仅授权 shipment 工具。真实云端联调仍归 M2-ORCH-01。
+
+- [x] `M4-MCP-01` 提供远程 MCP 工具入口。
+  - 状态：`DONE`（2026-09-16，本地协议及业务链验证完成）。
+  - 完成证据：`backend/router/mcp.py` 提供 /mcp；`router/platform.py` 抽取共用 execute，前端 `AdminAdpApiKeys.vue` 展示接入信息；README、LOCAL_RUN、连接器方案同步。无额外依赖和数据库迁移。
+  - 验证：显式 `PLATFORM_TEST_DATABASE_URL=postgresql+asyncpg://jyxc-dz-0100610@localhost/adp_biz_portal_orch_test` + 随机隔离 schema，`backend/.venv/bin/python -m pytest backend/test/integration/test_mcp_postgres.py backend/test/integration/test_adp_connector_postgres.py -q` 10 passed；同环境 `test_mcp_protocol_postgres.py` 1 passed，覆盖发现、初始化、通知、协议错误、Origin 拒绝、Key 删除失效、三工具、跨企业、重放、回合结束撤销、持久化回执与回复。`make platform_api_check`、`cd frontend && npm run build_app`（含类型检查）、`git diff --check` 通过。本地服务已重启，readyz=ready/schemaRevision 19，POST /mcp 无凭据拒绝。
+  - 遗留：未部署生产；ADP 云端 MCP Header 映射、第三方 MCP 客户端互操作和登录后 UI 交互仍待验收，不以本地 HTTP 协议测试替代。
+  - 范围：无状态 Streamable HTTP、initialize/ping/tools/list/tools/call；复用 shipment 三工具执行链、API Key 与隐藏执行上下文；后台接入说明、协议/权限/隔离验证。无新增数据库迁移。真实 ADP MCP 动态 Header 映射仍由 M2-ORCH-01 验收。
 
 ## 每个 TODO 的完成标准
 

@@ -1,6 +1,6 @@
 # ADP 连接器与 M3 Mock 联调
 
-对应 ROADMAP：`M2-ORCH-MOCK-01`、`M2-ORCH-01`、`M4-ADP-CFG-01`、`M4-ADP-KEY-01`。本轮采用 HTTP 连接器，复用平台工具网关；不新增 MCP 服务。以下为本地已实现契约，ADP 云端导入及隐藏参数映射仍待真实验证。
+对应 ROADMAP：`M2-ORCH-MOCK-01`、`M2-ORCH-01`、`M4-ADP-CFG-01`、`M4-ADP-KEY-01`。初始采用 HTTP 连接器；现补充远程 MCP，二者复用平台工具执行链。以下为本地已实现契约，ADP 云端导入及隐藏参数映射仍待真实验证。
 
 ## 运行配置
 
@@ -81,3 +81,29 @@ Key 为平台连接器级凭据，仅授权三个 shipment 工具；每次工具
 轮换：创建新 Key → 更新 ADP 连接器安全凭据 → 验证调用 → 撤销旧 Key。独立「开放接口」页面列出名称、默认隐藏的 Key、创建时间和状态，支持小眼睛查看及一键复制；查看时重新校验服务端权限并记录审计。刷新后重新隐藏。历史仅保存摘要的 Key 继续有效，但无法还原，需新建替换才能查看。加密副本复用平台凭据密钥，必须保留对应版本的密钥。此次仅本地实现和测试，生产需先备份并迁移至 19、创建 Key、更新 ADP 连接器，云端验收仍由 `M2-ORCH-01` 跟踪。
 
 补充：API Key 列固定宽度，完整值在单元格内横向滚动。支持软删除（DeletedAt，revision 19），删除同时撤销，列表过滤已删除项，已删除 Key 不可查看或鉴权。删除要求 platform.manage，并记录 adp_api_key.delete 审计；数据库保留历史记录，不提供恢复入口。
+
+
+## 远程 MCP（M4-MCP-01）
+
+地址：`https://<平台域名>/mcp`，传输为无状态 Streamable HTTP，POST 返回 JSON，不分配 MCP Session ID。GET 返回 405（不提供服务端主动 SSE 推送）；不提供旧版 HTTP+SSE `/sse` 入口。支持协议版本 `2025-11-25`、`2025-06-18`、`2025-03-26`，initialize 协商版本，后续请求建议携带 `MCP-Protocol-Version`。实现 initialize、ping、tools/list、tools/call，通知返回 202，不支持批量 JSON-RPC。鉴权为预配置 API Key，不提供 OAuth 授权发现流程。
+
+每个 POST 必须包含：
+- `Authorization: Bearer <后台创建的 API Key>`（兼容 `X-ADP-Service-Token`）。
+- `Content-Type: application/json`。
+- `Accept: application/json, text/event-stream`。
+
+工具调用另需可信客户端动态 Header `X-Platform-Context-Token` 和唯一 `X-ADP-Request-Id`，映射来源与 HTTP 连接器相同。不能把令牌放到模型参数。工具仅接受 query，不接受企业 ID、CustomerCode 或执行上下文作为参数。初始化和工具发现不需要业务上下文，但必须有有效 API Key。API Key 撤销/删除后包括发现接口在内均拒绝访问。
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"adp-client","version":"1.0"}}}
+```
+
+初始化后发送 notifications/initialized 通知，再执行 tools/list。三个工具名为 shipment_lookup、shipment_schedule、shipment_milestones：
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shipment_lookup","arguments":{"query":"MOCK-BL-A001"}}}
+```
+
+响应包含文本 content 和 structuredContent；权限/上下文/重放校验失败返回 isError，不暴露内部异常。查询不到数据仍是正常业务结果。工具调用共用 HTTP 执行链，继续记录回执、审计及生成确定性业务回复。无新增数据库迁移（依赖现有 revision 19）。Origin 存在时只接受请求同源；无浏览器 Origin 的服务端客户端正常接入。
+
+隔离 PostgreSQL 验证见 test_mcp_postgres.py、test_mcp_protocol_postgres.py，并回归 test_adp_connector_postgres.py。ADP 云端能否配置 Bearer 凭据、传递动态上下文及唯一请求 ID 尚待真实验证；仅支持静态 Header 的客户端可以发现工具，但不能直接执行企业业务查询。M2-ORCH-01 保持 BLOCKED。

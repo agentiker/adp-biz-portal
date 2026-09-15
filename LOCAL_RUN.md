@@ -86,3 +86,5 @@ npm run build
 
 官方初始 Python 锁文件缺少源码需要的 pydash、COS SDK 等已声明依赖，已通过 uv sync 更新 backend/uv.lock。
 M3 固定 Mock 仅供显式启用的联调环境使用；真实联调进度以 ROADMAP 为准。
+
+本地 MCP 地址：`http://127.0.0.1:8000/mcp`，使用「开放接口」创建的 API Key 作为 Bearer 凭据；工具调用还须传入本轮执行上下文和唯一请求 ID。详情见 `docs/plans/2026-09-16-adp-m3-mock-connector.md`。

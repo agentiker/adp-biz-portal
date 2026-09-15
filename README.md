@@ -94,3 +94,5 @@ git diff --check
 ## 安全与许可证
 
 `backend/.env` 和部署环境变量属于机密配置。日志、测试夹具和截图不得包含真实凭据、订单或渠道 Token。项目采用 Apache License 2.0，详见 [`LICENSE`](LICENSE)。
+
+远程 MCP：`/mcp`（Streamable HTTP），与 HTTP 连接器共用后台 API Key 和企业执行上下文。接入地址在「开放接口」页面展示，协议、Header 及调用示例见[连接器与 MCP 联调方案](docs/plans/2026-09-16-adp-m3-mock-connector.md#远程-mcpm4-mcp-01)。

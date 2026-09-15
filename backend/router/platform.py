@@ -1675,6 +1675,9 @@ class AdpShipmentLookupApi(HTTPMethodView):
 
     async def post(self, request: Request):
         await require_connector_key(request.ctx.db, request.headers.get("X-ADP-Service-Token"))
+        return await self.execute(request, _body(request))
+
+    async def execute(self, request: Request, body: dict):
         request_id = _tool_request_id(request)
         execution = await load_execution_context(
             request.ctx.db,
@@ -1682,7 +1685,6 @@ class AdpShipmentLookupApi(HTTPMethodView):
             tool_name=f"shipment.{self.operation}",
             request_id=request_id,
         )
-        body = _body(request)
         query = body.get("query")
         if not isinstance(query, str) or not query.strip() or len(query.strip()) > 128:
             raise PlatformBadRequest("请输入不超过 128 字符的订单号、提单号或箱号")
