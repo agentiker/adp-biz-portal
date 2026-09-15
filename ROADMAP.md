@@ -266,6 +266,7 @@
   - 状态：`BLOCKED`（2026-09-16，本地子任务 `M2-ORCH-MOCK-01` 已完成，等待真实 ADP 连接器配置和参数映射验收）。
   - 解除方式：代码已部署、固定 Mock 已开启（见 M4-MCP-MOCK-01）；MOCK-ENT-A / MOCK-ENT-B 测试企业和绑定用户已补齐（M4-MCP-TEST-ID-01），在 ADP 云端配置 MCP 服务凭据和动态隐藏 Header，用 Portal/渠道真实发起 Mock 查询并留存审计与拒绝用例；正式 M3 数据仍单独依赖 `M2-M3-02`。
   - 本轮范围（2026-09-15 启动，现已拆出本地验收子项）：按用户授权先以固定虚构 M3 数据接通 ADP HTTP 连接器，覆盖 lookup/schedule/milestones 语义、隐藏上下文传递、服务鉴权、企业隔离、回调证据与回复闭环。真实 M3 仍由 `M2-M3-02` 验收，真实 ADP 隐藏变量回调需 `M0-ADP-01` 条件；本地模拟不替代云端验收。
+  - 新增阻塞（2026-09-16，用户真实联调反馈）：腾讯云 ADP 无法填充动态 Header，当前 MCP 返回工具调用拒绝，现有动态 Header 接入方案不适用。用户进一步确认 MCP 工具参数只能由模型填写，不能固定映射 CustomVariables，因此 Header 和工具参数两条可信动态上下文通道均不可用。当前共享静态 API Key 的远程 MCP 无法完成用户/企业/执行轮次绑定。建议平台侧接收 ADP 的受限查询意图并执行工具；该方案改变原 ADP→MCP 拓扑，尚未实施。若必须保留 ADP 主动调用，需另行验证 HTTP 工作流的可信变量映射能力。不得移除上下文校验、按最近请求猜测企业，或把静态共享 API Key 视为用户身份。
   - 验收：模型不能决定身份/权限；关键船名、航次、时间和状态均可映射到本轮证据。
   - 本轮完成（2026-09-06，本地 Worker/Portal 编排）：入站任务在服务端重新校验账号、会话、企业范围和 `shipment.read` 权限；创建并持久化 execution run、入站/assistant 消息、受控 evidence；通过独立 `AgentProvider` 边界执行 Agent 请求；创建 `platform.reply` 任务；官网回复通过 Portal 持久化结果视为已投递；非官网渠道未配置真实发送器时明确失败或标记发送结果不确定，不伪报成功。
   - 代码证据：`server/core/platform_worker.py`、`server/integrations/adp/provider.py`、`server/test/unit_test/test_agent_provider.py`、`server/test/integration/test_platform_worker_postgres.py`、`output/tests/m2-orch-01-worker.json`。
