@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
-from core.delivery import InboundMessageInput
+from channels.contracts import InboundMessageInput
 from integrations.channels._wechat.crypto import (
     WechatProtocolError,
     cdata as _cdata,
@@ -30,7 +30,7 @@ from integrations.channels._wechat.crypto import (
     verify_signature,
     xml_value as _xml_value,
 )
-from integrations.channels.base import ChannelCapabilities, DeliveryReceipt, OutboundMessage
+from channels.contracts import ChannelCapabilities, DeliveryReceipt, OutboundMessage
 from integrations.channels.text_format import to_plain_text
 from integrations.channels.wechat_transport import WechatSendError
 

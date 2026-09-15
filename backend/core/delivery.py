@@ -19,6 +19,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from channels.contracts import InboundMessageInput
+
 from core.platform import utc_now
 from model.platform import PlatformDeliveryTask, PlatformInboundMessage
 
@@ -53,22 +55,6 @@ class DeliveryRejectedError(RuntimeError):
     def __init__(self, error_code: str = "task_rejected"):
         self.error_code = _text(error_code, field="错误码", limit=128) or "task_rejected"
         super().__init__(self.error_code)
-
-
-@dataclass(frozen=True)
-class InboundMessageInput:
-    channel_instance_id: str
-    external_message_id: str
-    external_conversation_id: str
-    sender_identity_id: str
-    text: str | None
-    trace_id: str
-    message_type: str = "text"
-    payload: Mapping[str, Any] | None = None
-    # Latest moment the source channel still accepts a reply for this message.
-    # Adapters derive it from their protocol window; the portal leaves it unset
-    # because the browser reads the answer back instead of being pushed to.
-    reply_window_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)

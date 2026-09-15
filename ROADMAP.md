@@ -360,10 +360,12 @@
   - Admin 渠道配置：`client/.../AdminChannelManagement.vue` 凭据表单已改为渠道感知，「企业微信机器人」录 `botId`+`secret`、「微信客服」录 `corpId`/`token`/`encodingAESKey`/`corpSecret`/`openKfId`，均经现有 admin 凭据接口加密入库（无需新增后端接口）。
   - 未完成（稳定性真机项）：断线自动重连、进程重启后恢复订阅、并发订阅冲突（新连踢旧连 `errcode 6000`）、6 分钟 finish 时效边界的真机验收；以及经真实产品绑定流程（`begin/confirm_channel_identity`）而非本地 seed 的端到端。生产部署 `wecom-ws-gateway` 服务后需验证连接。
   - 参考实现（三家一致）：AstrBot `wecom_ai_bot/wecomai_long_connection.py`（`ws_connect` 裸地址、`{cmd,headers,body}` 信封、`aibot_subscribe`/`ping`、回调 `body` 明文、回 `aibot_respond_msg` 流式）；LangBot `wecom_ai_bot_api/ws_client.py`（`DEFAULT_WS_URL` 裸地址、`reply_stream(req_id,stream_id,content,finish)`）；openclaw-china 长连接实现计划 §3（协议约束、时效/额度）。反例（勿抄）LangBot webhook 侧关掉 CorpID 校验（传空串）。详见 `docs/plans/2026-09-08-channel-adapter-reference-research.md` §5 与计划 Phase 2。
-- [ ] `M3-REFACTOR-01` 将渠道适配层提升为一等包并结构化：契约中性化、按渠道拆目录、统一 WeChat crypto、抽 `core/channel_ingress` 编排 seam。
-  - 状态：`TODO`；作为 `M3-WECHAT-CS-01` 和 `M3-WECOM-01` 的结构前置。
+- [x] `M3-REFACTOR-01` 将渠道适配层提升为一等包并结构化：契约中性化、按渠道拆目录、统一 WeChat crypto、抽 `core/channel_ingress` 编排 seam。
+  - 状态：`DONE`（2026-09-15；建立 `backend/channels` 一等包与中性 contracts，core ingress/delivery 和现有适配器改为依赖 contracts；保留 integrations 路径作为兼容实现入口）。作为 `M3-WECHAT-CS-01` 和 `M3-WECOM-01` 的结构前置。
   - 范围：`server/channels/`（从 `integrations/channels/` 提升）；`channels/contracts.py` 收敛 `InboundMessageInput/OutboundMessage/DeliveryReceipt/ChannelCapabilities` 使 core 依赖契约而非反向；`channels/_wechat/{crypto,crypto_json,token,text}.py` 供公众号/客服/企微复用；`ChannelAdapter.normalize` 收成带类型签名并新增 `get_launcher_id` 会话键钩子；把「验签→normalize→replay→身份→入队」从 2266 行的 `router/platform.py` 抽到 `core/channel_ingress.py`（鉴权仍留平台服务侧，不进渠道包）。
   - 验收：适配器仍不触碰 DB/models/identity/credentials/replay；渠道包依赖仅指向 `contracts`；每文件 <400 行、crypto 单份；现有 `M3-FRAMEWORK-01`/`M3-WECHAT-OA-01` 测试全绿且行为不变。
+  - 完成证据：`backend/channels/contracts.py`、`backend/channels/__init__.py`；`backend/core/channel_ingress.py`、`backend/core/delivery.py` 与渠道适配器改用中性契约；兼容导出保留既有调用方。验证：`backend/.venv/bin/pytest backend/test/unit_test -q`、`backend/.venv/bin/python -m compileall -q backend`、`git diff --check`（均通过）。
+  - 偏差/遗留：历史包路径 `backend/integrations/channels` 暂保留，待后续版本在无外部导入约束时物理迁移；真实第三方联调仍按各渠道任务状态执行。
   - 依据：`docs/plans/2026-09-08-channel-adapter-reference-research.md` §6。
 - [x] `M3-CRED-01` 实现渠道凭据加密存储、轮换、最小权限读取和脱敏展示。
   - 状态：`DONE`（2026-09-06，本地实现和专项回归）

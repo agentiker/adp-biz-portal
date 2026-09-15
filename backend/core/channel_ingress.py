@@ -21,7 +21,8 @@ from typing import Any, Mapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.channel_identity import external_identity_fingerprint, resolve_active_channel_identity
-from core.delivery import InboundMessageInput, record_inbound_message
+from channels.contracts import InboundMessageInput
+from core.delivery import record_inbound_message
 from core.platform import create_audit
 from model.platform import PlatformChannelIdentity, PlatformInboundMessage
 

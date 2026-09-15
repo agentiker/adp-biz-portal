@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
-from core.delivery import InboundMessageInput
+from channels.contracts import InboundMessageInput
 from integrations.channels._wechat.crypto import (
     WechatProtocolError,
     check_timestamp,

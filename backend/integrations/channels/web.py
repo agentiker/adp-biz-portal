@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from core.delivery import InboundMessageInput
+from channels.contracts import InboundMessageInput
 from core.error.platform import PlatformBadRequest
 from core.platform import PlatformContext
 from integrations.channels.base import ChannelCapabilities

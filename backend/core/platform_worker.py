@@ -49,7 +49,7 @@ from integrations.adp.provider import (
     allowlisted_evidence,
 )
 from integrations.m3.adapter import M3LookupAdapter, M3LookupResult
-from integrations.channels.base import DeliveryReceipt
+from channels.contracts import DeliveryReceipt
 from integrations.channels.stream_sink import ChannelStreamSink
 from integrations.channels.text_format import to_plain_text
 from model.account import Account, AccountStatus

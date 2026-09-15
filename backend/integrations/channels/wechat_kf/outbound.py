@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from integrations.channels.base import DeliveryReceipt
+from channels.contracts import DeliveryReceipt
 from integrations.channels.text_format import to_plain_text
 from integrations.channels.wechat_kf.adapter import WECHAT_KF
 from integrations.channels.wechat_transport import WechatSendError

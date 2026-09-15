@@ -15,7 +15,7 @@ from typing import Any, Mapping
 import aiohttp
 
 from core.delivery import DeliveryRetryableError
-from integrations.channels.base import DeliveryReceipt
+from channels.contracts import DeliveryReceipt
 from integrations.channels.wechat_transport import (
     JSON_UTF8_HEADERS,
     MAX_TEXT_BYTES,
