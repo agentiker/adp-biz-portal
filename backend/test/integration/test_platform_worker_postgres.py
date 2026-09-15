@@ -28,7 +28,7 @@ from integrations.adp.provider import AgentResponse
 from integrations.m3.adapter import M3LookupAdapter
 from model.account import Account, AccountRole, AccountStatus
 from model.platform import (
-    PlatformAdpApp,
+    PlatformAdpApp, PlatformAdpApiKey,
     PlatformAuditEvent,
     PlatformAuthSession,
     PlatformConversation,
@@ -78,7 +78,7 @@ async def platform_sessionmaker():
     )
     tables = [
         Account.__table__,
-        PlatformAdpApp.__table__,
+        PlatformAdpApp.__table__, PlatformAdpApiKey.__table__,
         PlatformEnterprise.__table__,
         PlatformUser.__table__,
         PlatformMembership.__table__,

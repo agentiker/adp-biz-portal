@@ -21,6 +21,7 @@ from model.base import Base
 from model.chat import ChatConversation, ChatRecord, SharedConversation
 from model.platform import (
     PlatformAdpApp,
+    PlatformAdpApiKey,
     AdpAppStatus,
     PlatformAuditEvent,
     PlatformAuthSession,
@@ -79,7 +80,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 16
+    CURRENT_PLATFORM_SCHEMA_VERSION = 17
     REVISIONS = (
         MigrationRevision(
             1,
@@ -184,6 +185,7 @@ class Migration:
             "platform_adp_app_schema",
             (PlatformAdpApp.__tablename__,),
         ),
+        MigrationRevision(17, "platform_adp_api_key_schema", (PlatformAdpApiKey.__tablename__,)),
     )
 
     @classmethod
@@ -215,6 +217,7 @@ class Migration:
             PlatformSharedResult,
             PlatformChannelCursor,
             PlatformAdpApp,
+            PlatformAdpApiKey,
             PlatformConfigVersion,
             PlatformToolDefinition,
             PlatformExecutionContext,
@@ -244,7 +247,7 @@ class Migration:
     async def _table_names(db: AsyncSession) -> set[str]:
         current_schema = await db.scalar(text("SELECT current_schema()"))
         names = await db.run_sync(
-            lambda sync_session: inspect(sync_session.get_bind()).get_table_names(
+            lambda sync_session: inspect(sync_session.connection()).get_table_names(
                 schema=current_schema
             )
         )
@@ -278,7 +281,7 @@ class Migration:
         if PlatformMigration.__tablename__ not in await Migration._table_names(db):
             await db.run_sync(
                 lambda sync_session: PlatformMigration.__table__.create(
-                    sync_session.get_bind(),
+                    sync_session.connection(),
                     checkfirst=False,
                 )
             )
@@ -337,7 +340,7 @@ class Migration:
             lambda sync_session: {
                 table.name
                 for table in tables
-                if inspect(sync_session.get_bind()).has_table(
+                if inspect(sync_session.connection()).has_table(
                     table.name,
                     schema=current_schema,
                 )
@@ -348,7 +351,7 @@ class Migration:
                 continue
             await db.run_sync(
                 lambda sync_session, table=table: table.create(
-                    sync_session.get_bind(),
+                    sync_session.connection(),
                     checkfirst=False,
                 )
             )
@@ -613,7 +616,7 @@ class Migration:
             lambda sync_session: {
                 table.name
                 for table in tables
-                if inspect(sync_session.get_bind()).has_table(
+                if inspect(sync_session.connection()).has_table(
                     table.name,
                     schema=current_schema,
                 )
@@ -624,7 +627,7 @@ class Migration:
                 continue
             await db.run_sync(
                 lambda sync_session, table=table: table.drop(
-                    sync_session.get_bind(),
+                    sync_session.connection(),
                     checkfirst=False,
                 )
             )
@@ -731,6 +734,9 @@ class Migration:
 
             for version in range(current, target_version, -1):
                 revision = cls._revision(version)
+                if version == 16:
+                    await db.execute(text('ALTER TABLE platform_enterprise DROP CONSTRAINT IF EXISTS fk_platform_enterprise_adp_app'))
+                    await db.execute(text('ALTER TABLE platform_enterprise DROP COLUMN IF EXISTS "AdpAppId"'))
                 await cls._drop_revision_tables(db, revision)
                 record = records[version]
                 record.Status = MIGRATION_STATUS_ROLLED_BACK

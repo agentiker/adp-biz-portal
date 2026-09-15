@@ -66,7 +66,7 @@ curl http://127.0.0.1:8000/readyz
 
 业务 Worker 和企微 Bot 使用数据库「ADP 应用配置」：优先选择企业绑定的启用应用，未绑定时使用启用的平台默认应用。显式绑定失效或没有可用应用时拒绝执行，不回退到服务器 `.env`。客户端的 `agentId`、`ApplicationId` 和 `WorkspaceId` 不参与授权。
 
-在管理后台录入应用 ID、AppKey 和每个应用自己的腾讯云签名凭据，再设为默认或绑定企业。`APP_CONFIGS` 仅供旧管理员调试入口使用，可以保持 `[]`；数据库、加密密钥和工具服务 Token 等基础设施仍由环境变量配置。
+在管理后台录入应用 ID、AppKey 和每个应用自己的腾讯云签名凭据，再设为默认或绑定企业。`APP_CONFIGS` 仅供旧管理员调试入口使用，可以保持 `[]`；数据库、加密密钥等基础设施仍由环境变量配置。ADP 连接器 API Key 在「ADP 应用配置」后台创建和撤销，明文仅显示一次；填入连接器安全凭据 Header `X-ADP-Service-Token`，配合每轮执行上下文使用。此功能需要数据库迁移至 revision 17。
 
 已提供订单/提单/箱号、船期、节点三个 HTTP 工具连接器。固定 Mock 和 ADP 参数映射见 [联调说明](docs/plans/2026-09-16-adp-m3-mock-connector.md)，导入文件为 [adp-tools.openapi.yaml](docs/api/adp-tools.openapi.yaml)。Mock 只在显式设置 `M3_USE_MOCK=true` 时启用，不能代替真实 ADP/M3 验收。
 

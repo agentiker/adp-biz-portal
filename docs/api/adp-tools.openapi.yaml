@@ -109,6 +109,7 @@ paths:
 components:
   securitySchemes:
     ServiceToken:
+      description: Admin 创建的连接器 API Key（仅创建时显示，可撤销）；不是环境变量服务 Token。
       type: apiKey
       in: header
       name: X-ADP-Service-Token

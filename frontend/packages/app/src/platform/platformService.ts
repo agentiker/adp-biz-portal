@@ -634,3 +634,13 @@ export async function revokeAdminChannelIdentity(id: string): Promise<{ identity
 }
 
 export const platformDemo = { user: demoUser, enterprise: demoEnterprise }
+
+export async function listAdpApiKeys(): Promise<import('./types').AdpApiKey[]> {
+  return httpService.get('/api/v1/admin/adp-api-keys')
+}
+export async function createAdpApiKey(name: string): Promise<import('./types').CreatedAdpApiKey> {
+  return httpService.post('/api/v1/admin/adp-api-keys', { name })
+}
+export async function revokeAdpApiKey(id: string): Promise<import('./types').AdpApiKey> {
+  return httpService.post(`/api/v1/admin/adp-api-keys/${id}/revoke`, {})
+}

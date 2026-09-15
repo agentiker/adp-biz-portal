@@ -96,7 +96,7 @@ class TCADPConfig(BaseSettings):
 
     ADP_TOOL_SERVICE_TOKEN: str = Field(
         description=(
-            "High-entropy service token required by internal ADP execution and tool routes. "
+            "High-entropy service token required by legacy internal ADP execution and inbound routes; shipment tools use Admin API keys. "
             "Leave empty to keep those routes disabled."
         ),
         default="",

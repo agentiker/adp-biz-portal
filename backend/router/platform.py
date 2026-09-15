@@ -7,6 +7,8 @@ are all derived from the revocable platform session.
 
 from __future__ import annotations
 
+from core.adp_api_key import create_api_key, list_api_keys, revoke_api_key, serialize_api_key, require_connector_key
+
 import logging
 import json as stdlib_json
 import uuid
@@ -1672,7 +1674,7 @@ class AdpShipmentLookupApi(HTTPMethodView):
     operation = "lookup"
 
     async def post(self, request: Request):
-        _require_adp_service(request)
+        await require_connector_key(request.ctx.db, request.headers.get("X-ADP-Service-Token"))
         request_id = _tool_request_id(request)
         execution = await load_execution_context(
             request.ctx.db,
@@ -2088,6 +2090,31 @@ class AdminEnterpriseDetailApi(HTTPMethodView):
         )
         await _commit_audit(request, action="enterprise.update", target_type="enterprise", target_id=str(enterprise.Id), metadata={"customerCode": enterprise.CustomerCode})
         return json(_serialize_admin_enterprise(enterprise))
+
+
+class AdminAdpApiKeyListApi(HTTPMethodView):
+    @platform_required
+    async def get(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        return json([serialize_api_key(row) for row in await list_api_keys(request.ctx.db)], headers={"Cache-Control": "no-store"})
+
+    @platform_required
+    async def post(self, request: Request):
+        require_permission(_context(request), "platform.manage")
+        row, secret = await create_api_key(request.ctx.db, _body(request).get("name"))
+        payload = {**serialize_api_key(row), "apiKey": secret}
+        await _commit_audit(request, action="adp_api_key.create", target_type="platform_adp_api_key", target_id=str(row.Id))
+        return json(payload, status=201, headers={"Cache-Control": "no-store"})
+
+
+class AdminAdpApiKeyRevokeApi(HTTPMethodView):
+    @platform_required
+    async def post(self, request: Request, key_id: str):
+        require_permission(_context(request), "platform.manage")
+        row = await revoke_api_key(request.ctx.db, key_id)
+        payload = serialize_api_key(row)
+        await _commit_audit(request, action="adp_api_key.revoke", target_type="platform_adp_api_key", target_id=str(row.Id))
+        return json(payload, headers={"Cache-Control": "no-store"})
 
 
 class AdminAdpAppListApi(HTTPMethodView):
@@ -2681,3 +2708,6 @@ app.add_route(AdminBindingDisableApi.as_view(), "/api/v1/admin/bindings/<binding
 app.add_route(AdminChannelCredentialListApi.as_view(), "/api/v1/admin/channel-credentials")
 app.add_route(AdminChannelCredentialRotateApi.as_view(), "/api/v1/admin/channel-credentials/<credential_id:str>/rotate")
 app.add_route(AdminChannelCredentialDisableApi.as_view(), "/api/v1/admin/channel-credentials/<credential_id:str>/disable")
+
+app.add_route(AdminAdpApiKeyListApi.as_view(), "/api/v1/admin/adp-api-keys")
+app.add_route(AdminAdpApiKeyRevokeApi.as_view(), "/api/v1/admin/adp-api-keys/<key_id:str>/revoke")

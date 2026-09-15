@@ -13,7 +13,7 @@ _SENSITIVE_KEYS = frozenset(
         "accesskey",
         "access_token",
         "accesstoken",
-        "appkey",
+        "appkey", "apikey",
         "appsecret",
         "authorization",
         "credential",
@@ -39,7 +39,7 @@ _NORMALIZED_SENSITIVE_KEYS = frozenset(
 )
 
 _INLINE_SECRET_RE = re.compile(
-    r"(?P<prefix>(?:[\"']?)(?:access[_-]?token|app[_-]?key|app[_-]?secret|"
+    r"(?P<prefix>(?:[\"']?)(?:access[_-]?token|app[_-]?key|api[_-]?key|app[_-]?secret|"
     r"authorization|password|passwd|secret(?:[_-]?(?:id|key))?|security[_-]?token|"
     r"tmp[_-]?secret(?:[_-]?(?:id|key))?|token)(?:[\"']?\s*[:=]\s*[\"']?))"
     r"(?P<value>[^\"'\s,;}\]]+)",
@@ -67,7 +67,7 @@ def is_sensitive_key(key: Any) -> bool:
     if normalized in _NORMALIZED_SENSITIVE_KEYS:
         return True
     return normalized.endswith(
-        ("appkey", "appsecret", "token", "secret", "secretid", "secretkey")
+        ("appkey", "apikey", "appsecret", "token", "secret", "secretid", "secretkey")
     )
 
 

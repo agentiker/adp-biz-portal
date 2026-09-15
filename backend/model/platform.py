@@ -644,3 +644,14 @@ class PlatformConfigVersion(Base):
     PublishedAt = Column(DateTime, nullable=True)
     RolledBackAt = Column(DateTime, nullable=True)
     RollbackSourceVersion = Column(Integer, nullable=True)
+
+
+class PlatformAdpApiKey(Base):
+    __tablename__ = "platform_adp_api_key"
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    Name = Column(String(128), nullable=False)
+    KeyHash = Column(String(64), nullable=False, unique=True)
+    Prefix = Column(String(16), nullable=False)
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    RevokedAt = Column(DateTime, nullable=True)

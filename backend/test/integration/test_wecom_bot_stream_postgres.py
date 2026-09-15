@@ -18,7 +18,7 @@ from integrations.channels.wecom_bot.gateway import _MsgidGuard, run_wecom_bot_t
 from integrations.channels.wecom_bot.ws_client import WecomBotWsConfig, WecomBotWsGateway
 from model.account import Account, AccountRole, AccountStatus
 from model.platform import (
-    PlatformAdpApp,
+    PlatformAdpApp, PlatformAdpApiKey,
     PlatformExecutionContext, PlatformToolCall, PlatformToolDefinition,
     PlatformAuthSession, PlatformAuditEvent,
     EnterpriseStatus,
@@ -60,7 +60,7 @@ async def bot_sessionmaker():
         connect_args={"server_settings": {"search_path": f'"{schema}",public'}},
     )
     tables = [
-        Account.__table__, PlatformAdpApp.__table__, PlatformEnterprise.__table__, PlatformUser.__table__,
+        Account.__table__, PlatformAdpApp.__table__, PlatformAdpApiKey.__table__, PlatformEnterprise.__table__, PlatformUser.__table__,
         PlatformMembership.__table__, PlatformChannelIdentity.__table__,
         PlatformConversation.__table__, PlatformExecutionRun.__table__,
         PlatformEvidence.__table__, PlatformMessage.__table__,
@@ -315,7 +315,10 @@ async def test_adp_bot_uses_recorded_callback_evidence(bot_sessionmaker, monkeyp
     from router.platform import AdpShipmentLookupApi
 
     await _seed_identity(bot_sessionmaker, bind=True)
-    monkeypatch.setattr(tagentic_config, "ADP_TOOL_SERVICE_TOKEN", "test-service")
+    from core.adp_api_key import create_api_key
+    async with bot_sessionmaker() as key_db:
+        _, connector_key = await create_api_key(key_db, "test connector")
+        await key_db.commit()
     monkeypatch.setattr(tagentic_config, "M3_USE_MOCK", True)
     async with bot_sessionmaker() as db:
         enterprise = (await db.execute(select(PlatformEnterprise))).scalar_one()
@@ -333,7 +336,7 @@ async def test_adp_bot_uses_recorded_callback_evidence(bot_sessionmaker, monkeyp
                 async with bot_sessionmaker() as callback_db:
                     request = SimpleNamespace(
                         ctx=SimpleNamespace(db=callback_db),
-                        headers={"X-ADP-Service-Token": "test-service",
+                        headers={"X-ADP-Service-Token": connector_key,
                                  "X-Platform-Context-Token": tokens[-1],
                                  "X-ADP-Request-Id": variables["platform_tool_request_id"] + ":lookup"},
                         json={"query": "MOCK-BL-A001"},

@@ -17,6 +17,7 @@ import {
   ErrorCircleIcon,
 } from 'tdesign-icons-vue-next'
 import PlatformShell from '@/components/PlatformShell.vue'
+import AdminAdpApiKeys from '@/components/admin/AdminAdpApiKeys.vue'
 import AdminChannelManagement from '@/components/admin/AdminChannelManagement.vue'
 import PlatformSelect from '@/components/admin/PlatformSelect.vue'
 import {
@@ -592,6 +593,7 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
     </template>
     <template v-else-if="view === 'bindings'">
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreateAdpApp"><ApiIcon />新增 ADP 应用</button></div></section>
+      <AdminAdpApiKeys />
       <section class="resource-panel admin-panel adp-apps-panel"><div class="resource-toolbar"><div class="toolbar-heading"><p class="section-kicker">应用注册表</p><strong class="toolbar-title">ADP 应用</strong></div><span class="resource-count">{{ adpApps.length }} 个应用</span></div><div v-if="loading && !adpApps.length" class="resource-loading">正在加载 ADP 应用…</div><div v-else-if="adpApps.length" class="resource-table"><div class="resource-table-head"><span>应用</span><span>Vendor / AgentId</span><span>状态</span><span>操作</span></div><div v-for="app in adpApps" :key="app.id" class="resource-row"><span class="resource-name"><ApiIcon /><strong>{{ app.name }}<small>{{ app.applicationId }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ app.vendor }} · {{ app.serviceVendor }}</strong><small>{{ app.agentId }} · Key ****{{ app.appKeyFingerprint }}</small></span><span class="row-status" :class="`row-status--${app.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ app.status === 'active' ? '启用' : '停用' }}<em v-if="app.isDefault" class="default-badge">默认</em></span><span class="row-actions"><button class="text-action" :disabled="adpAppActionId === app.id || app.isDefault || app.status !== 'active'" @click="setDefaultAdpApp(app)">设为默认</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="openEditAdpApp(app)">编辑</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="toggleAdpAppStatus(app)">{{ app.status === 'active' ? '停用' : '启用' }}</button><button class="text-action text-action--danger" :disabled="adpAppActionId === app.id" @click="removeAdpApp(app)">删除</button></span></div></div></section>
       <p class="adp-config-note">请先新增应用并设为平台默认，或在企业管理中绑定应用。业务调用不再回退到服务器默认配置。</p>
     </template>

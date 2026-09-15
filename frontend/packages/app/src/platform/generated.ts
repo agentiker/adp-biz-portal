@@ -123,6 +123,14 @@ export interface AdminUserEnterprise {
   status: 'active' | 'suspended'
 }
 
+export interface AdpApiKey {
+  id: string
+  name: string
+  prefix: string
+  createdAt: string
+  revokedAt: string | null
+}
+
 export interface AdpApp {
   id: string
   name: string
@@ -194,6 +202,10 @@ export interface ChannelIdentity {
 
 export type ChannelIdentityStatus = 'pending' | 'active' | 'revoked' | 'expired'
 
+export interface CreateAdpApiKeyRequest {
+  name: string
+}
+
 export interface CreateAdpAppRequest {
   name: string
   applicationId: string
@@ -229,6 +241,10 @@ export interface CreatePlatformUserRequest {
   role: PlatformRole
   enterpriseId: string
 }
+
+export type CreatedAdpApiKey = AdpApiKey & {
+    apiKey: string
+  }
 
 export interface EnterpriseScope {
   id: string

@@ -447,3 +447,20 @@ async def test_revision_12_rejects_migrating_duplicate_active_bindings(migration
                 db,
                 applied_by="channel-identity-duplicate-postgres-test",
             )
+
+
+@pytest.mark.asyncio
+async def test_revision_17_key_upgrade_and_rollback(migration_sessionmaker):
+    from core.adp_api_key import create_api_key, require_connector_key
+    async with migration_sessionmaker() as db:
+        await Migration.upgrade(db, target_version=16)
+        account_id = uuid.uuid4()
+        db.add(Account(Id=account_id, Name="migration sentinel", Role=AccountRole.ADMIN, Status=AccountStatus.ACTIVE))
+        await db.commit()
+        assert await Migration.upgrade(db) == 17
+        _, secret = await create_api_key(db, "migration test")
+        await db.commit()
+        await require_connector_key(db, secret)
+        assert await Migration.downgrade(db, target_version=16, allow_data_loss=True) == 16
+        assert await db.get(Account, account_id) is not None
+        assert await Migration.upgrade(db) == 17

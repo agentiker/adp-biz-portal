@@ -26,7 +26,10 @@ async def test_database_app_connector_roundtrip(platform_sessionmaker, monkeypat
     from core.adp_app import create_adp_app
     from integrations.adp import registry
     monkeypatch.setattr(tagentic_config, "PLATFORM_CHANNEL_CREDENTIAL_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(tagentic_config, "ADP_TOOL_SERVICE_TOKEN", "test-service-token")
+    from core.adp_api_key import create_api_key
+    async with platform_sessionmaker() as key_db:
+        _, connector_key = await create_api_key(key_db, "test connector")
+        await key_db.commit()
     monkeypatch.setattr(tagentic_config, "M3_USE_MOCK", True)
     app = Sanic(f"connector_test_{uuid.uuid4().hex}")
     for operation, view in (("lookup", AdpShipmentLookupApi), ("schedule", AdpShipmentScheduleApi), ("milestones", AdpShipmentMilestonesApi)):
@@ -56,7 +59,7 @@ async def test_database_app_connector_roundtrip(platform_sessionmaker, monkeypat
             pass
         async def chat(self, **kwargs):
             variables = kwargs["custom_variables"]
-            headers = {"X-ADP-Service-Token": "test-service-token", "X-Platform-Context-Token": variables["platform_context_token"],
+            headers = {"X-ADP-Service-Token": connector_key, "X-Platform-Context-Token": variables["platform_context_token"],
                        "X-ADP-Request-Id": variables["platform_tool_request_id"] + ":lookup"}
             headers_used.update(headers)
             query = {"foreign": "MOCK-BL-B001", "missing": "ABSENT"}.get(mode, "MOCK-BL-A001")

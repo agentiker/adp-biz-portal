@@ -1,14 +1,14 @@
 # ADP 连接器与 M3 Mock 联调
 
-对应 ROADMAP：`M2-ORCH-MOCK-01`、`M2-ORCH-01`、`M4-ADP-CFG-01`。本轮采用 HTTP 连接器，复用平台工具网关；不新增 MCP 服务。以下为本地已实现契约，ADP 云端导入及隐藏参数映射仍待真实验证。
+对应 ROADMAP：`M2-ORCH-MOCK-01`、`M2-ORCH-01`、`M4-ADP-CFG-01`、`M4-ADP-KEY-01`。本轮采用 HTTP 连接器，复用平台工具网关；不新增 MCP 服务。以下为本地已实现契约，ADP 云端导入及隐藏参数映射仍待真实验证。
 
 ## 运行配置
 
 业务 Worker 和企微 Bot 只从数据库选择 ADP 应用：企业显式绑定 → 启用的平台默认应用。显式绑定已停用或不可用时拒绝执行；缺少可用应用时也拒绝执行，不回退到 `.env` 或本地 M3 Agent。
 
-1. 数据库迁移至 revision 16，在 API、Worker、企微网关使用相同的 `PLATFORM_CHANNEL_CREDENTIAL_KEY`。此密钥用于解密数据库中的应用及渠道凭据，必须持久保存。
+1. 数据库迁移至 revision 17，在 API、Worker、企微网关使用相同的 `PLATFORM_CHANNEL_CREDENTIAL_KEY`。此密钥用于解密数据库中的应用及渠道凭据，必须持久保存。
 2. 管理后台「ADP 应用配置」录入 ApplicationId、AppKey、TC SecretAppId、SecretId、SecretKey，按实际云环境设置 Vendor/ServiceVendor，启用并设为默认；如有多个应用，在企业配置中明确绑定。
-3. 在隔离联调环境设置 `M3_USE_MOCK=true`、随机 `ADP_TOOL_SERVICE_TOKEN`。创建专用测试企业，CustomerCode 分别为 `MOCK-ENT-A`、`MOCK-ENT-B`，创建/绑定测试用户。不修改已有客户企业编码。
+3. 在隔离联调环境设置 `M3_USE_MOCK=true`；在管理后台「ADP 应用配置 → 连接器 API Key」创建 Key 并立即保存。创建专用测试企业，CustomerCode 分别为 `MOCK-ENT-A`、`MOCK-ENT-B`，创建/绑定测试用户。不修改已有客户企业编码。
 4. API、Worker/网关必须连接同一平台数据库。工具 HTTPS 域名必须可从 ADP 云端访问。
 5. `APP_CONFIGS=[]` 可保持为空；该配置只供旧管理员调试入口使用。数据库、服务鉴权、加密、渠道等基础设施配置仍在环境变量中。本次未修改远程服务器 `.env`。
 
@@ -26,7 +26,7 @@ Provider 通过 ADP `CustomVariables` 注入以下变量。必须使用连接器
 
 | 请求位置 | 来源 |
 |---|---|
-| Header `X-ADP-Service-Token` | 在连接器的安全凭据配置中保存，与 API 的 `ADP_TOOL_SERVICE_TOKEN` 一致 |
+| Header `X-ADP-Service-Token` | 在连接器的安全凭据配置中保存，使用 Admin 创建的 API Key；不再接受环境变量服务 Token |
 | Header `X-Platform-Context-Token` | 隐藏变量 `platform_context_token`，每轮生成，禁止写入提示词、聊天正文和普通日志 |
 | Header `X-ADP-Request-Id` | `platform_tool_request_id` + 操作后缀，例如 `:lookup:1`；每次新调用唯一，重放会拒绝 |
 | Body `query` | 用户要查询的完整订单号、提单号或箱号，1–128 字符 |
@@ -71,3 +71,11 @@ backend/.venv/bin/python -m pytest \
 ```
 
 真实验收需要：发布本轮代码、录入可用数据库 ADP 应用、在 ADP 导入连接器并配置隐藏参数、安全保存服务凭据，从 Portal/真实渠道发起上述查询，核对工具审计、最终回复及越权拒绝。完成前 `M2-ORCH-01` 和 `M4-ADP-CFG-01` 的真实联调保持 BLOCKED。正式 M3 验收另依赖 `M0-EXT-*` 与 `M2-M3-02`。
+
+## 连接器 API Key 管理（2026-09-16）
+
+管理接口要求服务端 `platform.manage` 权限。创建时生成 256 位随机密钥，返回一次明文并设置 `Cache-Control: no-store`；数据库 `platform_adp_api_key` 仅保存 SHA-256 摘要、显示前缀、名称、创建/撤销时间。列表不返回密钥或摘要；创建和撤销写入不含密钥的审计事件。
+
+Key 为平台连接器级凭据，仅授权三个 shipment 工具；每次工具调用仍须验证执行上下文及当前企业权限。Key 不授权旧入站身份/上下文签发接口，这些内部适配器接口保留 `ADP_TOOL_SERVICE_TOKEN`。工具鉴权每次查询数据库，撤销提交后的新鉴权立即失败；已通过鉴权的在途请求不会被中断。
+
+轮换：创建新 Key → 更新 ADP 连接器安全凭据 → 验证调用 → 撤销旧 Key。没有明文找回功能，遗失时重新创建。此次仅本地实现和测试，生产需先备份并迁移 16→17、创建 Key、更新 ADP 连接器，云端验收仍由 `M2-ORCH-01` 跟踪。

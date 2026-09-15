@@ -167,3 +167,9 @@ def test_redact_payload_parses_json_strings():
 
     assert "password-value" not in redacted
     assert '"Status": "ok"' in redacted
+
+
+def test_connector_api_key_redaction():
+    from util.security_logging import redact_payload
+    for value in [{'apiKey': 'test-only-secret'}, {'X-API-Key': 'test-only-secret'}, 'api_key=test-only-secret']:
+        assert 'test-only-secret' not in str(redact_payload(value))
