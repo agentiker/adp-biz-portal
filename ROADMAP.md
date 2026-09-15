@@ -39,7 +39,7 @@
 
 部署进展（2026-09-13，项目重命名割接 + 迁移 14→16）：将分支 `refactor/rebrand-adp-business-gateway`（提交 `daeed27`，`adp-chat-client`→`adp-business-gateway` 全量重命名：compose 项目名/镜像名/DB 迁移锁 key、目录 `client`→`frontend`/`server`→`backend`、前端分层重组）以镜像 `adp-business-gateway:daeed27` 部署到 `xdimspace-01`。本轮仅项目自身包名变、第三方依赖闭包未变，故按 skill overlay 到上一个在役镜像 `adp-chat-client:9f6495b` 构建（Docker Hub 拉 `python:3.12-slim` 仍 EOF）。**割接前** `pg_dump -Fc` 备份到 `/root/adp-backups/adp_chat-pre-rename-20260913184250.dump`（204K，`pg_restore -l` 列出 31 个 TABLE DATA，可恢复），并把在役镜像 tag 为 `adp-chat-client:rollback-pre-rename`。`docker-compose.yml` 把 `platform-postgres` 命名卷**钉死**为 `adp-chat-client_platform-postgres`：`down` 旧项目 → 换 compose → `up` 新项目 `adp-business-gateway`，**数据原地复用**（compose 提示卷属旧项目的 warning 为良性，未新建空卷）；已重启 reverse-proxy。**实测生产 DB 割接前在 revision 14**（非预期的 16），`compose up` 的一次性 `migrate` 增量应用 revision 15（`platform_enterprise_contact`）与 16（`platform_adp_app`）到 16，业务数据完整（审计 94、消息 72、会话 35 等行数保留）。公网 `/healthz`=ok、`/readyz`=ready schemaRevision **16**；api/worker/wecom-ws-gateway/reverse-proxy 均 healthy。已知 `[TCADP.get_info] 450006` 元信息报错为既有问题、与本次无关。服务器 `.env`（无 `APP_IMAGE` 行，走 compose 默认 `adp-business-gateway:local`）、PostgreSQL 数据卷未触碰。回滚：app 用 `adp-chat-client:rollback-pre-rename` + 旧 compose `docker-compose.pre-rename.yml`（已留在服务器）`up`；如需回退 schema 到 14，从上述 dump 恢复（15/16 为增量表，`migrate.py downgrade --target 14 --allow-data-loss` 亦可）。
 
-当前任务计数：`54 / 73` 项已完成，`19` 项未完成（其中 `9` 项 `BLOCKED`、`8` 项 `IN PROGRESS`、`2` 项 `TODO`）。
+当前任务计数：`55 / 74` 项已完成，`19` 项未完成（其中 `9` 项 `BLOCKED`、`8` 项 `IN PROGRESS`、`2` 项 `TODO`）。
 
 本轮进展（2026-09-16）：`M2-ORCH-MOCK-01` 完成固定双企业 M3 数据、三个 HTTP 工具、隐藏上下文、回执驱动回复及 Worker/企微 Bot 本地验证。`M3-WECHAT-OA-03` 按用户明确反馈标记已验收。`M4-ADP-CFG-01` 本地业务运行取消 `.env` 应用回退，改用数据库绑定/默认应用；远程 `.env` 未修改。`M2-ORCH-01` 与 `M4-ADP-CFG-01` 的真实验收仍需发布代码、录入应用、导入 ADP 连接器和验证云端隐藏参数映射，标记 BLOCKED。9 月 13 日生产已经迁移至 revision 16，不再把迁移 16 当作未完成前置。此前任务中的 server/client 路径、环境应用映射与原始流式行为属于历史记录，当前以本轮补充及 [连接器联调方案](docs/plans/2026-09-16-adp-m3-mock-connector.md) 为准。
 
@@ -264,7 +264,7 @@
 
 - [ ] `M2-ORCH-01` 串入消息处理、Agent/ADP 执行、M3 查询、证据校验和回复发送。
   - 状态：`BLOCKED`（2026-09-16，本地子任务 `M2-ORCH-MOCK-01` 已完成，等待真实 ADP 连接器配置和参数映射验收）。
-  - 解除方式：代码已部署、固定 Mock 已开启（见 M4-MCP-MOCK-01）；补齐 MOCK-ENT-A / MOCK-ENT-B 测试企业和绑定用户，在 ADP 云端配置 MCP 服务凭据和动态隐藏 Header，用 Portal/渠道真实发起 Mock 查询并留存审计与拒绝用例；正式 M3 数据仍单独依赖 `M2-M3-02`。
+  - 解除方式：代码已部署、固定 Mock 已开启（见 M4-MCP-MOCK-01）；MOCK-ENT-A / MOCK-ENT-B 测试企业和绑定用户已补齐（M4-MCP-TEST-ID-01），在 ADP 云端配置 MCP 服务凭据和动态隐藏 Header，用 Portal/渠道真实发起 Mock 查询并留存审计与拒绝用例；正式 M3 数据仍单独依赖 `M2-M3-02`。
   - 本轮范围（2026-09-15 启动，现已拆出本地验收子项）：按用户授权先以固定虚构 M3 数据接通 ADP HTTP 连接器，覆盖 lookup/schedule/milestones 语义、隐藏上下文传递、服务鉴权、企业隔离、回调证据与回复闭环。真实 M3 仍由 `M2-M3-02` 验收，真实 ADP 隐藏变量回调需 `M0-ADP-01` 条件；本地模拟不替代云端验收。
   - 验收：模型不能决定身份/权限；关键船名、航次、时间和状态均可映射到本轮证据。
   - 本轮完成（2026-09-06，本地 Worker/Portal 编排）：入站任务在服务端重新校验账号、会话、企业范围和 `shipment.read` 权限；创建并持久化 execution run、入站/assistant 消息、受控 evidence；通过独立 `AgentProvider` 边界执行 Agent 请求；创建 `platform.reply` 任务；官网回复通过 Portal 持久化结果视为已投递；非官网渠道未配置真实发送器时明确失败或标记发送结果不确定，不伪报成功。
@@ -523,7 +523,15 @@
   - 范围：Compose 持久配置 M3_USE_MOCK=true、重建 API/Worker/企微网关、验证模拟数据和企业配置；不修改真实客户企业编码，不以本次配置验收替代 ADP 云端闭环。
   - 配置证据：xdimspace-01 `/opt/tencent-adp-gateway/compose.override.yml` 为 api/worker/wecom-ws-gateway 设置 `M3_USE_MOCK: "true"`；执行 `docker compose up -d api worker wecom-ws-gateway` 和 `docker compose restart reverse-proxy` 成功，三个运行容器变量均为 true，API/代理健康。原 override 备份 `/opt/adp-releases/d5ff394/compose-before-mock.yml`；恢复该文件后以相同命令重建可关闭 Mock。未修改 .env、镜像或 schema。
   - 验证：公网 `curl -fsS https://adp.xdimspace.cn/readyz` 返回 ready/schemaRevision 19；容器内 `_m3_adapter().lookup` 四例通过（A→A found/ALPHA、A→B not_found、A→不存在 not_found、B→B found/BETA，未知字段暂无数据）。公网 MCP 临时 Key initialize=200、tools/list=200/3 tools、软删除后401；临时 Key 已清理。生产仅执行定向冒烟及配置读取，未运行集成测试套件。
-  - 前置条件检查：三个 shipment 工具均启用且要求 shipment.read；1 个启用的默认 ADP 应用，解密和必填字段验证通过；测试企业数量为 0，待用户提供测试账号后准备企业/绑定。未修改真实企业或用户归属。尚无真实 ADP tools/call 和回执回复证据；动态 Header 映射、测试身份及实际云端调用继续由 M2-ORCH-01 跟踪。
+  - 前置条件检查：三个 shipment 工具均启用且要求 shipment.read；1 个启用的默认 ADP 应用，解密和必填字段验证通过；开启 Mock 时测试企业数量为 0；后续已补齐，见 M4-MCP-TEST-ID-01。未修改真实企业或用户归属。尚无真实 ADP tools/call 和回执回复证据；动态 Header 映射、测试身份及实际云端调用继续由 M2-ORCH-01 跟踪。
+
+- [x] `M4-MCP-TEST-ID-01` 新增服务器专用 Mock 测试企业和账号。
+  - 状态：`DONE`（2026-09-16，用户授权自主新增，生产定向验证通过）。
+  - 范围：使用业务创建函数新增 MOCK-ENT-A/B 及各自 customer 账号，记录审计，定向验证公网登录及企业权限；随机初始口令仅保存在仓库外受限文件，不进入文档或日志。
+  - 创建证据：xdimspace-01 在役 API 容器通过 `create_enterprise`、`create_platform_user` 和 `create_audit` 同事务新增「MCP 模拟联调企业 A/B」及「MCP 测试用户 A/B」；CustomerCode=MOCK-ENT-A/B，登录占位手机号=19900000001/19900000002，角色 customer，仅 shipment.read，各绑定一个企业并使用默认 ADP 应用。企业 ExtraInfo 明确虚构联调用途。未修改既有账号或企业。
+  - 验证：通过 `docker compose exec -T api python -` 使用 urllib 请求公网 auth/login、admin/users、tools/shipment/lookup、auth/logout；两账号登录/企业归属/仅 shipment.read 均通过，管理接口均403，本企业提单均found，跨企业提单均not_found；验证会话均登出撤销。此为真实服务定向冒烟，不是生产集成测试套件，也不代表 ADP/MCP 编排通过。
+  - 凭据：随机初始口令已保存到操作员本机仓库外 `.local/share/adp-biz-portal/mcp-test-accounts.json`，权限0600，远端临时明文已删除。审计不含口令。
+  - 遗留：真实 ADP 动态 Header 映射、工具回执与最终回复仍由 M2-ORCH-01 验收。
 
 ## 每个 TODO 的完成标准
 
