@@ -414,6 +414,7 @@
   - 静态页面修复记录（2026-09-07）：首次部署镜像未包含 `server/static`，导致 `/static/app/index` 返回 `FileNotFound`；已将前端静态产物纳入服务器镜像并重建 API/Worker。当前 `/static/app/index` 和 `/healthz` 均返回 200。HTTPS 证书域名匹配仍待 DNS/ACME 验证条件满足。
 - [x] `M4-DOC-01` 编写数据字典、运维手册和错误排查手册。
   - 状态：`DONE`（2026-09-06，本地交付文档）
+  - README 收口（2026-09-15）：重写 `README.cn.md`，同步当前 `backend/frontend` 目录、迁移、Worker、Compose、ADP 配置和测试命令，作为新开发者与部署者入口。
   - 完成证据：`docs/operations/platform-data-dictionary.md` 描述平台核心表、关键字段、关联关系、敏感数据边界和迁移 revision `1..9`；`docs/operations/troubleshooting.md` 覆盖迁移阻断、登录/锁定/权限、M3 返回状态、Worker 租约/重试、撤权、未知发送结果和 ADP 元信息降级；`docs/operations/release-and-rollback.md` 提供发布前检查、备份、迁移、启动、应用回滚和数据库回滚边界。
   - 验证命令与结果：`git diff --check` 通过；文档中的模型和迁移版本已与 `server/model/platform.py`、`server/core/migration.py` 逐项核对；`make platform_api_check`、前端 `npm run type-check` 和 `npm run build-only` 仍保持通过。
   - 遗留风险：文档覆盖的是当前本地实现和受控部署流程；真实生产部署、备份恢复、RPO/RTO、外部 ADP/M3/微信/企微协议仍需对应权限、资料和演练，不能用本地文档或 Mock 结果替代。

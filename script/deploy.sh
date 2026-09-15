@@ -3,7 +3,7 @@
 # 定义实例目录
 INSTANCE_DIR="deploy"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEV_DB_CONTAINER="adp-business-gateway-dev-db"
+DEV_DB_CONTAINER="adp-biz-portal-dev-db"
 DEV_DB_DATA_DIR="$ROOT_DIR/deploy/dev/volume/db"
 
 ### 封装实例选择逻辑，返回选中的实例名
@@ -44,9 +44,9 @@ select_instance() {
 stop_instance() {
     local INSTANCE="$1"
     echo "Stopping $INSTANCE..."
-	docker rm -f adp-business-gateway-db-$INSTANCE
-	docker rm -f adp-business-gateway-$INSTANCE
-	docker network rm adp-business-gateway-network-$INSTANCE
+	docker rm -f adp-biz-portal-db-$INSTANCE
+	docker rm -f adp-biz-portal-$INSTANCE
+	docker network rm adp-biz-portal-network-$INSTANCE
 }
 
 # 检查.env文件是否存在
@@ -92,9 +92,9 @@ deploy_instance() {
     cd $INSTANCE_DIR/$INSTANCE
     check_env
     source .env
-    docker network create adp-business-gateway-network-$INSTANCE
-    docker run --name adp-business-gateway-db-$INSTANCE -d --restart=unless-stopped -e POSTGRES_PASSWORD=$PGSQL_PASSWORD -v ./volume/db:/var/lib/postgresql/data --network adp-business-gateway-network-$INSTANCE postgres:17
-    docker run --name adp-business-gateway-$INSTANCE -d --restart=unless-stopped -p $SERVER_HTTP_PORT:8000 --mount type=bind,source=./.env,target=/app/.env --network adp-business-gateway-network-$INSTANCE adp-business-gateway
+    docker network create adp-biz-portal-network-$INSTANCE
+    docker run --name adp-biz-portal-db-$INSTANCE -d --restart=unless-stopped -e POSTGRES_PASSWORD=$PGSQL_PASSWORD -v ./volume/db:/var/lib/postgresql/data --network adp-biz-portal-network-$INSTANCE postgres:17
+    docker run --name adp-biz-portal-$INSTANCE -d --restart=unless-stopped -p $SERVER_HTTP_PORT:8000 --mount type=bind,source=./.env,target=/app/.env --network adp-biz-portal-network-$INSTANCE adp-biz-portal
 }
 
 ### 封装 debug 逻辑
@@ -104,31 +104,31 @@ debug_instance() {
     cd $INSTANCE_DIR/$INSTANCE
     check_env
     source .env
-    docker network create adp-business-gateway-network-$INSTANCE
-    docker run --name adp-business-gateway-db-$INSTANCE -d -e POSTGRES_PASSWORD=$PGSQL_PASSWORD -v ./volume/db:/var/lib/postgresql/data --network adp-business-gateway-network-$INSTANCE postgres:17
+    docker network create adp-biz-portal-network-$INSTANCE
+    docker run --name adp-biz-portal-db-$INSTANCE -d -e POSTGRES_PASSWORD=$PGSQL_PASSWORD -v ./volume/db:/var/lib/postgresql/data --network adp-biz-portal-network-$INSTANCE postgres:17
     cd -
 
 	cp $INSTANCE_DIR/$INSTANCE/.env backend/
-	docker run --name adp-business-gateway-$INSTANCE -d -p $SERVER_HTTP_PORT:8000 -v ./backend/:/app/ -v ./frontend/:/client/ --network adp-business-gateway-network-$INSTANCE adp-business-gateway
+	docker run --name adp-biz-portal-$INSTANCE -d -p $SERVER_HTTP_PORT:8000 -v ./backend/:/app/ -v ./frontend/:/client/ --network adp-biz-portal-network-$INSTANCE adp-biz-portal
 }
 
 ### 封装 login 逻辑
 login() {
     local INSTANCE="$1"
-	docker exec -it adp-business-gateway-$INSTANCE bash
+	docker exec -it adp-biz-portal-$INSTANCE bash
 }
 
 ### 封装 run 逻辑
 run() {
     local INSTANCE="$1"
     local CMD="$2"
-	docker exec -it adp-business-gateway-$INSTANCE bash -c "LOG_LEVEL=WARN $(printf '%q ' $CMD)"
+	docker exec -it adp-biz-portal-$INSTANCE bash -c "LOG_LEVEL=WARN $(printf '%q ' $CMD)"
 }
 
 ### 封装 logs 逻辑
 show_logs() {
     local INSTANCE="$1"
-    docker logs -f adp-business-gateway-$INSTANCE
+    docker logs -f adp-biz-portal-$INSTANCE
 }
 
 ### 封装 dev_withdb 逻辑

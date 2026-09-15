@@ -3,7 +3,7 @@ revision = 1
 requires-python = "==3.12.*"
 
 [[package]]
-name = "adp-business-gateway-backend"
+name = "adp-biz-portal-backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

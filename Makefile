@@ -62,7 +62,7 @@ pack: build
 	-mkdir build/docker
 	# 通过rsync -L把符号链接替换为实际文件
 	rsync -avL --exclude='__pycache__' --exclude='.*' build/server/ build/docker/server/
-	cd build && docker build -t adp-business-gateway -f ../docker/Dockerfile .
+	cd build && docker build -t adp-biz-portal -f ../docker/Dockerfile .
 
 # ----------------- deploy -----------------
 

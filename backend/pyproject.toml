@@ -1,7 +1,7 @@
 [project]
-name = "adp-business-gateway-backend"
+name = "adp-biz-portal-backend"
 version = "0.1.0"
-description = "backend for adp-business-gateway"
+description = "backend for adp-biz-portal"
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [

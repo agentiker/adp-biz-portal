@@ -1,4 +1,4 @@
-name: adp-business-gateway
+name: adp-biz-portal
 
 services:
   postgres:
@@ -18,7 +18,7 @@ services:
       start_period: 10s
 
   migrate:
-    image: ${APP_IMAGE:-adp-business-gateway:local}
+    image: ${APP_IMAGE:-adp-biz-portal:local}
     restart: "no"
     env_file:
       - ${COMPOSE_ENV_FILE:-./.env}
@@ -31,7 +31,7 @@ services:
     command: ["python", "migrate.py", "upgrade", "--applied-by", "compose-migration"]
 
   api:
-    image: ${APP_IMAGE:-adp-business-gateway:local}
+    image: ${APP_IMAGE:-adp-biz-portal:local}
     restart: unless-stopped
     env_file:
       - ${COMPOSE_ENV_FILE:-./.env}
@@ -50,7 +50,7 @@ services:
       start_period: 15s
 
   worker:
-    image: ${APP_IMAGE:-adp-business-gateway:local}
+    image: ${APP_IMAGE:-adp-biz-portal:local}
     restart: unless-stopped
     env_file:
       - ${COMPOSE_ENV_FILE:-./.env}
@@ -63,7 +63,7 @@ services:
     command: ["python", "worker.py", "--idle-seconds", "1"]
 
   wecom-ws-gateway:
-    image: ${APP_IMAGE:-adp-business-gateway:local}
+    image: ${APP_IMAGE:-adp-biz-portal:local}
     restart: unless-stopped
     env_file:
       - ${COMPOSE_ENV_FILE:-./.env}
@@ -97,7 +97,7 @@ services:
 volumes:
   platform-postgres:
     # Pin the underlying Docker volume to its original project-prefixed name so
-    # renaming the compose project from adp-chat-client to adp-business-gateway
+    # renaming the compose project from adp-chat-client to adp-biz-portal
     # keeps the existing production data in place (no data move). See
     # docs/operations/release-and-rollback.md for the live cutover steps.
     name: adp-chat-client_platform-postgres

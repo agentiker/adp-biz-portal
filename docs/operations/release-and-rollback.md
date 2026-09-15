@@ -51,8 +51,8 @@ git diff --check
 2. 使用受控的 `pg_dump` 生成自定义格式备份，并将文件保存到独立介质。示例中的文件名和路径必须替换为发布工单指定的位置：
 
    ```bash
-   pg_dump --format=custom --no-owner --file=/secure/backup/adp-business-gateway-<release>-<timestamp>.dump "$DATABASE_URL"
-   sha256sum /secure/backup/adp-business-gateway-<release>-<timestamp>.dump
+   pg_dump --format=custom --no-owner --file=/secure/backup/adp-biz-portal-<release>-<timestamp>.dump "$DATABASE_URL"
+   sha256sum /secure/backup/adp-biz-portal-<release>-<timestamp>.dump
    ```
 
 3. 使用部署数据库账号执行可重复的升级。`MIGRATION_ACTOR` 应使用工单中的服务身份，而不是个人密码：
@@ -112,19 +112,19 @@ backend/.venv/bin/python backend/migrate.py upgrade --applied-by "reupgrade-<rel
 
 当数据完整性受到影响时，优先恢复到隔离数据库并验证，不要直接覆盖线上库。恢复操作使用平台既有数据库运维流程；至少完成表计数、迁移历史、账号登录和一条脱敏业务查询验证后，才决定切换连接配置。
 
-## 项目重命名割接（adp-chat-client → adp-business-gateway）
+## 项目重命名割接（adp-chat-client → adp-biz-portal）
 
-一次性操作：把 compose 项目名、镜像名与 DB 迁移锁 key 从 `adp-chat-client` 切到 `adp-business-gateway`。含短暂停机，需单独批准。PostgreSQL 命名卷已在 `docker-compose.yml` 钉死为 `adp-chat-client_platform-postgres`，**数据原地复用、不搬运**。
+一次性操作：把 compose 项目名、镜像名与 DB 迁移锁 key 从 `adp-chat-client` 切到 `adp-biz-portal`。含短暂停机，需单独批准。PostgreSQL 命名卷已在 `docker-compose.yml` 钉死为 `adp-chat-client_platform-postgres`，**数据原地复用、不搬运**。
 
 1. 备份（兜底）：`docker compose exec -T postgres pg_dump -U adp_chat -d adp_chat -Fc > /root/adp-backups/adp_chat-pre-rename-<ts>.dump`，`pg_restore -l` 校验 `TABLE DATA` 非零。
 2. 保留回滚镜像：`docker tag adp-chat-client:local adp-chat-client:rollback-pre-rename`。
-3. 载入新镜像（本地 `docker save adp-business-gateway:<tag>` → scp → `docker load`），`docker tag adp-business-gateway:<tag> adp-business-gateway:local`。
-4. 更新服务端 `.env`（机密，不经 git）：`APP_IMAGE=adp-business-gateway:local`。
-5. 旧项目停机再以新名拉起：`docker compose down`（旧 `adp-chat-client` 项目，**不加 `-v`**）→ `docker compose up -d`（新 `adp-business-gateway` 项目）→ `docker compose restart reverse-proxy`（必做，nginx 缓存旧 api IP）。
+3. 载入新镜像（本地 `docker save adp-biz-portal:<tag>` → scp → `docker load`），`docker tag adp-biz-portal:<tag> adp-biz-portal:local`。
+4. 更新服务端 `.env`（机密，不经 git）：`APP_IMAGE=adp-biz-portal:local`。
+5. 旧项目停机再以新名拉起：`docker compose down`（旧 `adp-chat-client` 项目，**不加 `-v`**）→ `docker compose up -d`（新 `adp-biz-portal` 项目）→ `docker compose restart reverse-proxy`（必做，nginx 缓存旧 api IP）。
 6. 校验：公网 `/healthz`=ok、`/readyz`=ready 且 `schemaRevision` 正确；migrate/worker/api 日志无异常。
 7. 回滚：`.env` 改回 `APP_IMAGE=adp-chat-client:rollback-pre-rename`（或旧 `:local`）并用旧 compose 文件 `up`；数据可从步骤 1 dump 恢复。卷名不变，回滚不丢数据。
 
-迁移锁 key 变更为 `adp-business-gateway-schema-migration`（纯运行时 advisory lock、无持久化）；只需保证割接期间不新旧 `migrate` 并发。
+迁移锁 key 变更为 `adp-biz-portal-schema-migration`（纯运行时 advisory lock、无持久化）；只需保证割接期间不新旧 `migrate` 并发。
 
 ## 演练记录模板
 

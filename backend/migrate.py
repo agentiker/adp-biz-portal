@@ -18,7 +18,7 @@ from util.database import create_db_engine
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage the adp-business-gateway database schema")
+    parser = argparse.ArgumentParser(description="Manage the adp-biz-portal database schema")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     upgrade = subparsers.add_parser("upgrade", help="apply pending revisions")
