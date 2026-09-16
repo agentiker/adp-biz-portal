@@ -550,3 +550,5 @@
 1. `M4-RELEASE-01`：获得生产部署权限后执行真实备份恢复和 RPO/RTO 演练，完成发布验收。
 2. 在获得 M3/渠道资料后，分别解锁 `M0-EXT-*`、`M0-CHANNEL-01`，再推进真实 M3、ADP Agent 和微信/企微端到端联调。
 3. 将运维状态入口接入生产机器人和告警系统时，补充对应联调记录；生产压测需在真实部署拓扑和 M3 权限就绪后重新执行。
+
+部署进展（2026-09-17，切换公网流量到新栈）：停止并删除旧 `adp-business-gateway-*` 容器，复用 `adp-chat-client_platform-postgres` 数据卷，将 `adp-biz-portal:def70b8` 启动为 `adp-biz-portal-*`（含 reverse-proxy）。迁移容器成功退出，生产 schema revision 保持 19；公网 `/healthz` 和 `/readyz` 均返回 200，反代与 API/Worker/企微网关 healthy。切换前备份为 `/root/adp-backups/adp-biz-pre-cutover-20260917020716.dump`（221K）。新 Worker 已确认包含 `corp_id`、`corp_user_id` 的 ADP `custom_variables` 映射。真实微信消息复测待用户发起，`M2-ORCH-01` 仍保持 BLOCKED，直到确认 ADP→MCP→M3 Mock 工具回执。
