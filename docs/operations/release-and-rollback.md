@@ -9,6 +9,16 @@
 - 先备份、再迁移、后启动新版本 Web/Worker。迁移未完成时不得启动业务进程。
 - 应用代码回滚和数据库回滚是两个独立决定。数据库降级会删除目标 revision 创建的表及数据，只能在确认数据恢复方案后执行。
 - Worker 与 Web 必须使用同一版本代码和同一数据库，避免旧 Worker 读取新任务结构。
+- 切换 Compose 项目时必须先停止旧项目的 PostgreSQL，再启动复用数据卷的新项目；同一 PGDATA 不得同时挂载到两个运行中的 PostgreSQL 进程。
+- 发布时保留服务器 `.env` 与本地 override 文件；同步目录时不能用未排除这些文件的删除策略。使用 `docker-compose.yml` 时将持久覆盖配置保存为 `docker-compose.override.yml`，发布前检查最终合并的镜像、项目名及 M3 模式，避免输出含凭据的完整配置。
+
+### 当前服务器联调配置（2026-09-17）
+
+xdimspace-01 `/opt/tencent-adp-gateway/docker-compose.override.yml` 将 migrate、api、worker、wecom-ws-gateway 的镜像固定为 `adp-biz-portal:def70b8`，后三个服务显式设置 `M3_USE_MOCK: "true"`。普通 `docker compose up` 自动合并该文件；后续发布须同步更新四处镜像版本。文件仅留在服务器，凭据继续由 `.env` 提供。
+
+本次修复没有数据库迁移，执行 `docker compose up -d --no-deps api worker wecom-ws-gateway`，随后 `docker compose restart reverse-proxy` 刷新 upstream IP。验证三个运行容器的配置、`/healthz`、`/readyz` 和容器内三个 M3 工具的固定数据/企业隔离；健康检查通过不能证明 ADP 业务闭环。关闭 Mock 时将 override 中三个开关统一改为 `"false"` 后重建业务服务；真实 M3 未配置时会返回 upstream_error。
+
+固定样例只属于 MOCK-ENT-A/B。普通企业的微信身份无法读取这些记录；用测试账号 A（19900000001）登录 Portal 查询 `MOCK-BL-A001`，或通过既有渠道绑定流程将测试微信绑定到该测试账号。不得为冒烟修改真实账号的企业归属。
 
 ## 发布前检查
 

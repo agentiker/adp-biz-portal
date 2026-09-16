@@ -263,8 +263,8 @@
   - 范围：三个只读工具、两企业固定样例、隐藏执行上下文、回执证据合并、Worker/企微 Bot、OpenAPI 导入文档和隔离数据库回归；真实 ADP 云端配置由父任务验收。
 
 - [ ] `M2-ORCH-01` 串入消息处理、Agent/ADP 执行、M3 查询、证据校验和回复发送。
-  - 状态：`BLOCKED`（2026-09-16，本地子任务 `M2-ORCH-MOCK-01` 已完成，等待真实 ADP 连接器配置和参数映射验收）。
-  - 参数补充（2026-09-17）：ADP Chat `custom_variables` 已补齐 `corp_id`、`corp_user_id`，并由已验证执行上下文派生；ADP MCP Header 映射为 `X-Corp-Id`、`X-Corp-User-Id`。本地定向测试通过，尚未部署和完成云端真实闭环。
+  - 状态：`BLOCKED`（2026-09-17，真实微信→ADP→MCP 已有通过身份校验的工具回执；Mock 配置已修复，待使用测试企业身份完成成功查询和拒绝用例验收）。
+  - 参数补充（2026-09-17）：ADP Chat `custom_variables` 已补齐 `corp_id`、`corp_user_id`，并由已验证执行上下文派生；ADP MCP Header 映射为 `X-Corp-Id`、`X-Corp-User-Id`。本地定向测试通过，def70b8 已于 2026-09-17 部署到公网新栈；真实 MCP 工具回执证明四个动态 Header 已通过服务端校验，成功查询闭环仍待测试企业身份复测。
   - 解除方式：代码已部署、固定 Mock 已开启（见 M4-MCP-MOCK-01）；MOCK-ENT-A / MOCK-ENT-B 测试企业和绑定用户已补齐（M4-MCP-TEST-ID-01），在 ADP 云端配置 MCP 服务凭据和动态隐藏 Header，用 Portal/渠道真实发起 Mock 查询并留存审计与拒绝用例；正式 M3 数据仍单独依赖 `M2-M3-02`。
   - 本轮范围（2026-09-15 启动，现已拆出本地验收子项）：按用户授权先以固定虚构 M3 数据接通 ADP HTTP 连接器，覆盖 lookup/schedule/milestones 语义、隐藏上下文传递、服务鉴权、企业隔离、回调证据与回复闭环。真实 M3 仍由 `M2-M3-02` 验收，真实 ADP 隐藏变量回调需 `M0-ADP-01` 条件；本地模拟不替代云端验收。
   - 新增阻塞（2026-09-16，用户真实联调反馈）：腾讯云 ADP 无法填充动态 Header，当前 MCP 返回工具调用拒绝，现有动态 Header 接入方案不适用。用户进一步确认 MCP 工具参数只能由模型填写，不能固定映射 CustomVariables，因此 Header 和工具参数两条可信动态上下文通道均不可用。当前共享静态 API Key 的远程 MCP 无法完成用户/企业/执行轮次绑定。建议平台侧接收 ADP 的受限查询意图并执行工具；该方案改变原 ADP→MCP 拓扑，尚未实施。若必须保留 ADP 主动调用，需另行验证 HTTP 工作流的可信变量映射能力。不得移除上下文校验、按最近请求猜测企业，或把静态共享 API Key 视为用户身份。
@@ -521,7 +521,10 @@
   - 范围：备份生产 revision 16，发布 d5ff394，迁移至 19，保留现有 Compose 项目/数据库卷/环境凭据，公网 MCP 冒烟；真实 ADP 调用由 M2-ORCH-01 跟踪。
 
 - [x] `M4-MCP-MOCK-01` 开启服务器固定 M3 Mock 供 ADP 真实联调。
-  - 状态：`DONE`（2026-09-16，服务器配置及定向验证完成；真实 ADP 闭环仍 BLOCKED 于 M2-ORCH-01）。
+  - 状态：`DONE`（2026-09-17，已恢复新栈持久 Mock 配置并通过服务器定向验证；真实 ADP 成功查询仍由 M2-ORCH-01 验收）。
+  - 修复及验证（2026-09-17 02:18，北京时间）：服务器 `/opt/tencent-adp-gateway/docker-compose.override.yml` 固定四个应用服务镜像 def70b8，api/worker/wecom-ws-gateway 设置 M3_USE_MOCK=true；`docker compose config --format json` 仅抽取镜像/Mock 字段确认默认加载；`docker compose up -d --no-deps api worker wecom-ws-gateway`、`docker compose restart reverse-proxy` 完成。三个运行容器的配置断言通过，API/代理健康、Worker/网关运行；公网 healthz/readyz=200、schemaRevision=19。`docker exec -i adp-biz-portal-api-1 python -` 使用运行配置执行 lookup/schedule/milestones × 本企业/跨企业/不存在/B 企业/非 Mock 企业共 15 项断言全部通过；无生产集成测试或业务库写入。运维防回归说明见 `docs/operations/release-and-rollback.md`。
+  - 遗留：本次真实微信请求关联非 Mock 企业，不能读取 A/B 固定样例；需用测试账号 A（19900000001）通过 Portal 或测试渠道绑定查询 MOCK-BL-A001。未改变真实账号归属，未把配置冒烟计为 ADP 成功查询验收。
+  - 回归证据（2026-09-17）：北京时间 02:14 微信请求进入新栈，ADP 回调 shipment.lookup 已经过动态 Header 身份校验并持久化 upstream_error 回执；新 API 的 M3_USE_MOCK 未设置、M3_BASE_URL 未配置，服务器仅余 docker-compose.yml。恢复新栈的 docker-compose.override.yml，固定当前镜像并开启三个业务进程的 Mock；不得改变真实用户的企业归属。
   - 范围：Compose 持久配置 M3_USE_MOCK=true、重建 API/Worker/企微网关、验证模拟数据和企业配置；不修改真实客户企业编码，不以本次配置验收替代 ADP 云端闭环。
   - 配置证据：xdimspace-01 `/opt/tencent-adp-gateway/compose.override.yml` 为 api/worker/wecom-ws-gateway 设置 `M3_USE_MOCK: "true"`；执行 `docker compose up -d api worker wecom-ws-gateway` 和 `docker compose restart reverse-proxy` 成功，三个运行容器变量均为 true，API/代理健康。原 override 备份 `/opt/adp-releases/d5ff394/compose-before-mock.yml`；恢复该文件后以相同命令重建可关闭 Mock。未修改 .env、镜像或 schema。
   - 验证：公网 `curl -fsS https://adp.xdimspace.cn/readyz` 返回 ready/schemaRevision 19；容器内 `_m3_adapter().lookup` 四例通过（A→A found/ALPHA、A→B not_found、A→不存在 not_found、B→B found/BETA，未知字段暂无数据）。公网 MCP 临时 Key initialize=200、tools/list=200/3 tools、软删除后401；临时 Key 已清理。生产仅执行定向冒烟及配置读取，未运行集成测试套件。
@@ -551,4 +554,4 @@
 2. 在获得 M3/渠道资料后，分别解锁 `M0-EXT-*`、`M0-CHANNEL-01`，再推进真实 M3、ADP Agent 和微信/企微端到端联调。
 3. 将运维状态入口接入生产机器人和告警系统时，补充对应联调记录；生产压测需在真实部署拓扑和 M3 权限就绪后重新执行。
 
-部署进展（2026-09-17，切换公网流量到新栈）：停止并删除旧 `adp-business-gateway-*` 容器，复用 `adp-chat-client_platform-postgres` 数据卷，将 `adp-biz-portal:def70b8` 启动为 `adp-biz-portal-*`（含 reverse-proxy）。迁移容器成功退出，生产 schema revision 保持 19；公网 `/healthz` 和 `/readyz` 均返回 200，反代与 API/Worker/企微网关 healthy。切换前备份为 `/root/adp-backups/adp-biz-pre-cutover-20260917020716.dump`（221K）。新 Worker 已确认包含 `corp_id`、`corp_user_id` 的 ADP `custom_variables` 映射。真实微信消息复测待用户发起，`M2-ORCH-01` 仍保持 BLOCKED，直到确认 ADP→MCP→M3 Mock 工具回执。
+部署进展（2026-09-17，切换公网流量到新栈）：停止并删除旧 `adp-business-gateway-*` 容器，复用 `adp-chat-client_platform-postgres` 数据卷，将 `adp-biz-portal:def70b8` 启动为 `adp-biz-portal-*`（含 reverse-proxy）。迁移容器成功退出，生产 schema revision 保持 19；公网 `/healthz` 和 `/readyz` 均返回 200，反代与 API healthy，Worker/企微网关运行。切换前备份为 `/root/adp-backups/adp-biz-pre-cutover-20260917020716.dump`（221K）。新 Worker 已确认包含 `corp_id`、`corp_user_id` 的 ADP `custom_variables` 映射。真实微信消息复测待用户发起，`M2-ORCH-01` 仍保持 BLOCKED，直到确认 ADP→MCP→M3 Mock 工具回执。
