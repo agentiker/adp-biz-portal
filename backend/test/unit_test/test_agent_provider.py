@@ -23,6 +23,8 @@ def _request() -> AgentRequest:
         customer_code="ENT-001",
         trace_id="trace-42",
         visitor_id="platform:enterprise-42:account-42",
+        corp_id="enterprise-42",
+        corp_user_id="user-42",
     )
 
 
@@ -214,3 +216,5 @@ async def test_business_context_only_in_hidden_variables_and_never_streamed():
     assert request.context_token not in str(calls[0]["contents"])
     assert calls[0]["custom_variables"]["platform_context_token"] == request.context_token
     assert calls[0]["custom_variables"]["platform_run_id"] == request.run_id
+    assert calls[0]["custom_variables"]["corp_id"] == request.corp_id
+    assert calls[0]["custom_variables"]["corp_user_id"] == request.corp_user_id

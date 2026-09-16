@@ -196,6 +196,16 @@ def _tool_request_id(request: Request) -> str:
     return value
 
 
+def _assert_adp_context_identity(request: Request, execution) -> None:
+    """Require ADP's explicit corp identity headers to match the signed context."""
+    corp_id = request.headers.get("X-Corp-Id", "").strip()
+    corp_user_id = request.headers.get("X-Corp-User-Id", "").strip()
+    if not corp_id or not corp_user_id:
+        raise AccountUnauthorized("需要企业和员工上下文")
+    if corp_id != str(execution.enterprise.Id) or corp_user_id != str(execution.user.Id):
+        raise PlatformForbidden("企业或员工上下文不一致")
+
+
 def platform_required(view):
     @wraps(view)
     async def decorated(*args, **kwargs):
@@ -1685,6 +1695,7 @@ class AdpShipmentLookupApi(HTTPMethodView):
             tool_name=f"shipment.{self.operation}",
             request_id=request_id,
         )
+        _assert_adp_context_identity(request, execution)
         query = body.get("query")
         if not isinstance(query, str) or not query.strip() or len(query.strip()) > 128:
             raise PlatformBadRequest("请输入不超过 128 字符的订单号、提单号或箱号")

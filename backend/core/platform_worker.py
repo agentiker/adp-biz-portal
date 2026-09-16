@@ -671,6 +671,8 @@ async def process_platform_inbound_task(
             trace_id=trace_id or "platform-worker",
             visitor_id=f"platform:{enterprise.Id}:{account.Id}",
             context_token=raw_context_token if isinstance(provider, ADPAgentProvider) else "",
+            corp_id=str(enterprise.Id),
+            corp_user_id=str(loaded_execution.user.Id),
         )
         sink = await _build_stream_sink(
             reply_sender,

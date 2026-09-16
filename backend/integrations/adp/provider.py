@@ -34,6 +34,8 @@ class AgentRequest:
     trace_id: str
     visitor_id: str = ""
     context_token: str = field(default="", repr=False)
+    corp_id: str = ""
+    corp_user_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +355,8 @@ class ADPAgentProvider:
                     "platform_agent_id": request.agent_id,
                     "platform_application_id": self.application_id,
                     "platform_tool_request_id": f"adp:{request.run_id}",
+                    "corp_id": request.corp_id,
+                    "corp_user_id": request.corp_user_id,
                 } if request.context_token else {}),
             )
             async for item in stream:

@@ -196,6 +196,8 @@ async def run_wecom_bot_turn(
             trace_id=message.trace_id or "wecom-bot",
             visitor_id=f"platform:{enterprise.Id}:{account.Id}",
             context_token=raw_token,
+            corp_id=str(enterprise.Id),
+            corp_user_id=str(user.Id),
         )
 
         sink = SnapshotStreamSink(reply_stream, render=_wecom_think_render)
