@@ -78,6 +78,8 @@ def _customer_code(record: Mapping[str, Any]) -> str | None:
 
 def _query_matches(record: Mapping[str, Any], query: str) -> bool:
     query_upper = query.upper()
+    if any(term in query_upper for term in ("近期", "最近", "我的订单", "订单列表", "MY ORDERS", "RECENT")):
+        return True
     identifiers = [str(record[key]).upper() for key in (
         "query", "Query", "OrderNo", "order_no", "bill_no", "BillNo", "BLNo", "BlNo",
         "BillOfLading", "billOfLading", "container_no", "ContainerNo", "ContainerNumber",

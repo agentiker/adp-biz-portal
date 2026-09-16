@@ -81,6 +81,24 @@ class PlatformEnterprise(Base):
     ExtraInfo = Column(Text(), nullable=True)
 
 
+class PlatformM3MockShipment(Base):
+    """Server owned fixture data, isolated by platform enterprise."""
+    __tablename__ = "platform_m3_mock_shipment"
+    __table_args__ = (UniqueConstraint("EnterpriseId", "OrderNo", name="unique_m3_mock_enterprise_order"),)
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    EnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="CASCADE"), nullable=False, index=True)
+    CustomerCode = Column(String(128), nullable=False)
+    OrderNo = Column(String(128), nullable=False)
+    BillNo = Column(String(128), nullable=True)
+    ContainerNo = Column(String(128), nullable=True)
+    VesselVoyage = Column(String(255), nullable=True)
+    ETA = Column(String(64), nullable=True)
+    CurrentMilestone = Column(String(255), nullable=True)
+    ATA = Column(String(64), nullable=True)
+    DeletedAt = Column(DateTime, nullable=True, index=True)
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+
 class AdpAppStatus(enum.StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"

@@ -128,6 +128,7 @@ from model.platform import (
     PlatformInboundMessage,
     PlatformMembership,
     PlatformMessage,
+    PlatformM3MockShipment,
     PlatformMigration,
     PlatformRole,
     PlatformStatus,
@@ -991,6 +992,20 @@ class PortalSharedResultApi(HTTPMethodView):
         })
 
 
+async def _m3_adapter_for_enterprise(db, enterprise_id, customer_code: str) -> M3LookupAdapter:
+    if not tagentic_config.M3_USE_MOCK:
+        return M3LookupAdapter(use_mock=False, base_url=tagentic_config.M3_BASE_URL, timeout_seconds=tagentic_config.M3_TIMEOUT_SECONDS)
+    rows = (await db.execute(select(PlatformM3MockShipment).where(
+        PlatformM3MockShipment.EnterpriseId == enterprise_id,
+        PlatformM3MockShipment.DeletedAt.is_(None),
+    ))).scalars().all()
+    records = [{"CustomerCode": customer_code, "OrderNo": r.OrderNo, "BillNo": r.BillNo, "ContainerNo": r.ContainerNo,
+                "VesselVoyage": r.VesselVoyage, "ETA": r.ETA, "CurrentMilestone": r.CurrentMilestone, "ATA": r.ATA} for r in rows]
+    if not records:
+        from integrations.m3.mock import MOCK_RECORDS
+        records = list(MOCK_RECORDS)
+    return M3LookupAdapter(use_mock=True, mock_records=records)
+
 def _m3_adapter() -> M3LookupAdapter:
     return M3LookupAdapter(
         use_mock=bool(tagentic_config.M3_USE_MOCK),
@@ -1696,9 +1711,9 @@ class AdpShipmentLookupApi(HTTPMethodView):
             request_id=request_id,
         )
         _assert_adp_context_identity(request, execution)
-        query = body.get("query")
-        if not isinstance(query, str) or not query.strip() or len(query.strip()) > 128:
-            raise PlatformBadRequest("请输入不超过 128 字符的订单号、提单号或箱号")
+        query = body.get("query") or "近期订单"
+        if not isinstance(query, str) or len(query.strip()) > 128:
+            raise PlatformBadRequest("查询条件不能超过 128 字符")
         supplied_conversation = body.get("conversationId")
         if supplied_conversation not in (None, "") and str(supplied_conversation) != str(execution.context.ConversationId):
             raise PlatformForbidden("会话不属于当前执行上下文")
@@ -1719,7 +1734,7 @@ class AdpShipmentLookupApi(HTTPMethodView):
             query=query,
         )
         try:
-            result = await getattr(_m3_adapter(), self.operation)(query=query, customer_code=execution.enterprise.CustomerCode)
+            result = await getattr(await _m3_adapter_for_enterprise(request.ctx.db, execution.enterprise.Id, execution.enterprise.CustomerCode), self.operation)(query=query, customer_code=execution.enterprise.CustomerCode)
         except Exception:  # Keep provider details out of the internal contract and logs.
             result = M3LookupResult(
                 status="upstream_error",
