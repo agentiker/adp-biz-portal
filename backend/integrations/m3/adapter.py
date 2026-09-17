@@ -88,6 +88,11 @@ def _query_matches(record: Mapping[str, Any], query: str) -> bool:
     return bool(identifiers) and any(query_upper in value for value in identifiers)
 
 
+def _is_recent_query(query: str) -> bool:
+    query_upper = query.upper()
+    return any(term in query_upper for term in ("近期", "最近", "我的订单", "订单列表", "MY ORDERS", "RECENT"))
+
+
 _EVIDENCE_FIELDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("订单号", "M3 / shipment.lookup", ("OrderNo", "order_no")),
     ("提单号", "M3 / shipment.lookup", ("bill_no", "BillNo", "BLNo", "BlNo", "BillOfLading", "billOfLading")),
@@ -208,7 +213,7 @@ class M3LookupAdapter:
             if (_customer_code(record) == allowed_customer) and _query_matches(record, normalized_query)
         ]
         denied = [record for record in _records(records) if _customer_code(record) not in (None, allowed_customer)]
-        if len(candidates) > 1:
+        if len(candidates) > 1 and not _is_recent_query(normalized_query):
             return M3LookupResult(
                 status="needs_clarification",
                 query=normalized_query,
@@ -225,15 +230,22 @@ class M3LookupAdapter:
                 audit_outcome="access_denied" if denied else "not_found",
             )
 
-        evidence = _evidence(candidates[0])
-        if self.use_mock:
-            for item in evidence:
-                item["source"] = item["source"].replace("M3 /", "M3 Mock /", 1)
+        evidence: list[dict[str, Any]] = []
+        for index, record in enumerate(candidates, start=1):
+            record_evidence = _evidence(record)
+            if len(candidates) > 1:
+                for item in record_evidence:
+                    item["label"] = f"订单 {index} · {item['label']}"
+            if self.use_mock:
+                for item in record_evidence:
+                    item["source"] = item["source"].replace("M3 /", "M3 Mock /", 1)
+            evidence.extend(record_evidence)
+        count_text = f"找到 {len(candidates)} 条" if len(candidates) > 1 else "已找到 1 条"
         return M3LookupResult(
             status="found",
             query=normalized_query,
-            title="已找到 1 条可访问记录",
-            summary=("【模拟数据，仅供联调】" if self.use_mock else "") + "以下结果来自当前企业授权范围。未返回的字段表示 M3 暂无可核实数据。",
+            title=f"{count_text}可访问记录",
+            summary=("【模拟数据，仅供联调】" if self.use_mock else "") + f"以下结果来自当前企业授权范围，共 {len(candidates)} 条。未返回的字段表示 M3 暂无可核实数据。",
             evidence=evidence,
             audit_outcome="found",
         )

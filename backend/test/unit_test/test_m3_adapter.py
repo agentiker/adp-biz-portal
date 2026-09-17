@@ -117,3 +117,16 @@ async def test_fixed_mock_scope_unknown_and_section_contracts():
     assert all(not i["known"] and i["value"] == "暂无数据" for i in milestones.evidence)
     unowned = M3LookupAdapter(use_mock=True, mock_records=[{"BillNo": "UNOWNED"}])
     assert (await unowned.lookup(query="UNOWNED", customer_code="MOCK-ENT-A")).status == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_mock_recent_query_returns_all_current_customer_records():
+    adapter = M3LookupAdapter(use_mock=True, mock_records=[
+        {"CustomerCode": "ENT-001", "OrderNo": "ORD-001", "BillNo": "BL-001"},
+        {"CustomerCode": "ENT-001", "OrderNo": "ORD-002", "BillNo": "BL-002"},
+    ])
+    result = await adapter.lookup(query="帮我查询我近期的订单", customer_code="ENT-001")
+    assert result.status == "found"
+    assert result.audit_outcome == "found"
+    assert result.title == "找到 2 条可访问记录"
+    assert {item["value"] for item in result.evidence if "订单号" in item["label"]} == {"ORD-001", "ORD-002"}

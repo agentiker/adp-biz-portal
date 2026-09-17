@@ -11,7 +11,7 @@ from router.platform import AdpShipmentLookupApi, AdpShipmentScheduleApi, AdpShi
 
 VERSIONS = ('2025-11-25', '2025-06-18', '2025-03-26')
 TOOLS = {
-    'shipment_lookup': (AdpShipmentLookupApi, '查询订单、提单或箱号的物流信息'),
+    'shipment_lookup': (AdpShipmentLookupApi, '查询当前企业可访问的订单、提单或箱号物流信息；用户说“近期订单”“最近订单”“我的订单”时，将 query 填为该自然语言意图并调用此工具，无需企业编号'),
     'shipment_schedule': (AdpShipmentScheduleApi, '查询船名、航次和预计抵港时间'),
     'shipment_milestones': (AdpShipmentMilestonesApi, '查询物流节点和实际抵港时间'),
 }
@@ -76,7 +76,7 @@ class McpApi(HTTPMethodView):
             result = {}
         elif method == 'tools/list':
             result = {'tools': [{'name': name, 'description': description,
-                'inputSchema': {'type': 'object', 'properties': {'query': {'type': 'string', 'minLength': 1, 'maxLength': 128}}, 'required': ['query'], 'additionalProperties': False},
+                'inputSchema': {'type': 'object', 'properties': {'query': {'type': 'string', 'description': '订单号、提单号、箱号，或“近期订单/最近订单/我的订单”等查询意图；不要填写企业 ID、CustomerCode 或身份令牌', 'minLength': 1, 'maxLength': 128}}, 'required': ['query'], 'additionalProperties': False},
                 'annotations': {'readOnlyHint': True, 'destructiveHint': False}}
                 for name, (_, description) in TOOLS.items()]}
         elif method == 'tools/call':
