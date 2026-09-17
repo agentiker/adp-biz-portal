@@ -266,6 +266,7 @@
   - 状态：`IN PROGRESS`（2026-09-18，服务器日志确认微信→ADP 请求成功，但“近期订单”复测未产生 MCP 请求；工具回执为 `missing_tool_evidence`，正在修正工具语义并等待云端 Agent 再次调用）。
   - 本轮诊断（2026-09-18）：服务器 `platform_inbound_message`、`platform_execution_run`、`platform_delivery_task` 均已成功落库并完成回复任务；最近三轮 `platform_tool_call` 均为 `shipment.lookup/completed/missing_tool_evidence`，API 日志没有对应 `/mcp` POST。失败点在 ADP Agent 未选择 MCP 工具，不在企业范围或 M3 Mock 查询层。
   - 本轮修复（2026-09-18）：MCP `shipment_lookup` 描述和 OpenAPI `query` 说明明确支持“近期订单/最近订单/我的订单”；M3 Mock 对近期意图返回当前企业全部未删除记录，并为多条记录生成带订单序号的证据。
+  - 服务器复核（2026-09-18）：微信最近入站「查询我近期的订单」对应执行状态为 `upstream_error`，工具回执为 `missing_tool_evidence`；18:01/18:03 UTC 的 `/mcp` 请求均为工具发现/初始化，未发现业务 `tools/call`。使用 MOCK-ENT-A 测试身份签发临时上下文后直接调用公网 MCP `shipment_lookup`，返回 `found` 及 `MOCK-ORDER-A001`，随后删除临时 API Key，证明 MCP 鉴权、上下文企业范围和 M3 Mock 查询正常。当前阻塞点是 ADP Agent 工具选择或缓存的工具定义，需在 ADP 侧刷新/重新导入 MCP 工具后复测。
   - 参数补充（2026-09-17）：ADP Chat `custom_variables` 已补齐 `corp_id`、`corp_user_id`，并由已验证执行上下文派生；ADP MCP Header 映射为 `X-Corp-Id`、`X-Corp-User-Id`。本地定向测试通过，def70b8 已于 2026-09-17 部署到公网新栈；真实 MCP 工具回执证明四个动态 Header 已通过服务端校验，成功查询闭环仍待测试企业身份复测。
   - 解除方式：代码已部署、固定 Mock 已开启（见 M4-MCP-MOCK-01）；MOCK-ENT-A / MOCK-ENT-B 测试企业和绑定用户已补齐（M4-MCP-TEST-ID-01），在 ADP 云端配置 MCP 服务凭据和动态隐藏 Header，用 Portal/渠道真实发起 Mock 查询并留存审计与拒绝用例；正式 M3 数据仍单独依赖 `M2-M3-02`。
   - 本轮范围（2026-09-15 启动，现已拆出本地验收子项）：按用户授权先以固定虚构 M3 数据接通 ADP HTTP 连接器，覆盖 lookup/schedule/milestones 语义、隐藏上下文传递、服务鉴权、企业隔离、回调证据与回复闭环。真实 M3 仍由 `M2-M3-02` 验收，真实 ADP 隐藏变量回调需 `M0-ADP-01` 条件；本地模拟不替代云端验收。
