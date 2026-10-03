@@ -136,6 +136,9 @@ export interface AdpApp {
   id: string
   name: string
   applicationId: string
+  providerType: 'tencent_adp' | 'aliyun_adp' | 'volcengine_adp'
+  providerSchemaVersion: number
+  providerSettings: Record<string, unknown>
   vendor: string
   serviceVendor: string
   agentId: string
@@ -210,10 +213,14 @@ export interface CreateAdpApiKeyRequest {
 export interface CreateAdpAppRequest {
   name: string
   applicationId: string
-  appKey: string
-  tcSecretAppId: string
-  tcSecretId: string
-  tcSecretKey: string
+  providerType?: 'tencent_adp' | 'aliyun_adp' | 'volcengine_adp'
+  providerSchemaVersion?: number
+  providerSettings?: Record<string, unknown>
+  credentials?: Record<string, string>
+  appKey?: string
+  tcSecretAppId?: string
+  tcSecretId?: string
+  tcSecretKey?: string
   vendor?: string
   serviceVendor?: string
   agentId?: string
@@ -476,6 +483,10 @@ export interface SuccessResponse {
 
 export interface UpdateAdpAppRequest {
   name?: string
+  providerType?: 'tencent_adp' | 'aliyun_adp' | 'volcengine_adp'
+  providerSchemaVersion?: number
+  providerSettings?: Record<string, unknown>
+  credentials?: Record<string, string>
   appKey?: string
   tcSecretAppId?: string
   tcSecretId?: string

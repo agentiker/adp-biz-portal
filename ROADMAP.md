@@ -2,7 +2,7 @@
 
 > 关联方案：[docs/plans/2026-09-04-unified-business-platform-design.md](docs/plans/2026-09-04-unified-business-platform-design.md)
 
-更新时间：2026-09-16
+更新时间：2026-10-03
 总目标：完成统一业务接入平台方案落地，并完成前端 UI/UX 收尾。
 
 ## 状态规则
@@ -39,7 +39,7 @@
 
 部署进展（2026-09-13，项目重命名割接 + 迁移 14→16）：将分支 `refactor/rebrand-adp-business-gateway`（提交 `daeed27`，`adp-chat-client`→`adp-business-gateway` 全量重命名：compose 项目名/镜像名/DB 迁移锁 key、目录 `client`→`frontend`/`server`→`backend`、前端分层重组）以镜像 `adp-business-gateway:daeed27` 部署到 `xdimspace-01`。本轮仅项目自身包名变、第三方依赖闭包未变，故按 skill overlay 到上一个在役镜像 `adp-chat-client:9f6495b` 构建（Docker Hub 拉 `python:3.12-slim` 仍 EOF）。**割接前** `pg_dump -Fc` 备份到 `/root/adp-backups/adp_chat-pre-rename-20260913184250.dump`（204K，`pg_restore -l` 列出 31 个 TABLE DATA，可恢复），并把在役镜像 tag 为 `adp-chat-client:rollback-pre-rename`。`docker-compose.yml` 把 `platform-postgres` 命名卷**钉死**为 `adp-chat-client_platform-postgres`：`down` 旧项目 → 换 compose → `up` 新项目 `adp-business-gateway`，**数据原地复用**（compose 提示卷属旧项目的 warning 为良性，未新建空卷）；已重启 reverse-proxy。**实测生产 DB 割接前在 revision 14**（非预期的 16），`compose up` 的一次性 `migrate` 增量应用 revision 15（`platform_enterprise_contact`）与 16（`platform_adp_app`）到 16，业务数据完整（审计 94、消息 72、会话 35 等行数保留）。公网 `/healthz`=ok、`/readyz`=ready schemaRevision **16**；api/worker/wecom-ws-gateway/reverse-proxy 均 healthy。已知 `[TCADP.get_info] 450006` 元信息报错为既有问题、与本次无关。服务器 `.env`（无 `APP_IMAGE` 行，走 compose 默认 `adp-business-gateway:local`）、PostgreSQL 数据卷未触碰。回滚：app 用 `adp-chat-client:rollback-pre-rename` + 旧 compose `docker-compose.pre-rename.yml`（已留在服务器）`up`；如需回退 schema 到 14，从上述 dump 恢复（15/16 为增量表，`migrate.py downgrade --target 14 --allow-data-loss` 亦可）。
 
-当前任务计数：`55 / 74` 项已完成，`19` 项未完成（其中 `9` 项 `BLOCKED`、`8` 项 `IN PROGRESS`、`2` 项 `TODO`）。
+当前任务计数：`57 / 78` 项已完成，`19` 项未完成（其中 `10` 项 `BLOCKED`、`9` 项 `IN PROGRESS`）。历史条目中仍有 2 项保留未勾选但状态已记录为 `DONE`，计数按状态记录统计。
 
 本轮进展（2026-09-16）：`M2-ORCH-MOCK-01` 完成固定双企业 M3 数据、三个 HTTP 工具、隐藏上下文、回执驱动回复及 Worker/企微 Bot 本地验证。`M3-WECHAT-OA-03` 按用户明确反馈标记已验收。`M4-ADP-CFG-01` 本地业务运行取消 `.env` 应用回退，改用数据库绑定/默认应用；远程 `.env` 未修改。`M2-ORCH-01` 与 `M4-ADP-CFG-01` 的真实验收仍需发布代码、录入应用、导入 ADP 连接器和验证云端隐藏参数映射，标记 BLOCKED。9 月 13 日生产已经迁移至 revision 16，不再把迁移 16 当作未完成前置。此前任务中的 server/client 路径、环境应用映射与原始流式行为属于历史记录，当前以本轮补充及 [连接器联调方案](docs/plans/2026-09-16-adp-m3-mock-connector.md) 为准。
 
@@ -55,6 +55,34 @@
   - 完成证据（2026-09-05）：`ROADMAP.md`、`AGENTS.md`、`CLAUDE.md`。
 
 ### 未处理 TODO
+
+- [x] `M1-EXT-ARCH-01` 建立外部 CRM 与多云 ADP 的可插拔扩展边界。
+  - 状态：`DONE`（2026-10-03，本地架构与兼容实现）
+  - 目标：保留平台自己的身份、成员关系和执行上下文作为授权主模型；增加 CRM 连接器/外部 ID 映射基础模型；将 ADP 应用配置抽象为 `provider_type + 加密 credentials + provider_settings`，兼容现有腾讯字段。
+  - 依赖：外部 CRM 和阿里云/火山引擎 ADP 的正式 API 文档、测试租户和凭据；没有这些条件不得宣称真实第三方联调完成。
+  - 完成证据：`docs/plans/2026-10-03-extensibility-design.md`；`backend/model/platform.py` 新增 CRM 连接、外部身份和成员映射模型；`backend/integrations/crm/` 新增 Connector 协议与注册表；`backend/integrations/adp/registry.py` 新增按 `providerType` 的 Provider 工厂注册；`backend/core/adp_app.py` 与 Admin API 支持通用加密 `credentials`、`providerSettings` 和旧腾讯字段；migration revision `21` 支持新表、旧表增量升级和回退。
+  - 验证命令与结果：`PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/test/unit_test/test_extensibility_registry.py backend/test/unit_test/test_agent_provider.py backend/test/unit_test/test_legacy_binding.py -q`（16 passed，包含 Provider 切换必须提交新凭据的校验）；`PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/test/integration/test_adp_app_registry_postgres.py`（11 skipped，因未提供隔离 PostgreSQL URL）；`make platform_api_check`、`PYTHONPATH=backend backend/.venv/bin/python -m compileall -q backend`、`git diff --check` 通过。
+  - 验证边界：本地集成测试因本轮没有可用的显式隔离 PostgreSQL URL 未执行，不能宣称迁移真实数据库已验收；真实 CRM、阿里云 ADP 和火山引擎 ADP 仍未接通。
+
+- [ ] `M1-EXT-CRM-01` 接入首个外部 CRM Connector 并完成真实租户同步。
+  - 状态：`BLOCKED`
+  - 依赖：外部 CRM 正式 API 文档、测试租户、应用凭据、组织/用户脱敏样本和 Webhook 权限。
+  - 解除方式：完成全量组织/用户同步、增量游标、Webhook 去重、外部 ID 映射和跨企业权限验收后再标记完成。
+
+- [ ] `M1-EXT-ADP-01` 接入阿里云 ADP 和火山引擎 ADP Provider。
+  - 状态：`BLOCKED`
+  - 依赖：两家 ADP 正式 Chat/Tool API 文档、签名方式、测试应用、MCP/工具调用权限和错误码样本。
+  - 解除方式：分别实现 Provider factory、配置校验、健康检查和真实端到端调用；不得以注册表或本地 fake provider 代替厂商联调。
+
+- [x] `M1-EXT-UI-01` 将 ADP 应用后台配置改为 Provider 感知的动态表单。
+  - 状态：`DONE`（2026-10-03，本地配置契约与后台表单）
+  - 目标：后台展示 Provider 类型、schema 版本、非敏感 settings，并按腾讯兼容字段或通用加密 credentials 提交；不在前端回显服务端密文。
+  - 依赖：`M1-EXT-ARCH-01` 的 Provider 配置 API；阿里云和火山引擎的正式字段在 Provider 接入前保持通用 JSON，不宣称已可调用。
+  - 验收：生成类型与 OpenAPI 一致；腾讯旧配置可编辑；通用 Provider 配置可提交并明确显示“Provider 尚未注册/不可执行”状态；前端类型检查、构建和 diff 检查通过。
+  - 完成证据：`frontend/packages/app/src/pages/admin/Admin.vue` 增加 Provider 选择、schema 版本、非敏感 settings 和通用 credentials 表单；腾讯旧字段继续兼容，密钥编辑时留空表示保留原值；未注册 Provider 明确显示不可执行警告；`frontend/packages/app/src/platform/generated.ts` 与 OpenAPI 保持同步。
+  - 验证命令与结果：`make platform_api_check`（OpenAPI 56 operations / 62 schemas 有效，前端类型已同步）；`cd frontend/packages/app && npm run type-check`（通过）；`cd frontend/packages/app && npm run build-only`（构建通过，仅保留既有 chunk 大小 warning）；`PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/test/unit_test/test_extensibility_registry.py backend/test/unit_test/test_agent_provider.py backend/test/unit_test/test_legacy_binding.py -q`（16 passed）；`PYTHONPATH=backend backend/.venv/bin/python -m compileall -q backend`、`git diff --check`（通过）。
+  - 验证边界：未提供显式隔离 PostgreSQL URL，`backend/test/integration/test_adp_app_registry_postgres.py` 未执行；通用 JSON 表单不代表阿里云/火山引擎 Provider 已注册或完成真实联调。
+
 
 - [ ] `M0-EXT-01` 获取正式 M3 API 文档、测试权限、字段归属规则、分页、限流、错误码和 Token 生命周期。
   - 状态：`BLOCKED`

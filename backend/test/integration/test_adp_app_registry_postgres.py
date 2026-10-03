@@ -91,6 +91,48 @@ async def test_create_encrypts_and_serialize_hides_secret(adp_sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_generic_provider_credentials_are_encrypted_and_settings_are_listable(adp_sessionmaker):
+    async with adp_sessionmaker() as db:
+        app = await _create_adp_app(
+            db,
+            name="Aliyun app",
+            application_id="APP-ALIYUN",
+            provider_type="aliyun_adp",
+            provider_settings={"region": "cn-shanghai", "endpoint": "https://adp.example.test"},
+            credentials={"accessKeyId": "access-id", "accessKeySecret": "access-secret"},
+        )
+        await db.commit()
+
+        payload = serialize_adp_app(app)
+        assert payload["providerType"] == "aliyun_adp"
+        assert payload["providerSettings"] == {
+            "region": "cn-shanghai",
+            "endpoint": "https://adp.example.test",
+        }
+        assert "credentials" not in payload
+        assert "access-secret" not in payload
+        assert app.Ciphertext and "access-secret" not in app.Ciphertext
+
+
+@pytest.mark.asyncio
+async def test_unregistered_provider_fails_closed(adp_sessionmaker):
+    from integrations.adp import registry
+
+    async with adp_sessionmaker() as db:
+        app = await _create_adp_app(
+            db,
+            name="Volcengine app",
+            application_id="APP-VOLC",
+            provider_type="volcengine_adp",
+            credentials={"accessKey": "access-key"},
+        )
+        await db.commit()
+
+        with pytest.raises(registry.AdpAppConfigError, match="provider not registered"):
+            await registry.resolve_provider_for_enterprise(db, SimpleNamespace(AdpAppId=app.Id))
+
+
+@pytest.mark.asyncio
 async def test_resolve_uses_enterprise_binding_then_default_then_fallback(adp_sessionmaker):
     from integrations.adp import registry
     async with adp_sessionmaker() as db:

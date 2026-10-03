@@ -2187,6 +2187,10 @@ class AdminAdpAppListApi(HTTPMethodView):
             agent_id=body.get("agentId"),
             private_url=body.get("privateUrl"),
             is_default=bool(body.get("isDefault")),
+            provider_type=body.get("providerType"),
+            provider_schema_version=body.get("providerSchemaVersion"),
+            provider_settings=body.get("providerSettings"),
+            credentials=body.get("credentials"),
         )
         clear_provider_cache()
         await _commit_audit(request, action="adp_app.create", target_type="platform_adp_app", target_id=str(app.Id), metadata={"applicationId": app.ApplicationId, "isDefault": bool(app.IsDefault)})
@@ -2212,6 +2216,10 @@ class AdminAdpAppDetailApi(HTTPMethodView):
             private_url=body.get("privateUrl"),
             status=body.get("status"),
             is_default=body.get("isDefault"),
+            provider_type=body.get("providerType"),
+            provider_schema_version=body.get("providerSchemaVersion"),
+            provider_settings=body.get("providerSettings"),
+            credentials=body.get("credentials"),
         )
         clear_provider_cache()
         await _commit_audit(request, action="adp_app.update", target_type="platform_adp_app", target_id=str(app.Id), metadata={"applicationId": app.ApplicationId, "status": app.Status, "isDefault": bool(app.IsDefault)})

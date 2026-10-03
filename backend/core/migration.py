@@ -41,6 +41,9 @@ from model.platform import (
     PlatformInboundMessage,
     PlatformMembership,
     PlatformM3MockShipment,
+    PlatformCrmConnection,
+    PlatformExternalIdentityLink,
+    PlatformExternalMembershipLink,
     PlatformMessage,
     PlatformMigration,
     PlatformSchemaVersion,
@@ -81,7 +84,7 @@ class MigrationRevision:
 class Migration:
     """Versioned migration runner and read-only application startup guard."""
 
-    CURRENT_PLATFORM_SCHEMA_VERSION = 20
+    CURRENT_PLATFORM_SCHEMA_VERSION = 21
     REVISIONS = (
         MigrationRevision(
             1,
@@ -190,6 +193,15 @@ class Migration:
         MigrationRevision(18, "platform_adp_api_key_encryption", ()),
         MigrationRevision(19, "platform_adp_api_key_soft_delete", ()),
         MigrationRevision(20, "platform_m3_mock_shipment", (PlatformM3MockShipment.__tablename__,)),
+        MigrationRevision(
+            21,
+            "platform_extensibility_schema",
+            (
+                PlatformCrmConnection.__tablename__,
+                PlatformExternalIdentityLink.__tablename__,
+                PlatformExternalMembershipLink.__tablename__,
+            ),
+        ),
     )
 
     @classmethod
@@ -221,6 +233,9 @@ class Migration:
             PlatformSharedResult,
             PlatformChannelCursor,
             PlatformAdpApp,
+            PlatformCrmConnection,
+            PlatformExternalIdentityLink,
+            PlatformExternalMembershipLink,
             PlatformAdpApiKey,
             PlatformConfigVersion,
             PlatformToolDefinition,
@@ -682,6 +697,16 @@ class Migration:
                     await db.execute(text('ALTER TABLE platform_adp_api_key ADD COLUMN IF NOT EXISTS "KeyVersion" VARCHAR(32)'))
                 elif revision.version == 19:
                     await db.execute(text('ALTER TABLE platform_adp_api_key ADD COLUMN IF NOT EXISTS "DeletedAt" TIMESTAMP'))
+                elif revision.version == 21:
+                    # Existing installations already have platform_adp_app from
+                    # revision 16; add provider-neutral fields without changing
+                    # the Tencent compatibility columns or stored credentials.
+                    await db.execute(text(
+                        'ALTER TABLE platform_adp_app '
+                        'ADD COLUMN IF NOT EXISTS "ProviderType" VARCHAR(64) NOT NULL DEFAULT \'tencent_adp\', '
+                        'ADD COLUMN IF NOT EXISTS "ProviderSchemaVersion" INTEGER NOT NULL DEFAULT 1, '
+                        'ADD COLUMN IF NOT EXISTS "ProviderSettings" JSON NOT NULL DEFAULT \'{}\'::json'
+                    ))
                 record = records.get(revision.version)
                 if record is None:
                     record = PlatformMigration(
@@ -747,6 +772,13 @@ class Migration:
                     await db.execute(text('ALTER TABLE platform_adp_api_key DROP COLUMN IF EXISTS "DeletedAt"'))
                 if version == 18:
                     await db.execute(text('ALTER TABLE platform_adp_api_key DROP COLUMN IF EXISTS "Ciphertext", DROP COLUMN IF EXISTS "KeyVersion"'))
+                if version == 21:
+                    await db.execute(text(
+                        'ALTER TABLE platform_adp_app '
+                        'DROP COLUMN IF EXISTS "ProviderSettings", '
+                        'DROP COLUMN IF EXISTS "ProviderSchemaVersion", '
+                        'DROP COLUMN IF EXISTS "ProviderType"'
+                    ))
                 if version == 16:
                     await db.execute(text('ALTER TABLE platform_enterprise DROP CONSTRAINT IF EXISTS fk_platform_enterprise_adp_app'))
                     await db.execute(text('ALTER TABLE platform_enterprise DROP COLUMN IF EXISTS "AdpAppId"'))

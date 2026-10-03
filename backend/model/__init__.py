@@ -5,6 +5,8 @@ from .account import (
 )
 from .agent import AgentConfig
 from .platform import (
+    AdpProviderType,
+    CrmConnectionStatus,
     EnterpriseStatus,
     EnterpriseExternalAccount,
     IntegrationConnection,
@@ -19,10 +21,13 @@ from .platform import (
     PlatformEvidence,
     PlatformExecutionRun,
     PlatformConfigVersion,
+    PlatformCrmConnection,
     PlatformCredential,
     PlatformDeliveryTask,
     PlatformEnterprise,
     PlatformExecutionContext,
+    PlatformExternalIdentityLink,
+    PlatformExternalMembershipLink,
     PlatformInboundMessage,
     PlatformMembership,
     PlatformMessage,
@@ -33,6 +38,7 @@ from .platform import (
     PlatformToolCall,
     PlatformToolDefinition,
     PlatformUser,
+    ExternalIdentityStatus,
 )
 
 __all__ = [
@@ -40,6 +46,8 @@ __all__ = [
     "AccountStatus",
     "AccountRole",
     "AgentConfig",
+    "AdpProviderType",
+    "CrmConnectionStatus",
     "EnterpriseStatus",
     "EnterpriseExternalAccount",
     "IntegrationConnection",
@@ -54,10 +62,13 @@ __all__ = [
     "PlatformEvidence",
     "PlatformExecutionRun",
     "PlatformConfigVersion",
+    "PlatformCrmConnection",
     "PlatformCredential",
     "PlatformDeliveryTask",
     "PlatformEnterprise",
     "PlatformExecutionContext",
+    "PlatformExternalIdentityLink",
+    "PlatformExternalMembershipLink",
     "PlatformInboundMessage",
     "PlatformMembership",
     "PlatformMessage",
@@ -68,4 +79,5 @@ __all__ = [
     "PlatformToolCall",
     "PlatformToolDefinition",
     "PlatformUser",
+    "ExternalIdentityStatus",
 ]

@@ -104,6 +104,26 @@ class AdpAppStatus(enum.StrEnum):
     DISABLED = "disabled"
 
 
+class AdpProviderType(enum.StrEnum):
+    """Stable platform provider identifiers, independent of vendor labels."""
+
+    TENCENT = "tencent_adp"
+    ALIYUN = "aliyun_adp"
+    VOLCENGINE = "volcengine_adp"
+
+
+class CrmConnectionStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    ERROR = "error"
+
+
+class ExternalIdentityStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    REVOKED = "revoked"
+
+
 class PlatformAdpApp(Base):
     """A configurable ADP application (vendor app + encrypted AppKey).
 
@@ -118,6 +138,11 @@ class PlatformAdpApp(Base):
     Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
     Name = Column(String(128), nullable=False)
     ApplicationId = Column(String(64), nullable=False, unique=True, index=True)
+    # ProviderType is the stable registry key. Vendor/ServiceVendor remain for
+    # backwards compatibility with the Tencent compatibility API.
+    ProviderType = Column(String(64), nullable=False, server_default=AdpProviderType.TENCENT)
+    ProviderSchemaVersion = Column(Integer, nullable=False, server_default=text("1"))
+    ProviderSettings = Column(JSON, nullable=False, server_default=text("'{}'::json"))
     Vendor = Column(String(32), nullable=False, server_default="Tencent")
     ServiceVendor = Column(String(32), nullable=False, server_default="ChinaTencentCloud")
     AgentId = Column(String(128), nullable=False, server_default="platform-default")
@@ -126,6 +151,81 @@ class PlatformAdpApp(Base):
     Fingerprint = Column(String(64), nullable=False)
     Status = Column(String(16), nullable=False, server_default=AdpAppStatus.ACTIVE)
     IsDefault = Column(Boolean, nullable=False, server_default=text("false"))
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+
+class PlatformCrmConnection(Base):
+    """A platform-owned connection to an external CRM tenant.
+
+    Credentials are encrypted exactly like channel and ADP credentials. The
+    connection is a data/sync source; it never grants platform permissions by
+    itself.
+    """
+
+    __tablename__ = "platform_crm_connection"
+    __table_args__ = (
+        UniqueConstraint("ProviderType", "TenantId", name="unique_platform_crm_tenant"),
+        Index("idx_platform_crm_connection_status", "Status"),
+    )
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    Name = Column(String(128), nullable=False)
+    ProviderType = Column(String(64), nullable=False)
+    TenantId = Column(String(255), nullable=False)
+    Ciphertext = Column(Text(), nullable=False)
+    KeyVersion = Column(String(32), nullable=False)
+    Fingerprint = Column(String(64), nullable=False)
+    Settings = Column(JSON, nullable=False, server_default=text("'{}'::json"))
+    Status = Column(String(16), nullable=False, server_default=CrmConnectionStatus.ACTIVE)
+    SyncCursor = Column(String(1024), nullable=True)
+    LastSyncAt = Column(DateTime, nullable=True)
+    LastError = Column(String(255), nullable=True)
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+
+class PlatformExternalIdentityLink(Base):
+    """Maps an external CRM object to one canonical platform identity."""
+
+    __tablename__ = "platform_external_identity_link"
+    __table_args__ = (
+        UniqueConstraint("ConnectionId", "ObjectType", "ExternalId", name="unique_external_identity_link"),
+        Index("idx_external_identity_platform_user", "PlatformUserId", "Status"),
+        Index("idx_external_identity_platform_enterprise", "PlatformEnterpriseId", "Status"),
+    )
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    ConnectionId = Column(UUID(), ForeignKey("platform_crm_connection.Id", ondelete="CASCADE"), nullable=False, index=True)
+    ObjectType = Column(String(32), nullable=False)
+    ExternalId = Column(String(255), nullable=False)
+    PlatformUserId = Column(UUID(), ForeignKey("platform_user.Id", ondelete="CASCADE"), nullable=True, index=True)
+    PlatformEnterpriseId = Column(UUID(), ForeignKey("platform_enterprise.Id", ondelete="CASCADE"), nullable=True, index=True)
+    ExternalStatus = Column(String(32), nullable=True)
+    Status = Column(String(16), nullable=False, server_default=ExternalIdentityStatus.ACTIVE)
+    LastSeenAt = Column(DateTime, nullable=True)
+    LastSyncedAt = Column(DateTime, nullable=True)
+    CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+
+class PlatformExternalMembershipLink(Base):
+    """Maps an external CRM membership to an existing platform membership."""
+
+    __tablename__ = "platform_external_membership_link"
+    __table_args__ = (
+        UniqueConstraint("ConnectionId", "ExternalEnterpriseId", "ExternalUserId", name="unique_external_membership_link"),
+        Index("idx_external_membership_platform", "PlatformMembershipId", "Status"),
+    )
+
+    Id: Mapped[str] = mapped_column(UUID(), server_default=text("uuid_generate_v4()"), primary_key=True)
+    ConnectionId = Column(UUID(), ForeignKey("platform_crm_connection.Id", ondelete="CASCADE"), nullable=False, index=True)
+    ExternalEnterpriseId = Column(String(255), nullable=False)
+    ExternalUserId = Column(String(255), nullable=False)
+    PlatformMembershipId = Column(UUID(), ForeignKey("platform_membership.Id", ondelete="CASCADE"), nullable=False, index=True)
+    Status = Column(String(16), nullable=False, server_default=ExternalIdentityStatus.ACTIVE)
+    LastSeenAt = Column(DateTime, nullable=True)
+    LastSyncedAt = Column(DateTime, nullable=True)
     CreatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     UpdatedAt = Column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 

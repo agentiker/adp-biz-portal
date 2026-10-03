@@ -1822,11 +1822,14 @@ components:
         status: { type: string, enum: [active, suspended] }
     AdpApp:
       type: object
-      required: [id, name, applicationId, vendor, serviceVendor, agentId, status, isDefault, appKeyFingerprint, updatedAt]
+      required: [id, name, applicationId, providerType, providerSchemaVersion, providerSettings, vendor, serviceVendor, agentId, status, isDefault, appKeyFingerprint, updatedAt]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         applicationId: { type: string }
+        providerType: { type: string, enum: [tencent_adp, aliyun_adp, volcengine_adp] }
+        providerSchemaVersion: { type: integer, minimum: 1 }
+        providerSettings: { type: object, additionalProperties: true }
         vendor: { type: string }
         serviceVendor: { type: string }
         agentId: { type: string }
@@ -1836,10 +1839,14 @@ components:
         updatedAt: { type: string }
     CreateAdpAppRequest:
       type: object
-      required: [name, applicationId, appKey, tcSecretAppId, tcSecretId, tcSecretKey]
+      required: [name, applicationId]
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         applicationId: { type: string, minLength: 2, maxLength: 64 }
+        providerType: { type: string, enum: [tencent_adp, aliyun_adp, volcengine_adp], default: tencent_adp }
+        providerSchemaVersion: { type: integer, minimum: 1, default: 1 }
+        providerSettings: { type: object, additionalProperties: true }
+        credentials: { type: object, additionalProperties: { type: string }, description: "厂商凭据；服务端加密保存，不会回传。腾讯云也可使用兼容字段。" }
         appKey: { type: string, minLength: 1 }
         tcSecretAppId: { type: string, minLength: 1 }
         tcSecretId: { type: string, minLength: 1 }
@@ -1853,6 +1860,10 @@ components:
       type: object
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
+        providerType: { type: string, enum: [tencent_adp, aliyun_adp, volcengine_adp] }
+        providerSchemaVersion: { type: integer, minimum: 1 }
+        providerSettings: { type: object, additionalProperties: true }
+        credentials: { type: object, additionalProperties: { type: string } }
         appKey: { type: string }
         tcSecretAppId: { type: string }
         tcSecretId: { type: string }

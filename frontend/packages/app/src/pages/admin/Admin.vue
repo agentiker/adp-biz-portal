@@ -79,7 +79,15 @@ const detail = ref<{ title: string; lines: string[] } | null>(null)
 const secretMessage = ref('')
 const enterpriseForm = ref({ id: '', name: '', customerCode: '', unifiedSocialCreditCode: '', contactPerson: '', contactPhone: '', adpAppId: '' })
 const adpApps = ref<AdpApp[]>([])
-const adpAppForm = ref({ id: '', name: '', applicationId: '', appKey: '', tcSecretAppId: '', tcSecretId: '', tcSecretKey: '', vendor: 'Tencent', serviceVendor: 'ChinaTencentCloud', agentId: 'platform-default', privateUrl: '', isDefault: false })
+type AdpProviderType = 'tencent_adp' | 'aliyun_adp' | 'volcengine_adp'
+const adpProviderOptions: Array<{ value: AdpProviderType; label: string; registered: boolean }> = [
+  { value: 'tencent_adp', label: '腾讯云 ADP', registered: true },
+  { value: 'aliyun_adp', label: '阿里云 ADP（待接入）', registered: false },
+  { value: 'volcengine_adp', label: '火山引擎 ADP（待接入）', registered: false },
+]
+const adpAppForm = ref({ id: '', name: '', applicationId: '', providerType: 'tencent_adp' as AdpProviderType, providerSchemaVersion: 1, providerSettingsText: '{}', credentialsText: '', appKey: '', tcSecretAppId: '', tcSecretId: '', tcSecretKey: '', vendor: 'Tencent', serviceVendor: 'ChinaTencentCloud', agentId: 'platform-default', privateUrl: '', isDefault: false })
+const isTencentAdp = computed(() => adpAppForm.value.providerType === 'tencent_adp')
+const selectedProvider = computed(() => adpProviderOptions.find((item) => item.value === adpAppForm.value.providerType))
 const adpAppActionId = ref<string | null>(null)
 const userForm = ref({ name: '', phone: '', role: 'customer' as PlatformRole, enterpriseId: '' })
 const configForm = ref({ itemsText: '', portal: true, m3ReadOnly: true, audit: true, webChannel: true, notes: '' })
@@ -249,20 +257,48 @@ const openEditEnterprise = (item: AdminEnterprise) => {
 const adpAppName = (id: string | null | undefined) => id ? (adpApps.value.find((app) => app.id === id)?.name || id) : '平台默认'
 
 const openCreateAdpApp = () => {
-  adpAppForm.value = { id: '', name: '', applicationId: '', appKey: '', tcSecretAppId: '', tcSecretId: '', tcSecretKey: '', vendor: 'Tencent', serviceVendor: 'ChinaTencentCloud', agentId: 'platform-default', privateUrl: '', isDefault: false }
+  adpAppForm.value = { id: '', name: '', applicationId: '', providerType: 'tencent_adp', providerSchemaVersion: 1, providerSettingsText: '{}', credentialsText: '', appKey: '', tcSecretAppId: '', tcSecretId: '', tcSecretKey: '', vendor: 'Tencent', serviceVendor: 'ChinaTencentCloud', agentId: 'platform-default', privateUrl: '', isDefault: false }
   modal.value = 'adpApp'
 }
 const openEditAdpApp = (app: AdpApp) => {
-  adpAppForm.value = { id: app.id, name: app.name, applicationId: app.applicationId, appKey: '', tcSecretAppId: '', tcSecretId: '', tcSecretKey: '', vendor: app.vendor, serviceVendor: app.serviceVendor, agentId: app.agentId, privateUrl: '', isDefault: app.isDefault }
+  adpAppForm.value = { id: app.id, name: app.name, applicationId: app.applicationId, providerType: app.providerType, providerSchemaVersion: app.providerSchemaVersion, providerSettingsText: JSON.stringify(app.providerSettings || {}, null, 2), credentialsText: '', appKey: '', tcSecretAppId: '', tcSecretId: '', tcSecretKey: '', vendor: app.vendor, serviceVendor: app.serviceVendor, agentId: app.agentId, privateUrl: '', isDefault: app.isDefault }
   modal.value = 'adpApp'
+}
+const parseJsonObject = (value: string, label: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
+    return parsed as Record<string, unknown>
+  } catch {
+    throw new Error(`${label} 必须是 JSON 对象`)
+  }
+}
+const parseCredentials = (value: string): Record<string, string> => {
+  const parsed = parseJsonObject(value, 'credentials')
+  const credentials: Record<string, string> = {}
+  for (const [key, item] of Object.entries(parsed)) {
+    if (typeof item !== 'string' || !item.trim()) throw new Error('credentials 的值必须是非空字符串')
+    credentials[key] = item
+  }
+  return credentials
 }
 const submitAdpApp = async () => {
   createActionLoading.value = true
   try {
     const form = adpAppForm.value
+    const providerSettings = parseJsonObject(form.providerSettingsText, 'providerSettings')
+    const genericCredentials = form.credentialsText.trim() ? parseCredentials(form.credentialsText) : undefined
+    if (!isTencentAdp.value && !form.id && !genericCredentials) throw new Error('请填写 credentials')
+    const providerFields = {
+      providerType: form.providerType,
+      providerSchemaVersion: form.providerSchemaVersion,
+      providerSettings,
+      ...(genericCredentials ? { credentials: genericCredentials } : {}),
+    }
     if (form.id) {
       await updateAdpApp(form.id, {
         name: form.name,
+        ...providerFields,
         ...(form.appKey.trim() ? { appKey: form.appKey.trim() } : {}),
         ...(form.tcSecretAppId.trim() ? { tcSecretAppId: form.tcSecretAppId.trim() } : {}),
         ...(form.tcSecretId.trim() ? { tcSecretId: form.tcSecretId.trim() } : {}),
@@ -278,10 +314,8 @@ const submitAdpApp = async () => {
       await createAdpApp({
         name: form.name,
         applicationId: form.applicationId,
-        appKey: form.appKey,
-        tcSecretAppId: form.tcSecretAppId,
-        tcSecretId: form.tcSecretId,
-        tcSecretKey: form.tcSecretKey,
+        ...providerFields,
+        ...(isTencentAdp.value ? { appKey: form.appKey, tcSecretAppId: form.tcSecretAppId, tcSecretId: form.tcSecretId, tcSecretKey: form.tcSecretKey } : {}),
         vendor: form.vendor,
         serviceVendor: form.serviceVendor,
         agentId: form.agentId,
@@ -594,7 +628,7 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
     <template v-else-if="view === 'open-api'"><AdminAdpApiKeys /></template>
     <template v-else-if="view === 'bindings'">
       <section class="admin-intro"><div><p class="eyebrow">运营控制台 / {{ resourceMeta?.eyebrow }}</p><h1>{{ resourceMeta?.title }}</h1><p>{{ resourceMeta?.description }}</p></div><div class="resource-actions"><button class="subtle-button" :disabled="loading" @click="refresh"><RefreshIcon />刷新</button><button class="primary-action" @click="openCreateAdpApp"><ApiIcon />新增 ADP 应用</button></div></section>
-      <section class="resource-panel admin-panel adp-apps-panel"><div class="resource-toolbar"><div class="toolbar-heading"><p class="section-kicker">应用注册表</p><strong class="toolbar-title">ADP 应用</strong></div><span class="resource-count">{{ adpApps.length }} 个应用</span></div><div v-if="loading && !adpApps.length" class="resource-loading">正在加载 ADP 应用…</div><div v-else-if="adpApps.length" class="resource-table"><div class="resource-table-head"><span>应用</span><span>Vendor / AgentId</span><span>状态</span><span>操作</span></div><div v-for="app in adpApps" :key="app.id" class="resource-row"><span class="resource-name"><ApiIcon /><strong>{{ app.name }}<small>{{ app.applicationId }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ app.vendor }} · {{ app.serviceVendor }}</strong><small>{{ app.agentId }} · Key ****{{ app.appKeyFingerprint }}</small></span><span class="row-status" :class="`row-status--${app.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ app.status === 'active' ? '启用' : '停用' }}<em v-if="app.isDefault" class="default-badge">默认</em></span><span class="row-actions"><button class="text-action" :disabled="adpAppActionId === app.id || app.isDefault || app.status !== 'active'" @click="setDefaultAdpApp(app)">设为默认</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="openEditAdpApp(app)">编辑</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="toggleAdpAppStatus(app)">{{ app.status === 'active' ? '停用' : '启用' }}</button><button class="text-action text-action--danger" :disabled="adpAppActionId === app.id" @click="removeAdpApp(app)">删除</button></span></div></div></section>
+      <section class="resource-panel admin-panel adp-apps-panel"><div class="resource-toolbar"><div class="toolbar-heading"><p class="section-kicker">应用注册表</p><strong class="toolbar-title">ADP 应用</strong></div><span class="resource-count">{{ adpApps.length }} 个应用</span></div><div v-if="loading && !adpApps.length" class="resource-loading">正在加载 ADP 应用…</div><div v-else-if="adpApps.length" class="resource-table"><div class="resource-table-head"><span>应用</span><span>Provider / AgentId</span><span>状态</span><span>操作</span></div><div v-for="app in adpApps" :key="app.id" class="resource-row"><span class="resource-name"><ApiIcon /><strong>{{ app.name }}<small>{{ app.applicationId }}</small></strong></span><span class="resource-detail user-scope"><strong>{{ app.providerType }} · {{ app.vendor }}</strong><small>{{ app.agentId }} · schema v{{ app.providerSchemaVersion }}</small></span><span class="row-status" :class="`row-status--${app.status === 'active' ? 'success' : 'warning'}`"><i></i>{{ app.status === 'active' ? '启用' : '停用' }}<em v-if="app.isDefault" class="default-badge">默认</em></span><span class="row-actions"><button class="text-action" :disabled="adpAppActionId === app.id || app.isDefault || app.status !== 'active'" @click="setDefaultAdpApp(app)">设为默认</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="openEditAdpApp(app)">编辑</button><button class="text-action" :disabled="adpAppActionId === app.id" @click="toggleAdpAppStatus(app)">{{ app.status === 'active' ? '停用' : '启用' }}</button><button class="text-action text-action--danger" :disabled="adpAppActionId === app.id" @click="removeAdpApp(app)">删除</button></span></div></div></section>
       <p class="adp-config-note">请先新增应用并设为平台默认，或在企业管理中绑定应用。业务调用不再回退到服务器默认配置。</p>
     </template>
     <template v-else-if="view === 'channels'">
@@ -610,7 +644,39 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
       <form v-else-if="modal === 'user'" class="modal-card" @submit.prevent="submitUser"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>新增平台用户</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><label>姓名<input v-model="userForm.name" required maxlength="255" /></label><label>手机号<input v-model="userForm.phone" required inputmode="numeric" pattern="1[0-9]{10}" /></label><label>角色<PlatformSelect :model-value="userForm.role" :options="roleSelectOptions" aria-label="角色" @update:model-value="userForm.role = $event as PlatformRole" /></label><label>所属企业<PlatformSelect v-model="userForm.enterpriseId" :options="enterpriseSelectOptions" placeholder="请选择企业" aria-label="所属企业" /><small class="field-hint">每个平台用户关联一个企业</small></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '创建中…' : '创建用户' }}</button></div></form>
       <form v-else-if="modal === 'access'" class="modal-card access-editor-card" @submit.prevent="submitAccess"><div class="modal-heading"><div><p class="section-kicker">身份治理</p><h2>调整角色与企业</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="accessActionLoading" @click="modal = null">×</button></div><div v-if="accessUser" class="access-user-summary"><UserIcon /><div><strong>{{ accessUser.name }}</strong><small>{{ accessUser.phone }} · 当前所属：{{ enterpriseSummary(accessUser) }}</small></div></div><p class="modal-help">每个平台用户只关联一个企业。角色与所属企业保存后立即生效，该用户已有的执行上下文会被撤销。</p><label>角色<PlatformSelect :model-value="accessRole" :options="roleSelectOptions" :disabled="accessActionLoading" aria-label="角色" @update:model-value="accessRole = $event as PlatformRole" /></label><label>所属企业<PlatformSelect v-model="accessEnterpriseId" :options="enterpriseSelectOptions" :disabled="accessActionLoading" placeholder="请选择企业" aria-label="所属企业" /></label><div v-if="accessFormError" class="form-error" role="alert"><ErrorCircleIcon /><span>{{ accessFormError }}</span></div><div class="modal-actions"><button type="button" class="outline-action" :disabled="accessActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="accessActionLoading">{{ accessActionLoading ? '保存中…' : '保存' }}</button></div></form>
       <form v-else-if="modal === 'config'" class="modal-card config-editor-card" @submit.prevent="submitConfigDraft"><div class="modal-heading"><div><p class="section-kicker">平台配置</p><h2>编辑配置草稿</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="modal = null">×</button></div><p class="modal-help">每行一项能力。保存后生成草稿，发布前仍可继续修改。</p><label>能力清单<textarea v-model="configForm.itemsText" required maxlength="1800" rows="7" placeholder="例如：客户登录与会话&#10;M3 只读工具"></textarea></label><fieldset class="flag-fieldset"><legend>功能开关</legend><label class="checkbox-row"><input v-model="configForm.portal" type="checkbox" /><span>客户门户</span></label><label class="checkbox-row"><input v-model="configForm.m3ReadOnly" type="checkbox" /><span>M3 只读工具</span></label><label class="checkbox-row"><input v-model="configForm.audit" type="checkbox" /><span>审计记录</span></label><label class="checkbox-row"><input v-model="configForm.webChannel" type="checkbox" /><span>官网渠道</span></label></fieldset><label>变更说明<textarea v-model="configForm.notes" maxlength="500" rows="3" placeholder="可选，说明本次配置变更原因"></textarea></label><div class="modal-actions"><button type="button" class="outline-action" :disabled="configActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="configActionLoading">{{ configActionLoading ? '保存中…' : '保存草稿' }}</button></div></form>
-      <form v-else-if="modal === 'adpApp'" class="modal-card modal-card--wide" @submit.prevent="submitAdpApp"><div class="modal-heading"><div><p class="section-kicker">应用注册表</p><h2>{{ adpAppForm.id ? '编辑 ADP 应用' : '新增 ADP 应用' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div><div class="modal-columns"><section class="modal-section"><h3 class="modal-section-title">应用基础信息</h3><div class="modal-section-fields"><label>应用名称<input v-model="adpAppForm.name" required maxlength="128" /></label><label>ApplicationId<input v-model="adpAppForm.applicationId" :required="!adpAppForm.id" :disabled="!!adpAppForm.id" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,63}" /><small v-if="adpAppForm.id" class="field-hint">ApplicationId 创建后不可修改</small></label><label>Vendor<input v-model="adpAppForm.vendor" maxlength="32" placeholder="Tencent" /></label><label>ServiceVendor<input v-model="adpAppForm.serviceVendor" maxlength="32" placeholder="ChinaTencentCloud" /></label><label>AgentId<input v-model="adpAppForm.agentId" maxlength="128" placeholder="platform-default" /></label><label>PrivateUrl（选填）<input v-model="adpAppForm.privateUrl" maxlength="512" /></label><label class="checkbox-row"><input v-model="adpAppForm.isDefault" type="checkbox" /><span>设为平台默认应用</span></label></div></section><section class="modal-section"><h3 class="modal-section-title">应用密钥</h3><div class="modal-notice"><LockOnIcon /><span>加密保存，提交后不再回显；编辑时留空表示不修改该项。</span></div><div class="modal-section-fields"><label>AppKey<input v-model="adpAppForm.appKey" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>TC_SECRET_APPID<input v-model="adpAppForm.tcSecretAppId" :required="!adpAppForm.id" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>TC_SECRET_ID<input v-model="adpAppForm.tcSecretId" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>TC_SECRET_KEY<input v-model="adpAppForm.tcSecretKey" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label></div></section></div><div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '保存中…' : (adpAppForm.id ? '保存' : '创建应用') }}</button></div></form>
+      <form v-else-if="modal === 'adpApp'" class="modal-card modal-card--wide" @submit.prevent="submitAdpApp">
+        <div class="modal-heading"><div><p class="section-kicker">应用注册表</p><h2>{{ adpAppForm.id ? '编辑 ADP 应用' : '新增 ADP 应用' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" :disabled="createActionLoading" @click="modal = null">×</button></div>
+        <div class="modal-columns">
+          <section class="modal-section">
+            <h3 class="modal-section-title">应用基础信息</h3>
+            <div class="modal-section-fields">
+              <label>应用名称<input v-model="adpAppForm.name" required maxlength="128" /></label>
+              <label>ApplicationId<input v-model="adpAppForm.applicationId" :required="!adpAppForm.id" :disabled="!!adpAppForm.id" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,63}" /><small v-if="adpAppForm.id" class="field-hint">ApplicationId 创建后不可修改</small></label>
+              <label>Provider 类型<select v-model="adpAppForm.providerType"><option v-for="option in adpProviderOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
+              <small v-if="selectedProvider && !selectedProvider.registered" class="provider-warning">该 Provider 已完成配置契约，但尚未注册执行适配器；保存后业务调用会安全拒绝。</small>
+              <label>Provider Schema 版本<input v-model.number="adpAppForm.providerSchemaVersion" type="number" min="1" max="100" required /></label>
+              <label>Vendor<input v-model="adpAppForm.vendor" maxlength="32" placeholder="Tencent" /></label>
+              <label>ServiceVendor<input v-model="adpAppForm.serviceVendor" maxlength="32" placeholder="ChinaTencentCloud" /></label>
+              <label>AgentId<input v-model="adpAppForm.agentId" maxlength="128" placeholder="platform-default" /></label>
+              <label>PrivateUrl（选填）<input v-model="adpAppForm.privateUrl" maxlength="512" /></label>
+              <label class="checkbox-row"><input v-model="adpAppForm.isDefault" type="checkbox" /><span>设为平台默认应用</span></label>
+            </div>
+          </section>
+          <section class="modal-section">
+            <h3 class="modal-section-title">Provider 配置</h3>
+            <label>非敏感 Provider Settings（JSON）<textarea v-model="adpAppForm.providerSettingsText" rows="5" spellcheck="false" placeholder="{}"></textarea><small class="field-hint">只放端点、区域等非敏感配置；密钥必须放在下方 credentials。</small></label>
+            <template v-if="isTencentAdp">
+              <div class="modal-notice"><LockOnIcon /><span>腾讯兼容字段会加密保存，编辑时留空表示不修改。</span></div>
+              <div class="modal-section-fields"><label>AppKey<input v-model="adpAppForm.appKey" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>TC_SECRET_APPID<input v-model="adpAppForm.tcSecretAppId" :required="!adpAppForm.id" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>TC_SECRET_ID<input v-model="adpAppForm.tcSecretId" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label><label>TC_SECRET_KEY<input v-model="adpAppForm.tcSecretKey" :required="!adpAppForm.id" type="password" autocomplete="new-password" :placeholder="adpAppForm.id ? '留空则不修改' : ''" /></label></div>
+            </template>
+            <template v-else>
+              <div class="modal-notice"><LockOnIcon /><span>通用 credentials 使用 JSON 提交，服务端加密保存且永不回显。</span></div>
+              <label>Credentials（JSON）<textarea v-model="adpAppForm.credentialsText" :required="!adpAppForm.id" rows="8" spellcheck="false" placeholder='{"accessKeyId":"…","accessKeySecret":"…"}'></textarea><small class="field-hint">仅填写当前 Provider 的凭据键；编辑已有应用时留空表示保留原凭据。</small></label>
+            </template>
+          </section>
+        </div>
+        <div class="modal-actions"><button type="button" class="outline-action" :disabled="createActionLoading" @click="modal = null">取消</button><button type="submit" class="primary-action" :disabled="createActionLoading">{{ createActionLoading ? '保存中…' : (adpAppForm.id ? '保存' : '创建应用') }}</button></div>
+      </form>
     </div>
     <div v-if="detail" class="modal-backdrop" @click.self="detail = null"><section class="modal-card detail-card"><div class="modal-heading"><div><p class="section-kicker">详情</p><h2>{{ detail.title }}</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="detail = null">×</button></div><p v-for="line in detail.lines" :key="line" class="detail-line">{{ line }}</p><div class="modal-actions"><button type="button" class="primary-action" @click="detail = null">完成</button></div></section></div>
     <div v-if="conversationDetailLoading || conversationDetail" class="modal-backdrop" @click.self="conversationDetail = null; conversationDetailLoading = false"><section class="modal-card conversation-detail-card"><div class="modal-heading"><div><p class="section-kicker">历史对话</p><h2>{{ conversationDetail?.conversation.title || '会话详情' }}</h2></div><button type="button" class="modal-close" aria-label="关闭" @click="conversationDetail = null; conversationDetailLoading = false">×</button></div><div v-if="conversationDetailLoading" class="resource-loading">正在加载会话详情…</div><template v-else-if="conversationDetail"><p class="conversation-meta">{{ conversationDetail.conversation.enterpriseName || '—' }} · {{ conversationDetail.conversation.accountName || '—' }} · {{ conversationDetail.conversation.channel }}</p><div class="conversation-thread"><div v-for="msg in conversationDetail.messages" :key="msg.id" class="conversation-msg" :class="`conversation-msg--${msg.direction}`"><span class="conversation-msg-role">{{ msg.direction === 'assistant' ? '助手' : '用户' }}</span><p>{{ msg.body || '（无正文）' }}</p><time>{{ msg.createdAt ? new Date(msg.createdAt).toLocaleString('zh-CN', { hour12: false }) : '' }}</time></div><div v-if="!conversationDetail.messages.length" class="panel-empty">该会话暂无消息</div></div><div v-if="conversationDetail.runs.length" class="conversation-runs"><strong>执行轮次</strong><div v-for="run in conversationDetail.runs" :key="run.runId" class="conversation-run"><span class="row-status" :class="`row-status--${run.status === 'found' || run.status === 'completed' ? 'success' : 'warning'}`"><i></i>{{ run.status }}</span><span>{{ run.title }}</span><small>{{ run.evidence.length }} 条证据</small></div></div></template><div class="modal-actions"><button type="button" class="primary-action" @click="conversationDetail = null">完成</button></div></section></div>
@@ -695,7 +761,7 @@ const handleLogout = () => logout(() => router.replace({ name: 'login' }))
 .conversation-runs > strong { color: #526b65; font-size: 11px; }
 .conversation-run { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #45615d; }
 .conversation-run small { margin-left: auto; color: #93a19d; font-size: 10px; }
-.field-hint { color: #93a19d; font-weight: 400; font-size: 10px; }
+.field-hint { color: #93a19d; font-weight: 400; font-size: 10px; }.provider-warning { display: block; margin: -4px 0 2px; padding: 8px 10px; color: #8a6331; background: #fff8e9; border: 1px solid #eedbb5; font-size: 10px; line-height: 1.45; }
 .modal-card input:disabled { background: #f2f5f4; color: #8a9995; cursor: not-allowed; }
 .resource-name strong small { display: block; margin-top: 3px; color: #8a9995; font-size: 10px; font-weight: 400; }
 .user-scope strong, .user-scope small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
