@@ -114,6 +114,12 @@ PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://user:password@127.0.0.1:5432/ad
 
 本仓库提供可运行的平台骨架、Mock 和本地验证链路。正式 CRM、M3、云厂商 ADP、微信/企微账号、生产备份恢复、压测和监控接入需要各自的第三方文档、租户、权限与验收，不能以本地 Mock 或单元测试替代。公开进度见 [docs/roadmap.md](docs/roadmap.md)。
 
+## 项目来源与许可证
+
+本项目基于腾讯云开源项目 [ADP Chat Client](https://github.com/TencentCloudADP/adp-chat-client) 二次开发，复用了部分对话组件和服务接入代码，并扩展了企业身份与权限、管理后台、MCP/HTTP 工具、多渠道接入和审计能力。感谢腾讯云及原项目贡献者；本项目由独立维护者维护，不代表腾讯云官方产品或官方支持。
+
+上游代码的版权和 Apache License 2.0 条款，以及 `markdown-it-texmath` 的 MIT 归属，见 [LICENSE](LICENSE)。本项目新增代码和文档内容的版权归 `xdim` 及贡献者所有，除文件另有说明外同样以 Apache License 2.0 发布；完整来源和第三方说明见 [NOTICE](NOTICE)。
+
 ## 参与和安全
 
 欢迎提交 Issue、文档和代码，参见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。项目使用 Apache License 2.0，见 [LICENSE](LICENSE)。

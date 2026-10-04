@@ -1,0 +1,25 @@
+adp-biz-portal
+================
+
+Copyright (c) 2026 xdim and adp-biz-portal contributors for original additions and modifications in this repository.
+
+Upstream project
+---------------
+
+This project includes portions derived from TencentCloudADP's ADP-Chat-Client:
+
+https://github.com/TencentCloudADP/adp-chat-client
+
+The upstream ADP-Chat-Client portions are Copyright (C) 2025 Tencent and are distributed under the Apache License, Version 2.0. The upstream copyright, license, and attribution notices are retained in `LICENSE`.
+
+Third-party components
+----------------------
+
+The `markdown-it-texmath` component is distributed under the MIT License. Its copyright and license text are retained in `LICENSE`.
+
+The upstream repository also contains documentation licensed under CC BY 4.0 in its `docs/LICENSE`. Any material retained or adapted from that documentation remains subject to its attribution and license terms. New documentation in this repository is original unless a file states otherwise.
+
+Trademark and affiliation
+-------------------------
+
+Tencent, ADP, and related names and marks remain the property of their respective owners. This project is independently maintained and is not an official Tencent Cloud product or support channel.

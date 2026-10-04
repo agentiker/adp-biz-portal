@@ -9,6 +9,7 @@
 ### 开源项目呈现
 
 - `OSS-README-02`（2026-10-04，DONE）：为企业 AI 业务接入平台加入深色科技感 README 主视觉、真实技术徽章和静态能力导航；新增 `docs/assets/readme-hero.svg` 与设计记录 `docs/plans/2026-10-04-readme-visual-identity-design.md`，更新 `README.md`；GitHub 仓库描述、Topics 和 Issue Labels 已同步。验证：`xmllint --noout docs/assets/readme-hero.svg`、`git diff --check`、README 本地链接与资源检查通过。
+- `OSS-LICENSE-03`（2026-10-04，DONE）：补充 Tencent ADP Chat Client 上游归属、本项目新增内容的版权说明和第三方许可证入口；新增根目录 `NOTICE`，更新 `LICENSE` 和 `README.md`。验证：上游许可证正文保留完整、`git diff --check`、README 本地链接检查和许可证归属文本检查通过。遗留：第三方依赖的完整许可证清单仍以各自包元数据和发布产物为准。
 
 ### 已具备
 

@@ -1,3 +1,9 @@
+This distribution includes original work from TencentCloudADP's ADP-Chat-Client and additions maintained by the adp-biz-portal contributors.
+
+Copyright (c) 2026 xdim and adp-biz-portal contributors for original additions and modifications made in this repository. Unless a file or component states otherwise, those additions and modifications are made available under the Apache License, Version 2.0.
+
+The upstream notices and license terms below remain applicable to the portions derived from ADP-Chat-Client.
+
 Tencent is pleased to support the open source community by making ADP-Chat-Client available.
 
 Copyright (C) 2025 Tencent.  All rights reserved. The below components in this distribution may have been modified by Tencent ("Tencent Modifications"). All Tencent Modifications are Copyright (C) Tencent.
@@ -90,7 +96,6 @@ SOFTWARE.
 
 ==================================================
 End of the Attribution Notice of this project.
-
 
 
 
