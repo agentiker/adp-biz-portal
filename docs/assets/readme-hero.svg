@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
+  <title id="title">企业 AI 业务接入平台</title>
+  <desc id="desc">一个连接多渠道、AI Provider、MCP 工具与企业业务系统的安全接入平台示意图。</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07152f"/>
+      <stop offset="0.55" stop-color="#0b1634"/>
+      <stop offset="1" stop-color="#180d38"/>
+    </linearGradient>
+    <linearGradient id="aurora" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#32b8ff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#7657ff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#d24fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#44d7ff"/>
+      <stop offset="1" stop-color="#a65cff"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#182b55" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#24194e" stop-opacity="0.86"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M 42 0 L 0 0 0 42" fill="none" stroke="#9bb7ff" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="640" rx="28" fill="url(#background)"/>
+  <rect width="1600" height="640" rx="28" fill="url(#grid)"/>
+  <ellipse cx="1270" cy="90" rx="430" ry="260" fill="#5c39db" opacity="0.18" filter="url(#glow)"/>
+  <ellipse cx="1480" cy="560" rx="360" ry="240" fill="#0479d8" opacity="0.15" filter="url(#glow)"/>
+  <path d="M 40 492 C 330 380 470 570 720 444 S 1140 238 1570 348" fill="none" stroke="url(#aurora)" stroke-width="2" opacity="0.75"/>
+  <path d="M 40 520 C 330 408 470 598 720 472 S 1140 266 1570 376" fill="none" stroke="#41ccff" stroke-width="1" opacity="0.22"/>
+
+  <g transform="translate(96 104)">
+    <text x="0" y="26" fill="#89a8ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" letter-spacing="4">AGENTIKER / OPEN SOURCE</text>
+    <text x="0" y="112" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="66" font-weight="750">企业 AI 业务接入平台</text>
+    <text x="2" y="166" fill="#b8c8ed" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="27">Enterprise AI Business Integration Platform</text>
+    <rect x="0" y="210" width="610" height="2" fill="url(#line)"/>
+    <text x="0" y="270" fill="#e7edff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="25">让 AI 安全连接企业身份、权限与业务事实</text>
+    <text x="0" y="314" fill="#8fa4d5" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19">多渠道接入 · MCP / HTTP 工具 · 可审计执行上下文</text>
+  </g>
+
+  <g transform="translate(880 98)">
+    <path d="M 90 108 L 244 38 L 398 108 L 398 284 L 244 354 L 90 284 Z" fill="#101f46" stroke="#627cff" stroke-opacity="0.76" stroke-width="2"/>
+    <path d="M 90 108 L 244 178 L 398 108 M 244 178 L 244 354" fill="none" stroke="#627cff" stroke-opacity="0.6" stroke-width="2"/>
+    <path d="M 20 180 L 90 180 M 398 180 L 468 180 M 244 38 L 244 0 M 244 354 L 244 392" fill="none" stroke="url(#line)" stroke-width="3" stroke-linecap="round"/>
+    <path d="M 90 180 L 20 180 M 398 180 L 468 180 M 244 38 L 244 0 M 244 354 L 244 392" fill="none" stroke="#55d9ff" stroke-width="12" stroke-linecap="round" opacity="0.22" filter="url(#glow)"/>
+
+    <g transform="translate(152 116)">
+      <circle cx="92" cy="62" r="58" fill="#263b82" opacity="0.9"/>
+      <path d="M 92 26 L 118 41 L 118 83 L 92 98 L 66 83 L 66 41 Z" fill="none" stroke="#d8e4ff" stroke-width="3"/>
+      <circle cx="80" cy="60" r="5" fill="#50dcff"/>
+      <circle cx="104" cy="60" r="5" fill="#c36bff"/>
+      <path d="M 77 77 Q 92 87 107 77" fill="none" stroke="#d8e4ff" stroke-width="3" stroke-linecap="round"/>
+      <text x="92" y="148" text-anchor="middle" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="700">ACCESS CORE</text>
+    </g>
+
+    <g transform="translate(-54 140)">
+      <rect width="168" height="78" rx="16" fill="url(#card)" stroke="#55d9ff" stroke-opacity="0.62"/>
+      <circle cx="26" cy="39" r="9" fill="#53d9ff"/>
+      <text x="48" y="34" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">CHANNELS</text>
+      <text x="48" y="56" fill="#9fb2dd" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13">Web · WeChat · Work</text>
+    </g>
+    <g transform="translate(374 140)">
+      <rect width="168" height="78" rx="16" fill="url(#card)" stroke="#a25cff" stroke-opacity="0.72"/>
+      <circle cx="26" cy="39" r="9" fill="#b66cff"/>
+      <text x="48" y="34" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">MCP / TOOLS</text>
+      <text x="48" y="56" fill="#c1b2e7" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13">CRM · Orders · M3</text>
+    </g>
+    <g transform="translate(160 386)">
+      <rect width="168" height="78" rx="16" fill="url(#card)" stroke="#718bff" stroke-opacity="0.72"/>
+      <circle cx="26" cy="39" r="9" fill="#718bff"/>
+      <text x="48" y="34" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">AUDITABLE</text>
+      <text x="48" y="56" fill="#aebce6" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13">Identity · Scope · Trace</text>
+    </g>
+  </g>
+
+  <g fill="#d2dcff">
+    <circle cx="790" cy="92" r="2" opacity="0.6"/>
+    <circle cx="1530" cy="126" r="2" opacity="0.5"/>
+    <circle cx="730" cy="556" r="2" opacity="0.5"/>
+    <circle cx="1430" cy="492" r="2" opacity="0.7"/>
+  </g>
+</svg>

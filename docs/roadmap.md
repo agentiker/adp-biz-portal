@@ -8,7 +8,7 @@
 
 ### 开源项目呈现
 
-- `OSS-README-02`（2026-10-04，IN PROGRESS）：为企业 AI 业务接入平台设计深色科技感 README 主视觉、技术徽章和能力导航；完成后记录资源、文档和验证结果。
+- `OSS-README-02`（2026-10-04，DONE）：为企业 AI 业务接入平台加入深色科技感 README 主视觉、真实技术徽章和静态能力导航；新增 `docs/assets/readme-hero.svg` 与设计记录 `docs/plans/2026-10-04-readme-visual-identity-design.md`，更新 `README.md`；GitHub 仓库描述、Topics 和 Issue Labels 已同步。验证：`xmllint --noout docs/assets/readme-hero.svg`、`git diff --check`、README 本地链接与资源检查通过。
 
 ### 已具备
 

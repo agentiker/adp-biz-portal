@@ -1,98 +1,119 @@
-# ADP 业务统一网关
+# 企业 AI 业务接入平台
 
-面向货代业务的统一接入平台。项目基于腾讯云 ADP Chat Client 二次开发，提供管理后台、客户 Portal、企业与权限模型、异步 Worker、审计，以及微信服务号、微信客服和企业微信机器人渠道适配。
+<p align="center">
+  <img src="docs/assets/readme-hero.svg" alt="企业 AI 业务接入平台：连接渠道、AI Provider、MCP 工具与企业业务系统" width="100%" />
+</p>
 
-## 架构与边界
+<p align="center">
+  <strong>Enterprise AI Business Integration Platform</strong><br />
+  面向企业业务系统的 AI 接入层，让 AI 安全连接身份、权限与业务事实。
+</p>
 
-```text
-官网 / 微信 / 企业微信 -> 渠道适配 -> 身份与权限 -> Worker
-                                      |              |
-                                  企业范围       ADP Agent
-                                                     |
-                                                   M3 查询
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-8b5cf6?style=flat-square" alt="Apache-2.0 License" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.12" /></a>
+  <a href="https://vuejs.org/"><img src="https://img.shields.io/badge/vue-3.x-42b883?style=flat-square&logo=vuedotjs&logoColor=white" alt="Vue 3" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-5.x-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>
+  <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/postgresql-14%2B-4169e1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL 14 or later" /></a>
+  <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/docker-compose-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker Compose" /></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-enabled-6d5dfc?style=flat-square" alt="MCP enabled" /></a>
+</p>
+
+面向企业业务系统的 AI 接入层：统一管理企业、成员、权限和会话，把 AI 应用安全连接到 CRM、订单、物流等业务数据。平台同时提供管理后台、Portal、异步任务、审计、MCP/HTTP 工具和多渠道适配能力。
+
+## 平台能力
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><strong>🌐 多渠道接入</strong><br />Web、微信服务号、微信客服和企业微信适配器共享统一的身份与会话边界。</td>
+    <td width="33%" valign="top"><strong>🛡️ 企业级权限</strong><br />服务端验证用户、企业成员关系、角色、数据范围和执行上下文。</td>
+    <td width="33%" valign="top"><strong>⚡ MCP 与业务工具</strong><br />通过 MCP 和 HTTP 工具把 ADP、CRM、订单与 M3 连接到可审计的业务事实。</td>
+  </tr>
+</table>
+
+## 核心能力
+
+- 企业与成员身份、角色和数据范围；
+- ADP Provider 配置与可扩展的 CRM/AI 服务连接器边界；
+- MCP 与 OpenAPI 工具调用，服务端执行上下文和防重放校验；
+- Web、微信服务号、微信客服和企业微信适配器框架；
+- PostgreSQL 持久化、异步 Worker、幂等投递和审计；
+- Vue 管理后台、客户 Portal、Docker Compose 本地运行基线。
+
+## 架构
+
+```mermaid
+flowchart LR
+  C[Web / 微信 / 企业微信] --> A[渠道适配器]
+  A --> I[身份与企业范围]
+  I --> W[Worker / 执行上下文]
+  W --> L[ADP Provider]
+  W --> T[MCP / HTTP 工具]
+  T --> B[CRM / 订单 / M3]
+  I --> D[(PostgreSQL)]
+  W --> D
 ```
 
-平台负责身份、企业范围、权限、会话、投递、重试和审计；ADP 负责智能体对话；M3 是订单、提单、箱号、船期等业务数据的权威来源。权限由服务端校验，密钥不会发送到浏览器。
-
-## 当前状态
-
-详细进度见 [`ROADMAP.md`](ROADMAP.md)。本地已覆盖管理后台、Portal、任务队列、幂等与撤权失效、ADP/M3 受控 Provider、Web/微信协议基础、PostgreSQL 迁移、Docker Compose、OpenAPI 和运维文档。真实 M3 数据、ADP Agent、部分渠道账号与协议、生产备份恢复和正式压测仍需专项验收；Mock 不代表真实联调。
+平台负责身份、权限、上下文、任务和审计；上游业务系统负责业务数据；AI Provider 负责对话编排。工具调用的企业范围由服务端验证，不能由模型参数或提示词决定。
 
 ## 目录
 
-- `backend/`：Python 3.12 + Sanic 后端；`router` 为 HTTP 入口，`core` 为平台业务，`model` 为数据模型，`integrations` 为 ADP/M3/渠道适配器，`worker.py` 为异步任务进程。
-- `frontend/packages/app/`：Vue 3 + TypeScript 主应用，包含登录、Portal、Admin 和共享结果页。
-- `frontend/packages/adp-chat-component/`：ADP 对话组件。
-- `docs/`：方案、OpenAPI 和运维文档。
-- `docker-compose.yml`：PostgreSQL、迁移、API、Worker、企微 WebSocket 网关和 Nginx。
+```text
+backend/                         Python API、领域模型、集成和 Worker
+frontend/packages/app/           Vue 3 管理后台与 Portal
+frontend/packages/adp-chat-component/  对话组件
+docs/architecture/               架构与扩展边界
+docs/integrations/               MCP、ADP 和外部系统接入说明
+docs/api/                        OpenAPI 契约
+docs/operations/                 通用运行与排障手册
+docs/plans/                      历史方案和实施记录
+docs/roadmap.md                  公开路线图
+docker-compose.yml               本地单机运行基线
+```
 
-## 本地运行
+## 快速开始
 
-要求 Python 3.12、Node.js 22、PostgreSQL 14+ 和 uv。创建 `backend/.env`，配置数据库、`SECRET_KEY` 和 `PLATFORM_CHANNEL_CREDENTIAL_KEY`；ADP 应用及其凭据在管理后台录入。请勿提交真实凭据或客户数据。
+要求 Python 3.12、Node.js 22、PostgreSQL 14+ 和 uv。复制环境模板并只填写本地配置：
 
 ```bash
+cp docker/.env.example .env
 cd backend && uv sync --frozen
 cd ../frontend && npm ci --no-audit --no-fund
 cd ..
-backend/.venv/bin/python backend/migrate.py upgrade --applied-by local-migration
-bash script/local-preview.sh
-make run_worker
-```
-
-预览地址：<http://127.0.0.1:8000>。创建本地管理员：
-
-```bash
-backend/.venv/bin/python script/bootstrap-local-admin.py
-```
-
-默认开发账号为 `13900000000` / `123456`，仅用于本机。
-
-## Docker 部署
-
-准备项目根目录 `.env` 后执行：
-
-```bash
 docker compose config
-make pack
-make deploy
-docker compose ps
+docker compose up -d
 curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-生产环境应使用 HTTPS、受限数据库账号、备份和可回滚迁移流程，见 [`docs/operations/release-and-rollback.md`](docs/operations/release-and-rollback.md)。
+也可以按 [LOCAL_RUN.md](LOCAL_RUN.md) 使用本地 Python 进程启动 API 和 Worker。首次使用时通过 `script/bootstrap-local-admin.py` 创建本地管理员。所有密码、密钥和业务数据都应使用隔离的开发值，不能提交到 Git。
 
-## ADP 配置
+## ADP、MCP 与业务工具
 
-业务 Worker 和企微 Bot 使用数据库「ADP 应用配置」：优先选择企业绑定的启用应用，未绑定时使用启用的平台默认应用。显式绑定失效或没有可用应用时拒绝执行，不回退到服务器 `.env`。客户端的 `agentId`、`ApplicationId` 和 `WorkspaceId` 不参与授权。
+在管理后台配置 ADP Provider、加密凭据和企业绑定。MCP 接入地址为 `https://<host>/mcp`；API Key 在“开放接口”页面创建并配置到客户端。工具只接受业务查询参数，可信客户端还需传递平台执行上下文 Header。完整协议、Header 映射、错误边界和 Mock 说明见 [MCP 与 ADP 接入](docs/integrations/mcp-and-adp.md)。
 
-在管理后台录入应用 ID、AppKey 和每个应用自己的腾讯云签名凭据，再设为默认或绑定企业。`APP_CONFIGS` 仅供旧管理员调试入口使用，可以保持 `[]`；数据库、加密密钥等基础设施仍由环境变量配置。ADP 连接器 API Key 在独立的「开放接口」后台命名创建和撤销，列表默认隐藏，支持点击小眼睛查看完整 Key 和一键复制；填入连接器安全凭据 Header `X-ADP-Service-Token`，配合每轮执行上下文使用。此功能需要数据库迁移至 revision 19。
+HTTP 工具 OpenAPI 定义见 [docs/api/adp-tools.openapi.yaml](docs/api/adp-tools.openapi.yaml)。固定 M3 Mock 只用于隔离环境和自动化验证，设置 `M3_USE_MOCK=true` 才启用；它不代表真实 M3、ADP 或渠道已经完成联调。
 
-已提供订单/提单/箱号、船期、节点三个 HTTP 工具连接器。固定 Mock 和 ADP 参数映射见 [联调说明](docs/plans/2026-09-16-adp-m3-mock-connector.md)，导入文件为 [adp-tools.openapi.yaml](docs/api/adp-tools.openapi.yaml)。Mock 只在显式设置 `M3_USE_MOCK=true` 时启用，不能代替真实 ADP/M3 验收。
-
-## 测试与检查
+## 测试
 
 ```bash
-backend/.venv/bin/python -m pytest backend/test/unit_test -q
-PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://user:password@127.0.0.1:5432/test_db' backend/.venv/bin/python -m pytest backend/test/integration -q
+make platform_api_check
+PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/test/unit_test -q
 cd frontend/packages/app && npm run type-check && npm run build-only
-cd ../../.. && make platform_api_check
-git diff --check
+cd ../../.. && git diff --check
 ```
 
-集成测试必须使用隔离的 PostgreSQL URL，不能误写开发数据库。
+集成测试必须显式提供隔离 PostgreSQL URL，例如：
 
-## 相关文档
+```bash
+PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://user:password@127.0.0.1:5432/adp_biz_portal_test' \
+  PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/test/integration -q
+```
 
-- [总体方案](docs/plans/2026-09-04-unified-business-platform-design.md)
-- [ROADMAP](ROADMAP.md)
-- [OpenAPI 维护说明](docs/api/README.md)
-- [数据字典](docs/operations/platform-data-dictionary.md)
-- [排障手册](docs/operations/troubleshooting.md)
-- [本地运行说明](LOCAL_RUN.md)
+## 当前边界
 
-## 安全与许可证
+本仓库提供可运行的平台骨架、Mock 和本地验证链路。正式 CRM、M3、云厂商 ADP、微信/企微账号、生产备份恢复、压测和监控接入需要各自的第三方文档、租户、权限与验收，不能以本地 Mock 或单元测试替代。公开进度见 [docs/roadmap.md](docs/roadmap.md)。
 
-`backend/.env` 和部署环境变量属于机密配置。日志、测试夹具和截图不得包含真实凭据、订单或渠道 Token。项目采用 Apache License 2.0，详见 [`LICENSE`](LICENSE)。
+## 参与和安全
 
-远程 MCP：`/mcp`（Streamable HTTP），与 HTTP 连接器共用后台 API Key 和企业执行上下文。接入地址在「开放接口」页面展示，协议、Header 及调用示例见[连接器与 MCP 联调方案](docs/plans/2026-09-16-adp-m3-mock-connector.md#远程-mcpm4-mcp-01)。
+欢迎提交 Issue、文档和代码，参见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。项目使用 Apache License 2.0，见 [LICENSE](LICENSE)。
