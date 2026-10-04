@@ -1,30 +1,16 @@
-# 发布、迁移与回滚运行手册
+# 发布、迁移与回滚
 
-本文对应 `M4-RELEASE-01`，用于统一业务接入平台的发布前检查、数据库迁移、Web/Worker 启停和故障回退。生产发布仍需由具备数据库备份、部署和监控权限的人员执行；本文不包含任何真实凭据。
+本文描述通用的单机或容器化发布基线，不包含具体服务器、域名、账号或凭据。正式发布应由有数据库备份和部署权限的人员执行。
 
-## 发布不变量
+## 不变量
 
-- 数据库迁移由部署身份显式执行，Web 进程只校验迁移状态，不自动建表或升级 schema。
-- 同一数据库同一时刻只允许一个迁移命令运行。迁移 runner 使用 PostgreSQL transaction advisory lock。
-- 先备份、再迁移、后启动新版本 Web/Worker。迁移未完成时不得启动业务进程。
-- 应用代码回滚和数据库回滚是两个独立决定。数据库降级会删除目标 revision 创建的表及数据，只能在确认数据恢复方案后执行。
-- Worker 与 Web 必须使用同一版本代码和同一数据库，避免旧 Worker 读取新任务结构。
-- 切换 Compose 项目时必须先停止旧项目的 PostgreSQL，再启动复用数据卷的新项目；同一 PGDATA 不得同时挂载到两个运行中的 PostgreSQL 进程。
-- 发布时保留服务器 `.env` 与本地 override 文件；同步目录时不能用未排除这些文件的删除策略。使用 `docker-compose.yml` 时将持久覆盖配置保存为 `docker-compose.override.yml`，发布前检查最终合并的镜像、项目名及 M3 模式，避免输出含凭据的完整配置。
+- 迁移由部署身份显式执行，Web 进程只校验版本，不自动建表。
+- 迁移前备份，迁移成功后再启动同版本 API 和 Worker。
+- API、Worker 和迁移使用同一代码版本、数据库和加密密钥。
+- 应用回滚与数据库回滚是两个独立决定；数据库降级可能删除数据。
+- 环境文件、密钥和持久化卷不通过代码同步工具删除或覆盖。
 
-### 当前服务器联调配置（2026-09-17）
-
-xdimspace-01 `/opt/tencent-adp-gateway/docker-compose.override.yml` 将 migrate、api、worker、wecom-ws-gateway 的镜像固定为 `adp-biz-portal:def70b8`，后三个服务显式设置 `M3_USE_MOCK: "true"`。普通 `docker compose up` 自动合并该文件；后续发布须同步更新四处镜像版本。文件仅留在服务器，凭据继续由 `.env` 提供。
-
-本次修复没有数据库迁移，执行 `docker compose up -d --no-deps api worker wecom-ws-gateway`，随后 `docker compose restart reverse-proxy` 刷新 upstream IP。验证三个运行容器的配置、`/healthz`、`/readyz` 和容器内三个 M3 工具的固定数据/企业隔离；健康检查通过不能证明 ADP 业务闭环。关闭 Mock 时将 override 中三个开关统一改为 `"false"` 后重建业务服务；真实 M3 未配置时会返回 upstream_error。
-
-固定样例只属于 MOCK-ENT-A/B。普通企业的微信身份无法读取这些记录；用测试账号 A（19900000001）登录 Portal 查询 `MOCK-BL-A001`，或通过既有渠道绑定流程将测试微信绑定到该测试账号。不得为冒烟修改真实账号的企业归属。
-
-## 发布前检查
-
-### Docker Compose 基线
-
-仓库根目录的 `docker-compose.yml` 提供本地和单机试运行基线，包含 PostgreSQL、一次性迁移、API 和 Worker 四个服务。先构建当前版本镜像，再复制环境模板并只在目标机器填写凭据：
+## 发布检查
 
 ```bash
 make pack
@@ -35,142 +21,39 @@ curl -fsS http://127.0.0.1:8000/healthz
 curl -fsS http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` 只表示 API 进程存活，不访问 PostgreSQL 或第三方服务；`/readyz` 会检查 PostgreSQL 连通性、迁移历史和当前 revision。Compose 的 API/Worker 会等待 `migrate` 成功后再启动，`reverse-proxy` 等待 API 健康后对外提供 HTTP 入口，数据库数据保存在 `platform-postgres` 卷中。公网生产环境仍应在该入口配置受控 HTTPS（或放在云负载均衡之后），不能把数据库端口暴露到公网。
-
-在发布机或受控运维终端执行以下检查，命令中的数据库连接由 `backend/.env` 提供：
-
-```bash
-git rev-parse --verify HEAD
-backend/.venv/bin/python --version
-backend/.venv/bin/python backend/migrate.py --help
-backend/.venv/bin/python -m compileall -q server
-git diff --check
-```
-
-确认以下信息已记录在发布工单中：
-
-- 发布版本、执行人、变更窗口和预计回退窗口；
-- 数据库名称、schema、备份文件/对象存储位置和备份校验值；
-- 当前数据库 revision、目标 revision（当前代码目标为 `12`）；
-- Web、Worker、PostgreSQL 和上游 ADP/M3 的健康检查地址；
-- 本次发布是否包含不可逆数据变更。
+记录发布版本、执行人、数据库备份位置、升级前后 revision 和回退窗口。生产环境应在反向代理或负载均衡器后启用 HTTPS，不要暴露数据库端口。
 
 ## 备份与迁移
 
-1. 停止接收新流量，等待当前 Web 请求和 Worker 任务进入可观测状态。不要在未确认任务状态时强制删除 Worker。
-2. 使用受控的 `pg_dump` 生成自定义格式备份，并将文件保存到独立介质。示例中的文件名和路径必须替换为发布工单指定的位置：
+使用受控数据库账号，将备份保存到独立介质并校验：
 
-   ```bash
-   pg_dump --format=custom --no-owner --file=/secure/backup/adp-biz-portal-<release>-<timestamp>.dump "$DATABASE_URL"
-   sha256sum /secure/backup/adp-biz-portal-<release>-<timestamp>.dump
-   ```
+```bash
+pg_dump --format=custom --no-owner \
+  --file=/secure/backup/adp-biz-portal-<release>-<timestamp>.dump \
+  "$DATABASE_URL"
+sha256sum /secure/backup/adp-biz-portal-<release>-<timestamp>.dump
+```
 
-3. 使用部署数据库账号执行可重复的升级。`MIGRATION_ACTOR` 应使用工单中的服务身份，而不是个人密码：
+再执行：
 
-   ```bash
-   MIGRATION_ACTOR="release-<release>"
-   backend/.venv/bin/python backend/migrate.py upgrade --applied-by "$MIGRATION_ACTOR"
-   ```
+```bash
+MIGRATION_ACTOR="release-<release>" make migrate
+docker compose up -d
+```
 
-   也可以使用仓库目标：
+检查 `/readyz` 的 schema revision、API/Worker 日志和队列状态。迁移失败时保持旧版本进程，不要绕过启动检查。
 
-   ```bash
-   MIGRATION_ACTOR="release-<release>" make migrate
-   ```
+## 回滚
 
-4. 记录命令输出的 `database revision`，并检查 `platform_migration` 中每个 revision 均为 `applied`。迁移失败时保持旧版本进程，不要绕过启动检查。
-
-## 启动顺序与冒烟检查
-
-1. 启动一个 Web 实例，确认启动日志没有 `MigrationRequiredError`，健康检查返回成功。
-2. 启动 Worker，确认只消费当前版本支持的任务类型；多实例发布时先完成一个实例的冒烟，再逐步放量。
-3. 执行以下不包含业务敏感数据的冒烟流程：登录、读取企业/用户列表、创建一个测试会话、提交一条官网入站消息、确认 Worker 产生执行结果或明确的 `upstream_error`，最后确认撤权后的回复任务不会发送。
-4. 检查以下监控指标/日志：HTTP 5xx、队列积压、任务 lease 超时、`authorization_revoked`、`upstream_error`、回复 `uncertain` 和数据库连接池错误。
-5. 冒烟通过后恢复流量，并在发布工单记录开始放量时间、实例数量和观察窗口。
-
-## 回滚决策
-
-### 仅应用代码回滚
-
-当新代码启动失败、健康检查失败，但数据库 revision 向后兼容时，优先停止新进程并恢复上一版本 Web/Worker。不要自动执行数据库降级。恢复后重新执行登录、队列和会话冒烟检查。
-
-### 数据库降级
-
-只有在以下条件全部满足时才允许降级：
-
-- 旧版本代码无法兼容当前 schema；
-- 已确认目标 revision 之后创建的表和数据允许丢失，或已从备份恢复到独立数据库验证；
-- 变更负责人和数据库负责人在工单中明确批准；
-- 已停止所有 Web/Worker，避免旧进程继续写入。
-
-降级命令必须显式提供 `--allow-data-loss`，例如回退到 revision `3`：
+应用启动失败但 schema 向后兼容时，只回滚 API 和 Worker 镜像，不自动降级数据库。只有在确认新版本表和数据可以丢失、所有业务进程已停止并完成审批后，才执行：
 
 ```bash
 backend/.venv/bin/python backend/migrate.py downgrade \
-  --target 3 \
-  --allow-data-loss \
-  --applied-by "rollback-<release>"
+  --target <revision> --allow-data-loss --applied-by "rollback-<release>"
 ```
 
-降级后只能启动与目标 revision 兼容的旧版本。若需要恢复新版本，先确认备份/数据恢复策略，再执行：
+数据异常时先恢复到隔离数据库，验证迁移历史、账号登录和一条脱敏查询，再决定是否切换连接配置。
 
-```bash
-backend/.venv/bin/python backend/migrate.py upgrade --applied-by "reupgrade-<release>"
-```
+## 运维安全
 
-### 从备份恢复
-
-当数据完整性受到影响时，优先恢复到隔离数据库并验证，不要直接覆盖线上库。恢复操作使用平台既有数据库运维流程；至少完成表计数、迁移历史、账号登录和一条脱敏业务查询验证后，才决定切换连接配置。
-
-## 项目重命名割接（adp-chat-client → adp-biz-portal）
-
-一次性操作：把 compose 项目名、镜像名与 DB 迁移锁 key 从 `adp-chat-client` 切到 `adp-biz-portal`。含短暂停机，需单独批准。PostgreSQL 命名卷已在 `docker-compose.yml` 钉死为 `adp-chat-client_platform-postgres`，**数据原地复用、不搬运**。
-
-1. 备份（兜底）：`docker compose exec -T postgres pg_dump -U adp_chat -d adp_chat -Fc > /root/adp-backups/adp_chat-pre-rename-<ts>.dump`，`pg_restore -l` 校验 `TABLE DATA` 非零。
-2. 保留回滚镜像：`docker tag adp-chat-client:local adp-chat-client:rollback-pre-rename`。
-3. 载入新镜像（本地 `docker save adp-biz-portal:<tag>` → scp → `docker load`），`docker tag adp-biz-portal:<tag> adp-biz-portal:local`。
-4. 更新服务端 `.env`（机密，不经 git）：`APP_IMAGE=adp-biz-portal:local`。
-5. 旧项目停机再以新名拉起：`docker compose down`（旧 `adp-chat-client` 项目，**不加 `-v`**）→ `docker compose up -d`（新 `adp-biz-portal` 项目）→ `docker compose restart reverse-proxy`（必做，nginx 缓存旧 api IP）。
-6. 校验：公网 `/healthz`=ok、`/readyz`=ready 且 `schemaRevision` 正确；migrate/worker/api 日志无异常。
-7. 回滚：`.env` 改回 `APP_IMAGE=adp-chat-client:rollback-pre-rename`（或旧 `:local`）并用旧 compose 文件 `up`；数据可从步骤 1 dump 恢复。卷名不变，回滚不丢数据。
-
-迁移锁 key 变更为 `adp-biz-portal-schema-migration`（纯运行时 advisory lock、无持久化）；只需保证割接期间不新旧 `migrate` 并发。
-
-## 演练记录模板
-
-每次正式演练都应复制以下字段到发布工单：
-
-```text
-演练日期：
-发布版本：
-数据库备份位置：
-备份 sha256：
-升级前 revision：
-升级后 revision：
-应用回滚开始/结束：
-数据库降级开始/结束（如执行）：
-恢复验证结果：
-RPO：
-RTO：
-异常与后续 TODO：
-```
-
-## 当前仓库验证边界
-
-本地发布检查可以用一个命令重复执行；它只使用集成测试创建的隔离 schema，不会升级或回滚开发库：
-
-```bash
-PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1:5432/adp_chat_client_local' \
-  make release_drill
-```
-
-命令会验证 Compose 配置、迁移 CLI 帮助和 `1..11 -> 3 -> 11` 的隔离迁移流程，并将日志和汇总写入 `output/tests/m4-release-01/`。证据中的 `productionStatus` 固定为 `not_executed`，不能当作生产发布、应用回滚或 RPO/RTO 记录。
-
-截至 2026-09-08，仓库已在隔离 PostgreSQL schema 中验证 revision `1..11` 可重复升级、审计、降级到 `3` 并再次升级到 `11`，并通过启动版本校验；同时覆盖 revision 10 到 11 的渠道身份作用域升级：历史 `EnterpriseId` 被清空、列改为 nullable，外键删除行为改为 `SET NULL`。定向命令为：
-
-```bash
-PLATFORM_TEST_DATABASE_URL='postgresql+asyncpg://adp_chat_client_local@127.0.0.1:5432/adp_chat_client_local' \
-  backend/.venv/bin/pytest backend/test/integration/test_platform_migration_postgres.py -q -s
-```
-
-结果为 `2 passed in 1.73s`；证据见 `output/tests/m1-mig-01-migration.json`、`output/tests/m3-identity-01-platform-scope-migration.json` 和 `backend/test/integration/test_platform_migration_postgres.py`。本结果证明的是迁移代码和本地流程可运行，不代表生产备份恢复、部署权限、RPO/RTO 或真实 ADP/M3 联调已经完成。
+不要在工单、日志、截图或 issue 中保存 API Key、AppKey、Token、客户订单和原始渠道载荷。MCP Key 应在管理后台轮换和撤销。固定 Mock 只属于隔离环境，不能写入生产或作为真实第三方验收证据。

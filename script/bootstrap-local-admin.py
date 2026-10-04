@@ -48,8 +48,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--phone",
-        default=os.getenv("LOCAL_ADMIN_PHONE", "13900000000"),
-        help="login phone (default: LOCAL_ADMIN_PHONE or 13900000000)",
+        default=os.getenv("LOCAL_ADMIN_PHONE", "10000000000"),
+        help="login phone (default: LOCAL_ADMIN_PHONE or 10000000000)",
     )
     parser.add_argument(
         "--password",

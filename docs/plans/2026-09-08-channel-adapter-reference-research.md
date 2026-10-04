@@ -1,7 +1,7 @@
 # 多渠道适配参考调研与借鉴方案
 
 - 日期：2026-09-08
-- 关联：[ROADMAP.md](../../ROADMAP.md) M3；[统一业务接入平台方案](2026-09-04-unified-business-platform-design.md)；[Admin 渠道管理设计](2026-09-06-admin-channel-management-design.md)
+- 关联：[docs/roadmap.md](../roadmap.md) M3；[统一业务接入平台方案](../architecture/unified-business-platform.md)；[Admin 渠道管理设计](2026-09-06-admin-channel-management-design.md)
 - 基线提交：本仓库 `53a6d5e`（`backend/integrations/channels/` + `core/channel_replay.py` + `core/channel_identity.py`）
 
 ## 1. 目的与范围
@@ -32,7 +32,7 @@
 
 以 `53a6d5e` 为准，下列能力已实现且相对三家领先：
 
-| 能力 | 现状（ROADMAP 项） | 相对三家 |
+| 能力 | 现状（公开路线图项目） | 相对三家 |
 |---|---|---|
 | 适配器 ABC + 注册表 + 能力声明 | `M3-FRAMEWORK-01` DONE：`integrations/channels/base.py` `ChannelAdapter`/`ChannelSender`/`ChannelCapabilities`；`registry.py`（显式注册/拒重复/失败关闭） | 强于 AstrBot（2 布尔能力）、LangBot（`hasattr` 探测） |
 | 公众号明文+安全模式验签/解密 | `M3-WECHAT-OA-01` DONE：SHA-1 常量时间比较、AES-256-CBC/32 字节填充、解密后 AppID 校验、XML 大小/DTD/实体拒绝 | 强于 AstrBot（无条件解密，明文抛错） |
@@ -61,7 +61,7 @@
 
 选型口径：**渠道协议细节**看 openclaw-china；**平台层结构**看 LangBot；AstrBot 取「MsgId 区分重试/新问」「媒体自解析 + 组件日志脱敏」两点。三家的持久化/幂等/凭据隔离/身份绑定都弱于我们，属护城河，不回退。
 
-## 5. 借鉴清单（归口到 ROADMAP 未完成 TODO）
+## 5. 借鉴清单（归口到 公开路线图未完成 TODO）
 
 真实缺口核实：代码里**无 access token 处理**（无 `cgi-bin/token`、无客服消息/custom send），公众号无发送传输时返 `uncertain`。故「真实主动发送」整条链路为空，是借鉴主要落点。
 

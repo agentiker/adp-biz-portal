@@ -1,6 +1,6 @@
 # ADP 连接器与 M3 Mock 联调
 
-对应 ROADMAP：`M2-ORCH-MOCK-01`、`M2-ORCH-01`、`M4-ADP-CFG-01`、`M4-ADP-KEY-01`。初始采用 HTTP 连接器；现补充远程 MCP，二者复用平台工具执行链。以下为本地已实现契约，ADP 云端导入及隐藏参数映射仍待真实验证。
+对应公开路线图：`M2-ORCH-MOCK-01`、`M2-ORCH-01`、`M4-ADP-CFG-01`、`M4-ADP-KEY-01`。初始采用 HTTP 连接器；现补充远程 MCP，二者复用平台工具执行链。以下为本地已实现契约，ADP 云端导入及隐藏参数映射仍待真实验证。
 
 ## 运行配置
 
@@ -108,45 +108,6 @@ Key 为平台连接器级凭据，仅授权三个 shipment 工具；每次工具
 
 隔离 PostgreSQL 验证见 test_mcp_postgres.py、test_mcp_protocol_postgres.py，并回归 test_adp_connector_postgres.py。ADP 云端能否配置 Bearer 凭据、传递动态上下文及唯一请求 ID 尚待真实验证；仅支持静态 Header 的客户端可以发现工具，但不能直接执行企业业务查询。M2-ORCH-01 保持 BLOCKED。
 
-## 服务器联调状态（2026-09-16）
+## 发布边界
 
-已按用户授权在 `https://adp.xdimspace.cn/mcp` 所在服务器开启固定 M3 Mock，API、Worker、企微网关均通过 Compose override 持久设置 `M3_USE_MOCK=true`，重建并检查生效；`.env` 未修改。该开关作用于这三个进程的 M3 适配器，固定数据仅包含 MOCK-ENT-A / MOCK-ENT-B。
-
-公网 MCP 初始化、三个工具发现和已删除 Key 拒绝通过；运行镜像内固定数据及跨企业过滤四例通过。服务器已新增专用测试企业 MOCK-ENT-A/B，分别绑定 MCP 测试用户 A/B（登录占位手机号 19900000001/19900000002），仅有 shipment.read 权限并使用平台默认 ADP 应用；公网登录、管理权限拒绝和本企业/跨企业查询通过。初始口令保存在操作员本机仓库外受限文件。下一步从 Portal/渠道发起查询；ADP 调试台单独发送文字没有平台业务上下文，不能代替该验收。真实 ADP 动态 Header 映射及工具回执尚未验收，M2-ORCH-01 保持 BLOCKED。部署配置、恢复方式和验证记录见 ROADMAP 的 M4-MCP-MOCK-01。
-
-## ADP API 参数与 MCP Header 映射（2026-09-17）
-
-腾讯云 ADP 已确认支持将 API 参数变量映射到 MCP 请求 Header。采用以下稳定契约：
-
-| API 参数 | 类型 | 必填 | MCP Header | 用途 |
-|---|---|---:|---|---|
-| `platform_context_token` | string | 是 | `X-Platform-Context-Token` | 短期、不透明上下文令牌，绑定用户、企业、权限版本、应用、渠道和会话 |
-| `platform_tool_request_id` | string | 是 | `X-ADP-Request-Id` | 每次工具调用唯一，用于防重放和审计关联 |
-| `corp_id` | string | 是 | `X-Corp-Id` | 当前企业 ID，便于路由、审计和一致性校验 |
-| `corp_user_id` | string | 是 | `X-Corp-User-Id` | 当前企业员工 ID，便于员工身份映射和审计 |
-
-ADP API 请求中的变量：
-
-```json
-{"custom_variables":{"platform_context_token":"ctx_...","platform_tool_request_id":"toolreq_...","corp_id":"corp_...","corp_user_id":"user_..."}}
-```
-
-MCP 连接器映射：
-
-```text
-X-API-Key: <连接器安全凭据中的 API Key>
-X-Platform-Context-Token: {{API.platform_context_token}}
-X-ADP-Request-Id: {{API.platform_tool_request_id}}
-X-Corp-Id: {{API.corp_id}}
-X-Corp-User-Id: {{API.corp_user_id}}
-```
-
-API Key 是 ADP 应用级服务身份，不代表具体企业。`corp_id` 和 `corp_user_id` 是 API 层的显式上下文字段，不能由模型填写，也不能单独作为权限依据；服务端必须将它们与 `platform_context_token` 解出的企业和员工身份逐一比对，不一致即拒绝请求。MCP 工具只暴露业务参数 `query`，不暴露企业编码或上下文令牌为模型参数。服务端继续校验 API Key、上下文有效期、权限版本、工具权限和请求 ID 重放状态。
-
-验收应覆盖：企业 A/B 上下文隔离、缺少 Header、过期/撤销令牌、重复请求 ID，以及查询参数尝试跨企业读取。
-
-## ADP 动态 Header 能力偏差（历史记录）
-
-用户真实联调确认腾讯云 ADP 无法填充动态 Header；该结论已由 2026-09-17 的平台能力确认修正，当前以 API 参数映射契约为准。
-
-补充确认：用户明确 MCP 工具参数只能由模型填写，不能固定映射 CustomVariables。请求体兼容方案因此不具备落地前提；不向模型暴露上下文凭据。推荐候选方案为 ADP 仅输出受限查询意图（操作、编号），平台将该意图绑定到当前已认证的执行轮次，校验操作白名单及权限，执行 M3 并保存工具回执，最终依据回执回复；模型输出不携带可信身份。该方案尚未实现，且属于平台侧编排，不能宣称 ADP→远程 MCP 闭环完成。保留 ADP 主动调用目标时，需要另行验证 HTTP 工作流是否支持可信动态变量映射。
+本文只记录可复现的协议和本地验证方式。服务器地址、部署路径、测试账号和真实联调记录不属于开源文档；正式验收应在部署工单和受控环境中完成。

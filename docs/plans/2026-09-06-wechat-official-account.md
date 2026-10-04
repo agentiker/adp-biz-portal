@@ -4,7 +4,7 @@
 
 **Goal:** 在统一渠道框架中加入微信服务号明文回调适配器，支持本地可验证的回调验签、消息标准化、幂等入队和受限出站能力。
 
-**Architecture:** 服务号回调由独立适配器解析和校验，凭据由平台加密凭据表读取；入站消息只写入 durable delivery 队列，由现有 Worker 处理身份、企业范围和 Agent/M3 调用。真实微信账号、加密协议和发送联调继续由 ROADMAP 的阻塞项管理，不以本地 Mock 代替。
+**Architecture:** 服务号回调由独立适配器解析和校验，凭据由平台加密凭据表读取；入站消息只写入 durable delivery 队列，由现有 Worker 处理身份、企业范围和 Agent/M3 调用。真实微信账号、加密协议和发送联调继续由 公开路线图的阻塞项管理，不以本地 Mock 代替。
 
 **Tech Stack:** Python 3、Sanic、SQLAlchemy Async、标准库 `xml.etree.ElementTree`、pytest。
 
@@ -28,10 +28,10 @@
 
 增加服务号验证和 POST 回调路由。回调只读取已启用凭据、调用适配器、写入 `record_inbound_message`，不在请求内调用 Worker/ADP。
 
-### Task 3: 更新 ROADMAP 与验证证据
+### Task 3: 更新公开路线图与验证证据
 
 **Files:**
-- Modify: `ROADMAP.md`
+- Modify: `docs/roadmap.md`
 - Create: `output/tests/m3-wechat-oa-01-official-account.json`
 
 运行定向单测、编译和 `git diff --check`，记录本地框架完成情况与真实联调遗留风险。
